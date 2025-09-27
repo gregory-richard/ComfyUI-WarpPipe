@@ -1,0 +1,2 @@
+# No external dependencies required
+# This custom node only uses ComfyUI's built-in modules
