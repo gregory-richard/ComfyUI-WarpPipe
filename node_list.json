@@ -2,8 +2,8 @@
     "custom_nodes": [
         {
             "title": "WarpPipe Nodes",
-            "reference": "https://github.com/yourusername/warp_pipe-comfyui",
-            "files": ["https://github.com/yourusername/warp_pipe-comfyui"],
+            "reference": "https://github.com/gregory-richard/ComfyUi-WarpPipe",
+            "files": ["https://github.com/gregory-richard/ComfyUi-WarpPipe"],
             "install_type": "git-clone",
             "description": "WarpPipe nodes for bundling and transferring multiple data types between ComfyUI nodes. Includes Warp and Unwarp nodes for workflow organization and data management."
         }
