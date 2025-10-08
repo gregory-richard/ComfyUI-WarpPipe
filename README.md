@@ -8,6 +8,7 @@ WarpPipe is a comprehensive set of custom nodes for ComfyUI that provides a data
 - **🔄 Unwarp Node**: Unpacks the bundled data back into individual outputs  
 - **🏭 Warp Provider**: Generates latents and parameters for warp workflows with preset dimensions
 - **🧩 FD Scheduler Adapter**: Converts KSampler schedulers to FaceDetailer-compatible schedulers
+- **🚫 Dead End Node**: Accepts any input type but produces no output - perfect for debugging and workflow control
 - **Flexible Data Transfer**: Pass models, CLIP, VAE, conditioning, images, latents, and workflow parameters together
 - **Chain-able**: Warp nodes can copy and extend data from other warp nodes
 - **Workflow Simplification**: Reduces cable clutter in complex workflows
@@ -140,6 +141,23 @@ Converts KSampler schedulers to FaceDetailer-compatible schedulers.
 **Outputs**:
 - `scheduler`: FaceDetailer-compatible scheduler
 
+### 🚫 Dead End Node
+**Category**: `Custom/WarpPipe Nodes`
+
+A true dead end node that accepts any input type but produces no output. Perfect for debugging workflows, temporarily disabling branches, or testing specific parts of your workflow without affecting downstream execution.
+
+**Inputs**:
+- `input`: Any data type (*) - accepts any ComfyUI data type
+
+**Outputs**:
+- None - this node produces no outputs and does not trigger execution
+
+**Use Cases**:
+- **Debugging**: Connect any output to test if a workflow branch executes
+- **Temporary Disabling**: Redirect workflow paths without deleting connections
+- **Testing**: Isolate parts of complex workflows during development
+- **Workflow Control**: Create clean endpoints for experimental branches
+
 ## Usage Examples
 
 ### Basic Usage
@@ -169,6 +187,14 @@ Warp B can copy all data from Warp A and add additional data, creating a cumulat
 
 Use the FD Scheduler Adapter to ensure scheduler compatibility with FaceDetailer nodes.
 
+### Debugging and Workflow Control
+```
+[Model] → [KSampler] → [🚫 Dead End]
+                    ↘ [VAE Decode] → [Save Image]
+```
+
+Use the Dead End node to temporarily disable the upper branch while keeping the lower branch active. Perfect for testing different workflow paths without deleting connections.
+
 ### Workflow Organization
 Use WarpPipe to:
 - **Reduce visual clutter** by bundling related data
@@ -176,6 +202,7 @@ Use WarpPipe to:
 - **Simplify complex workflows** with many interconnected nodes
 - **Pass workflow state** between different processing stages
 - **Handle scheduler compatibility** between different node types
+- **Debug and test workflows** using the Dead End node for branch control
 
 ## Technical Details
 
@@ -208,6 +235,15 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 MIT License - see LICENSE file for details
 
 ## Changelog
+
+### v2.1.0
+- **Minor Feature Release** - Added workflow debugging capabilities
+- Added **🚫 Dead End** node for workflow debugging and branch control
+- Perfect for temporarily disabling workflow paths without deleting connections
+- Accepts any input type using universal "*" type specifier
+- True dead end - produces no outputs and doesn't trigger execution
+- Enhanced workflow organization and testing capabilities
+- Updated documentation with Dead End usage examples
 
 ### v2.0.0
 - **Major Feature Release** - Complete WarpPipe ecosystem

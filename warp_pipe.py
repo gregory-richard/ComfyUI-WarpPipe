@@ -471,12 +471,46 @@ class FDSchedulerAdapter:
     def adapt(self, scheduler: str) -> tuple:
         return (coerce_scheduler_fd(scheduler),)
 
+class DeadEnd:
+    """A dead end node that accepts any input type but produces no output"""
+    CATEGORY = "Custom/WarpPipe Nodes"
+    FUNCTION = "dead_end"
+    DISPLAY_NAME = "Dead End"
+    DESCRIPTION = "A dead end node that accepts any input but produces no output - useful for debugging or temporarily disabling workflow paths"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "optional": {
+                # Use "*" as the type to accept any input type
+                "input": ("*", {}),
+            }
+        }
+
+    # No return types - this is a true dead end
+    RETURN_TYPES = ()
+    RETURN_NAMES = ()
+    
+    # Do NOT mark as OUTPUT_NODE - we want it to be a true dead end
+    # OUTPUT_NODE = False  # This is the default, so we don't need to specify it
+
+    def dead_end(self, input=None):
+        """
+        Accept any input and do nothing with it.
+        This creates a dead end in the workflow execution graph.
+        Since this node has no outputs and is not an OUTPUT_NODE,
+        it will not trigger execution when connected.
+        """
+        # Simply return nothing - the input is consumed but not passed forward
+        return ()
+
 # Register nodes under capitalized names
 NODE_CLASS_MAPPINGS = {
     "Warp": Warp,
     "Unwarp": Unwarp,
     "Warp Provider": WarpProvider,
-    "FD Scheduler Adapter": FDSchedulerAdapter
+    "FD Scheduler Adapter": FDSchedulerAdapter,
+    "Dead End": DeadEnd
 }
 
 # Optional: Display names for the UI (newer ComfyUI feature)
@@ -484,7 +518,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Warp": "🔀 Warp Bundle",
     "Unwarp": "🔄 Unwarp Bundle",
     "Warp Provider": "🏭 Warp Provider",
-    "FD Scheduler Adapter": "🧩 FD Scheduler Adapter"
+    "FD Scheduler Adapter": "🧩 FD Scheduler Adapter",
+    "Dead End": "🚫 Dead End"
 }
 
 # Optional: Web directory for custom UI files (if you add them later)
