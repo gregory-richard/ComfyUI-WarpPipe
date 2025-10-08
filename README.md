@@ -1,14 +1,17 @@
 # WarpPipe - ComfyUI Custom Nodes
 
-WarpPipe is a set of custom nodes for ComfyUI that provides a data bundling and transfer system. It allows you to package multiple data types (models, conditioning, images, etc.) into a single "warp" object that can be passed between nodes and then unpacked later in your workflow.
+WarpPipe is a comprehensive set of custom nodes for ComfyUI that provides a data bundling and transfer system. It allows you to package multiple data types (models, conditioning, images, etc.) into a single "warp" object that can be passed between nodes and then unpacked later in your workflow.
 
 ## Features
 
-- **Warp Node**: Bundles multiple ComfyUI data types into a single transferable object
-- **Unwarp Node**: Unpacks the bundled data back into individual outputs
+- **🔀 Warp Node**: Bundles multiple ComfyUI data types into a single transferable object
+- **🔄 Unwarp Node**: Unpacks the bundled data back into individual outputs  
+- **🏭 Warp Provider**: Generates latents and parameters for warp workflows with preset dimensions
+- **🧩 FD Scheduler Adapter**: Converts KSampler schedulers to FaceDetailer-compatible schedulers
 - **Flexible Data Transfer**: Pass models, CLIP, VAE, conditioning, images, latents, and workflow parameters together
 - **Chain-able**: Warp nodes can copy and extend data from other warp nodes
 - **Workflow Simplification**: Reduces cable clutter in complex workflows
+- **Scheduler Compatibility**: Automatic coercion of exotic schedulers to safe, compatible values
 
 ## Installation
 
@@ -21,7 +24,7 @@ WarpPipe is a set of custom nodes for ComfyUI that provides a data bundling and 
 1. Navigate to your ComfyUI `custom_nodes` directory
 2. Clone this repository:
    ```bash
-   git clone https://github.com/yourusername/warp_pipe-comfyui.git
+   git clone https://github.com/gregory-richard/ComfyUi-WarpPipe.git
    ```
 3. Restart ComfyUI
 
@@ -32,7 +35,7 @@ WarpPipe is a set of custom nodes for ComfyUI that provides a data bundling and 
 
 ## Nodes
 
-### Warp Node
+### 🔀 Warp Node
 **Category**: `Custom/WarpPipe Nodes`
 
 Bundles multiple data types into a single "warp" object.
@@ -46,20 +49,25 @@ Bundles multiple data types into a single "warp" object.
 - `conditioning_positive`: Positive conditioning
 - `conditioning_negative`: Negative conditioning
 - `image`: IMAGE object
+- `mask`: MASK object
 - `latent`: LATENT object
 - `prompt_positive`: Positive prompt string
 - `prompt_negative`: Negative prompt string
-- `initial_steps`: Initial sampling steps (INT)
-- `detailer_steps`: Detail enhancement steps (INT)
-- `upscaler_steps`: Upscaling steps (INT)
+- `batch_size`: Batch size (INT)
+- `seed`: Random seed (INT)
+- `steps_1`: Primary sampling steps (INT)
+- `steps_2`: Secondary sampling steps (INT)
+- `steps_3`: Tertiary sampling steps (INT)
 - `cfg`: CFG scale (FLOAT)
 - `sampler_name`: Sampler name
 - `scheduler`: Scheduler type
+- `width`: Image width (INT)
+- `height`: Image height (INT)
 
 **Outputs**:
 - `warp`: Bundled data object (CONTROL type)
 
-### Unwarp Node
+### 🔄 Unwarp Node
 **Category**: `Custom/WarpPipe Nodes`
 
 Unpacks a warp object back into individual data types.
@@ -68,30 +76,82 @@ Unpacks a warp object back into individual data types.
 - `warp`: The warp object to unpack (CONTROL type)
 
 **Outputs** (in order):
+- `image`: IMAGE object
+- `mask`: MASK object
 - `model`: MODEL object
 - `clip`: CLIP object
 - `clip_vision`: CLIP_VISION object
 - `vae`: VAE object
 - `conditioning_positive`: Positive conditioning
 - `conditioning_negative`: Negative conditioning
-- `image`: IMAGE object
 - `latent`: LATENT object
 - `prompt_positive`: Positive prompt string
 - `prompt_negative`: Negative prompt string
-- `initial_steps`: Initial sampling steps
-- `detailer_steps`: Detail enhancement steps
-- `upscaler_steps`: Upscaling steps
+- `batch_size`: Batch size
+- `seed`: Random seed
+- `steps_1`: Primary sampling steps
+- `steps_2`: Secondary sampling steps
+- `steps_3`: Tertiary sampling steps
 - `cfg`: CFG scale
 - `sampler_name`: Sampler name
 - `scheduler`: Scheduler type
+- `width`: Image width
+- `height`: Image height
+
+### 🏭 Warp Provider Node
+**Category**: `Custom/WarpPipe Nodes`
+
+Generates latents and parameters for warp workflows with convenient preset dimensions.
+
+**Inputs** (all optional):
+- `batch_size`: Number of images to generate (default: 1)
+- `seed`: Random seed (default: 0)
+- `steps_1`: Primary sampling steps (default: 20)
+- `steps_2`: Secondary sampling steps (default: 0)
+- `steps_3`: Tertiary sampling steps (default: 0)
+- `cfg`: CFG scale (default: 7.0)
+- `sampler_name`: Sampler to use (default: "euler")
+- `scheduler`: Scheduler to use (default: "normal")
+- `size_preset`: Preset dimensions (1024x1024, 1152x896, etc.)
+- `custom_width`: Custom width when "Custom" preset selected
+- `custom_height`: Custom height when "Custom" preset selected
+
+**Outputs**:
+- `latent`: Generated empty latent
+- `batch_size`: Batch size
+- `seed`: Random seed
+- `steps_1`: Primary sampling steps
+- `steps_2`: Secondary sampling steps
+- `steps_3`: Tertiary sampling steps
+- `cfg`: CFG scale
+- `sampler_name`: Sampler name
+- `scheduler`: Scheduler type
+- `width`: Image width
+- `height`: Image height
+
+### 🧩 FD Scheduler Adapter Node
+**Category**: `Custom/WarpPipe Nodes`
+
+Converts KSampler schedulers to FaceDetailer-compatible schedulers.
+
+**Inputs**:
+- `scheduler`: KSampler scheduler type
+
+**Outputs**:
+- `scheduler`: FaceDetailer-compatible scheduler
 
 ## Usage Examples
 
 ### Basic Usage
-1. Add a **Warp** node to your workflow
+1. Add a **🔀 Warp** node to your workflow
 2. Connect your models, conditioning, and other data to the Warp node inputs
-3. Connect the Warp output to an **Unwarp** node
+3. Connect the Warp output to an **🔄 Unwarp** node
 4. Use the Unwarp outputs in the rest of your workflow
+
+### Using Warp Provider
+1. Add a **🏭 Warp Provider** node to generate latents and parameters
+2. Choose from preset dimensions (1024x1024, 1152x896, etc.) or use custom sizes
+3. Connect the outputs directly to your sampling nodes or bundle them with a **🔀 Warp** node
 
 ### Chaining Warps
 ```
@@ -102,18 +162,29 @@ Unpacks a warp object back into individual data types.
 
 Warp B can copy all data from Warp A and add additional data, creating a cumulative bundle.
 
+### FaceDetailer Compatibility
+```
+[KSampler Scheduler] → [🧩 FD Scheduler Adapter] → [FaceDetailer Node]
+```
+
+Use the FD Scheduler Adapter to ensure scheduler compatibility with FaceDetailer nodes.
+
 ### Workflow Organization
 Use WarpPipe to:
 - **Reduce visual clutter** by bundling related data
 - **Create reusable modules** that accept and return warp objects
 - **Simplify complex workflows** with many interconnected nodes
 - **Pass workflow state** between different processing stages
+- **Handle scheduler compatibility** between different node types
 
 ## Technical Details
 
 - **Data Storage**: Uses a global storage system with unique IDs per warp instance
-- **Data Types**: Supports all standard ComfyUI data types
-- **Memory Management**: Automatic cleanup when warp objects are no longer referenced
+- **Data Types**: Supports all standard ComfyUI data types (MODEL, CLIP, VAE, CONDITIONING, IMAGE, LATENT, etc.)
+- **Memory Management**: Thread-safe storage with automatic cleanup infrastructure
+- **Scheduler Compatibility**: Automatic coercion of exotic schedulers to safe, compatible values
+- **Preset Dimensions**: Built-in SDXL-optimized aspect ratios and sizes
+- **Thread Safety**: All storage operations are protected by threading locks
 - **Compatibility**: Works with all existing ComfyUI nodes and custom nodes
 
 ## Troubleshooting
@@ -138,7 +209,17 @@ MIT License - see LICENSE file for details
 
 ## Changelog
 
+### v1.1.0
+- Added **🏭 Warp Provider** node with preset dimensions and latent generation
+- Added **🧩 FD Scheduler Adapter** for FaceDetailer compatibility
+- Enhanced scheduler compatibility with automatic coercion
+- Added support for mask data type
+- Improved error handling and validation
+- Added comprehensive documentation and examples
+- Thread-safe storage implementation
+- Support for multiple sampling steps (steps_1, steps_2, steps_3)
+
 ### v1.0.0
 - Initial release
-- Basic Warp and Unwarp functionality
+- Basic **🔀 Warp** and **🔄 Unwarp** functionality
 - Support for all major ComfyUI data types
