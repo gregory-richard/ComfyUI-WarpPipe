@@ -209,15 +209,19 @@ MIT License - see LICENSE file for details
 
 ## Changelog
 
-### v1.1.0
+### v2.0.0
+- **Major Feature Release** - Complete WarpPipe ecosystem
 - Added **🏭 Warp Provider** node with preset dimensions and latent generation
 - Added **🧩 FD Scheduler Adapter** for FaceDetailer compatibility
-- Enhanced scheduler compatibility with automatic coercion
+- Enhanced scheduler compatibility with automatic coercion system
 - Added support for mask data type
-- Improved error handling and validation
-- Added comprehensive documentation and examples
-- Thread-safe storage implementation
+- Improved error handling and validation with ComfyUI import fallbacks
+- Added comprehensive documentation and usage examples
+- Thread-safe storage implementation with proper locking
 - Support for multiple sampling steps (steps_1, steps_2, steps_3)
+- Enhanced code structure with detailed docstrings
+- Professional-grade documentation and README refresh
+- Full backward compatibility maintained
 
 ### v1.0.0
 - Initial release
