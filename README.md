@@ -74,7 +74,7 @@ Bundles multiple data types into a single "warp" object.
 Unpacks a warp object back into individual data types.
 
 **Inputs**:
-- `warp`: The warp object to unpack (CONTROL type)
+- `warp`: The warp object to unpack (CONTROL type) - *Optional: returns None values if not connected*
 
 **Outputs** (in order):
 - `image`: IMAGE object
@@ -244,6 +244,8 @@ MIT License - see LICENSE file for details
 - True dead end - produces no outputs and doesn't trigger execution
 - Enhanced workflow organization and testing capabilities
 - Updated documentation with Dead End usage examples
+- **Bug Fix**: Made Unwarp node input optional to prevent errors when no warp is connected
+- **Improvement**: Graceful error handling - returns None values instead of throwing errors
 
 ### v2.0.0
 - **Major Feature Release** - Complete WarpPipe ecosystem

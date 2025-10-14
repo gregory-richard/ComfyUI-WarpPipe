@@ -255,7 +255,7 @@ class Unwarp:
     @classmethod
     def INPUT_TYPES(cls):
         return {
-            "required": {
+            "optional": {
                 "warp": ("CONTROL", {}),  # CONTROL carries the warp ID
             }
         }
@@ -307,16 +307,50 @@ class Unwarp:
         "height",
     )
 
-    def unwarp(self, warp: Dict[str, Any]) -> tuple:
+    def _return_empty_values(self) -> tuple:
+        """Return a tuple of None values for all expected outputs"""
+        return (
+            None,  # image
+            None,  # mask
+            None,  # model
+            None,  # clip
+            None,  # clip_vision
+            None,  # vae
+            None,  # conditioning_positive
+            None,  # conditioning_negative
+            None,  # latent
+            None,  # prompt_positive
+            None,  # prompt_negative
+            None,  # batch_size
+            None,  # seed
+            None,  # steps_1
+            None,  # steps_2
+            None,  # steps_3
+            None,  # cfg
+            None,  # sampler_name
+            None,  # scheduler
+            None,  # width
+            None,  # height
+        )
+
+    def unwarp(self, warp: Optional[Dict[str, Any]] = None) -> tuple:
+        # Handle case where no warp is connected - return all None values
+        if warp is None:
+            return self._return_empty_values()
+        
+        # Handle invalid warp data gracefully
         if not isinstance(warp, dict) or "id" not in warp:
-            raise ValueError("Invalid warp signal. Ensure it comes from a Warp node.")
+            print("Warning: Invalid warp signal received. Returning empty values.")
+            return self._return_empty_values()
         
         warp_id = warp["id"]
         with _storage_lock:
             data = warp_storage.get(warp_id, {})
         
+        # Handle missing warp data gracefully
         if not data:
-            raise ValueError(f"Warp data not found for ID: {warp_id}. The warp may have been cleaned up or corrupted.")
+            print(f"Warning: Warp data not found for ID: {warp_id}. Returning empty values.")
+            return self._return_empty_values()
         # Get width and height (either calculated from size_preset or direct values)
         width = data.get("width", 1024)
         height = data.get("height", 1024)
