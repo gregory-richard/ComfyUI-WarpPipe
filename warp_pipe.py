@@ -53,6 +53,8 @@ FD_SCHEDULERS = [
     "normal",
     "linear_quadratic",
     "kl_optimal",
+    # Newly added to match FaceDetailer enum in latest versions
+    "bong_tangent",
     # FaceDetailer exotic options
     "AYS SDXL",
     "AYS SD1",
