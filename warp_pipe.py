@@ -2,22 +2,35 @@ import hashlib
 import uuid
 import threading
 from typing import Dict, Any, Optional
+import sys
+import os
+
+# Add ComfyUI root to sys.path if needed
+current_dir = os.path.dirname(os.path.abspath(__file__))
+comfy_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
+if comfy_root not in sys.path:
+    sys.path.append(comfy_root)
 
 try:
     import comfy.samplers
 except ImportError:
-    # Fallback for development/testing environments
-    class MockKSampler:
-        SAMPLERS = ["euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral", "lms", "dpm_fast", "dpm_adaptive", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_2m"]
-        SCHEDULERS = ["normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform"]
-    
-    class MockSamplers:
-        KSampler = MockKSampler
-    
-    class MockComfy:
-        samplers = MockSamplers
-    
-    comfy = MockComfy()
+    # Try importing from nodes (sometimes comfy is not directly exposed but nodes is)
+    try:
+        from nodes import comfy
+    except ImportError as e:
+        print(f"WarpPipe: Failed to import comfy.samplers: {e}")
+        # Fallback for development/testing environments
+        class MockKSampler:
+            SAMPLERS = ["euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral", "lms", "dpm_fast", "dpm_adaptive", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_2m"]
+            SCHEDULERS = ["normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform"]
+        
+        class MockSamplers:
+            KSampler = MockKSampler
+        
+        class MockComfy:
+            samplers = MockSamplers
+        
+        comfy = MockComfy()
 
 # Safe scheduler/sampler lists for compatibility (pulled dynamically from Comfy)
 try:
@@ -141,7 +154,8 @@ class Warp:
                 "conditioning_negative": ("CONDITIONING", {}),
                 "image": ("IMAGE", {}),
                 "mask": ("MASK", {}),
-                "model": ("MODEL", {}),
+                "model_1": ("MODEL", {}),
+                "model_2": ("MODEL", {}),
                 "clip": ("CLIP", {}),
                 "clip_vision": ("CLIP_VISION", {}),
                 "vae": ("VAE", {}),
@@ -185,7 +199,8 @@ class Warp:
         warp: Optional[Dict[str, Any]] = None,
         image: Optional[Any] = None,
         mask: Optional[Any] = None,
-        model: Optional[Any] = None,
+        model_1: Optional[Any] = None,
+        model_2: Optional[Any] = None,
         clip: Optional[Any] = None,
         clip_vision: Optional[Any] = None,
         vae: Optional[Any] = None,
@@ -212,6 +227,11 @@ class Warp:
         else:
             data = {}
 
+        # Debug inputs
+        print(f"WarpPipe: Warp Input - model_1 type: {type(model_1)}")
+        print(f"WarpPipe: Warp Input - model_2 type: {type(model_2)}")
+        print(f"WarpPipe: Warp Input - clip type: {type(clip)}")
+
         # Normalize sampler/scheduler values
         normalized_sampler = coerce_sampler(sampler_name) if sampler_name is not None else None
         normalized_scheduler = coerce_scheduler(scheduler) if scheduler is not None else None
@@ -220,7 +240,8 @@ class Warp:
         updates = {
             "image": image,
             "mask": mask,
-            "model": model,
+            "model_1": model_1,
+            "model_2": model_2,
             "clip": clip,
             "clip_vision": clip_vision,
             "vae": vae,
@@ -246,6 +267,11 @@ class Warp:
 
         with _storage_lock:
             warp_storage[self._warp_id] = data
+        
+        # Debug print
+        if latent is not None:
+            print(f"WarpPipe: Warping latent type: {type(latent)}")
+
         return ({"id": self._warp_id},)
 
 class Unwarp:
@@ -263,9 +289,10 @@ class Unwarp:
         }
 
     RETURN_TYPES = (
+        "MODEL",
+        "MODEL",
         "IMAGE",
         "MASK",
-        "MODEL",
         "CLIP",
         "CLIP_VISION",
         "VAE",
@@ -286,9 +313,10 @@ class Unwarp:
         "INT",
     )
     RETURN_NAMES = (
+        "model_1",
+        "model_2",
         "image",
         "mask",
-        "model",
         "clip",
         "clip_vision",
         "vae",
@@ -311,29 +339,7 @@ class Unwarp:
 
     def _return_empty_values(self) -> tuple:
         """Return a tuple of None values for all expected outputs"""
-        return (
-            None,  # image
-            None,  # mask
-            None,  # model
-            None,  # clip
-            None,  # clip_vision
-            None,  # vae
-            None,  # conditioning_positive
-            None,  # conditioning_negative
-            None,  # latent
-            None,  # prompt_positive
-            None,  # prompt_negative
-            None,  # batch_size
-            None,  # seed
-            None,  # steps_1
-            None,  # steps_2
-            None,  # steps_3
-            None,  # cfg
-            None,  # sampler_name
-            None,  # scheduler
-            None,  # width
-            None,  # height
-        )
+        return (None,) * len(self.RETURN_TYPES)
 
     def unwarp(self, warp: Optional[Dict[str, Any]] = None) -> tuple:
         # Handle case where no warp is connected - return all None values
@@ -357,16 +363,26 @@ class Unwarp:
         width = data.get("width", 1024)
         height = data.get("height", 1024)
         
-        return (
+        latent_out = data.get("latent")
+        model_out = data.get("model_1")
+        clip_out = data.get("clip")
+        
+        print(f"WarpPipe: Unwarp Output - model_1 type: {type(model_out)}")
+        print(f"WarpPipe: Unwarp Output - clip type: {type(clip_out)}")
+        if latent_out is not None:
+             print(f"WarpPipe: Unwarping latent type: {type(latent_out)}")
+
+        ret = (
+            data.get("model_1"),
+            data.get("model_2"),
             data.get("image"),
             data.get("mask"),
-            data.get("model"),
             data.get("clip"),
             data.get("clip_vision"),
             data.get("vae"),
             data.get("conditioning_positive"),
             data.get("conditioning_negative"),
-            data.get("latent"),
+            latent_out,
             data.get("prompt_positive"),
             data.get("prompt_negative"),
             data.get("batch_size"),
@@ -380,6 +396,11 @@ class Unwarp:
             width,
             height,
         )
+        
+        print(f"WarpPipe: Unwarp RETURN_TYPES len: {len(self.RETURN_TYPES)}")
+        print(f"WarpPipe: Unwarp return tuple len: {len(ret)}")
+        
+        return ret
 
 class WarpProvider:
     """Parameter and latent provider for warp workflows"""
