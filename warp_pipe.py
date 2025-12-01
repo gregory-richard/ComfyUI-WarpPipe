@@ -43,6 +43,10 @@ try:
 except Exception:
     SAFE_SCHEDULERS = []
 
+# Ensure beta57 is present in our local list for inputs
+if "beta57" not in SAFE_SCHEDULERS:
+    SAFE_SCHEDULERS.append("beta57")
+
 # Compatibility mappings for exotic schedulers
 SCHEDULER_ALIASES = {
     "AYS SDXL": "karras",
@@ -66,7 +70,6 @@ FD_SCHEDULERS = [
     "normal",
     "linear_quadratic",
     "kl_optimal",
-    "beta57",
     # Newly added to match FaceDetailer enum in latest versions
     "bong_tangent",
     # FaceDetailer exotic options
@@ -168,8 +171,8 @@ class Warp:
                 "steps_3": ("INT", {"forceInput": True}),
                 "cfg": ("FLOAT", {"forceInput": True}),
                 # Accept enum (matches KSampler)
-                "sampler_name": ("*", {"forceInput": True}),
-                "scheduler": ("*", {"forceInput": True}),
+                "sampler_name": (SAFE_SAMPLERS, {"forceInput": True}),
+                "scheduler": (SAFE_SCHEDULERS, {"forceInput": True}),
                 "width": ("INT", {"forceInput": True}),
                 "height": ("INT", {"forceInput": True}),
             }
@@ -308,8 +311,8 @@ class Unwarp:
         "INT",
         "INT",
         "FLOAT",
-        "*",
-        "*",
+        "STRING",
+        "STRING",
         "INT",
         "INT",
     )
@@ -445,7 +448,7 @@ class WarpProvider:
             }
         }
 
-    RETURN_TYPES = ("LATENT", "INT", "INT", "INT", "INT", "INT", "FLOAT", "*", "*", "INT", "INT")
+    RETURN_TYPES = ("LATENT", "INT", "INT", "INT", "INT", "INT", "FLOAT", "STRING", "STRING", "INT", "INT")
     RETURN_NAMES = ("latent", "batch_size", "seed", "steps_1", "steps_2", "steps_3", "cfg", "sampler_name", "scheduler", "width", "height")
 
     def provide(
@@ -519,7 +522,7 @@ class FDSchedulerAdapter:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "scheduler": ("*", {}),
+                "scheduler": (SAFE_SCHEDULERS, {}),
             }
         }
 
