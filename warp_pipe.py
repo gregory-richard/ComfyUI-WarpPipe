@@ -66,6 +66,7 @@ FD_SCHEDULERS = [
     "normal",
     "linear_quadratic",
     "kl_optimal",
+    "beta57",
     # Newly added to match FaceDetailer enum in latest versions
     "bong_tangent",
     # FaceDetailer exotic options
@@ -167,8 +168,8 @@ class Warp:
                 "steps_3": ("INT", {"forceInput": True}),
                 "cfg": ("FLOAT", {"forceInput": True}),
                 # Accept enum (matches KSampler)
-                "sampler_name": (getattr(comfy.samplers.KSampler, "SAMPLERS", []), {"forceInput": True}),
-                "scheduler": (getattr(comfy.samplers.KSampler, "SCHEDULERS", []), {"forceInput": True}),
+                "sampler_name": ("*", {"forceInput": True}),
+                "scheduler": ("*", {"forceInput": True}),
                 "width": ("INT", {"forceInput": True}),
                 "height": ("INT", {"forceInput": True}),
             }
@@ -307,8 +308,8 @@ class Unwarp:
         "INT",
         "INT",
         "FLOAT",
-        getattr(comfy.samplers.KSampler, "SAMPLERS", []),
-        getattr(comfy.samplers.KSampler, "SCHEDULERS", []),
+        "*",
+        "*",
         "INT",
         "INT",
     )
@@ -444,7 +445,7 @@ class WarpProvider:
             }
         }
 
-    RETURN_TYPES = ("LATENT", "INT", "INT", "INT", "INT", "INT", "FLOAT", getattr(comfy.samplers.KSampler, "SAMPLERS", []), getattr(comfy.samplers.KSampler, "SCHEDULERS", []), "INT", "INT")
+    RETURN_TYPES = ("LATENT", "INT", "INT", "INT", "INT", "INT", "FLOAT", "*", "*", "INT", "INT")
     RETURN_NAMES = ("latent", "batch_size", "seed", "steps_1", "steps_2", "steps_3", "cfg", "sampler_name", "scheduler", "width", "height")
 
     def provide(
@@ -518,7 +519,7 @@ class FDSchedulerAdapter:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "scheduler": (getattr(comfy.samplers.KSampler, "SCHEDULERS", []), {}),
+                "scheduler": ("*", {}),
             }
         }
 
