@@ -34,18 +34,14 @@ except ImportError:
 
 # Safe scheduler/sampler lists for compatibility (pulled dynamically from Comfy)
 try:
-    SAFE_SAMPLERS = list(getattr(comfy.samplers.KSampler, "SAMPLERS", []))
+    SAFE_SAMPLERS = getattr(comfy.samplers.KSampler, "SAMPLERS", [])
 except Exception:
     SAFE_SAMPLERS = []
 
 try:
-    SAFE_SCHEDULERS = list(getattr(comfy.samplers.KSampler, "SCHEDULERS", []))
+    SAFE_SCHEDULERS = getattr(comfy.samplers.KSampler, "SCHEDULERS", [])
 except Exception:
     SAFE_SCHEDULERS = []
-
-# Ensure beta57 is present in our local list for inputs
-if "beta57" not in SAFE_SCHEDULERS:
-    SAFE_SCHEDULERS.append("beta57")
 
 # Compatibility mappings for exotic schedulers
 SCHEDULER_ALIASES = {
@@ -70,7 +66,6 @@ FD_SCHEDULERS = [
     "normal",
     "linear_quadratic",
     "kl_optimal",
-    # Newly added to match FaceDetailer enum in latest versions
     "bong_tangent",
     # FaceDetailer exotic options
     "AYS SDXL",
@@ -311,8 +306,8 @@ class Unwarp:
         "INT",
         "INT",
         "FLOAT",
-        "STRING",
-        "STRING",
+        SAFE_SAMPLERS,
+        SAFE_SCHEDULERS,
         "INT",
         "INT",
     )
@@ -448,7 +443,7 @@ class WarpProvider:
             }
         }
 
-    RETURN_TYPES = ("LATENT", "INT", "INT", "INT", "INT", "INT", "FLOAT", "STRING", "STRING", "INT", "INT")
+    RETURN_TYPES = ("LATENT", "INT", "INT", "INT", "INT", "INT", "FLOAT", SAFE_SAMPLERS, SAFE_SCHEDULERS, "INT", "INT")
     RETURN_NAMES = ("latent", "batch_size", "seed", "steps_1", "steps_2", "steps_3", "cfg", "sampler_name", "scheduler", "width", "height")
 
     def provide(
