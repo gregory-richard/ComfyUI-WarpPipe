@@ -5,7 +5,7 @@ WarpPipe is a comprehensive set of custom nodes for ComfyUI that provides a data
 ## Features
 
 - **🔀 Warp Node**: Bundles multiple ComfyUI data types into a single transferable object
-- **🔄 Unwarp Node**: Unpacks the bundled data back into individual outputs  
+- **🔄 Unwarp Node**: Unpacks the bundled data back into individual outputs
 - **🏭 Warp Provider**: Generates latents and parameters for warp workflows with preset dimensions
 - **🧩 FD Scheduler Adapter**: Converts KSampler schedulers to FaceDetailer-compatible schedulers
 - **🚫 Dead End Node**: Accepts any input type but produces no output - perfect for debugging and workflow control
@@ -17,11 +17,13 @@ WarpPipe is a comprehensive set of custom nodes for ComfyUI that provides a data
 ## Installation
 
 ### Method 1: ComfyUI Manager (Recommended)
+
 1. Open ComfyUI Manager
 2. Search for "WarpPipe"
 3. Click Install
 
 ### Method 2: Manual Installation
+
 1. Navigate to your ComfyUI `custom_nodes` directory
 2. Clone this repository:
    ```bash
@@ -30,6 +32,7 @@ WarpPipe is a comprehensive set of custom nodes for ComfyUI that provides a data
 3. Restart ComfyUI
 
 ### Method 3: Download ZIP
+
 1. Download the ZIP file from this repository
 2. Extract to `ComfyUI/custom_nodes/warp_pipe-comfyui/`
 3. Restart ComfyUI
@@ -37,14 +40,16 @@ WarpPipe is a comprehensive set of custom nodes for ComfyUI that provides a data
 ## Nodes
 
 ### 🔀 Warp Node
+
 **Category**: `Custom/WarpPipe Nodes`
 
 Bundles multiple data types into a single "warp" object.
 
 **Inputs** (all optional):
+
 - `warp`: Copy data from an existing warp object
 - `model`: MODEL object
-- `clip`: CLIP object  
+- `clip`: CLIP object
 - `clip_vision`: CLIP_VISION object
 - `vae`: VAE object
 - `conditioning_positive`: Positive conditioning
@@ -66,17 +71,21 @@ Bundles multiple data types into a single "warp" object.
 - `height`: Image height (INT)
 
 **Outputs**:
+
 - `warp`: Bundled data object (CONTROL type)
 
 ### 🔄 Unwarp Node
+
 **Category**: `Custom/WarpPipe Nodes`
 
 Unpacks a warp object back into individual data types.
 
 **Inputs**:
-- `warp`: The warp object to unpack (CONTROL type) - *Optional: returns None values if not connected*
+
+- `warp`: The warp object to unpack (CONTROL type) - _Optional: returns None values if not connected_
 
 **Outputs** (in order):
+
 - `image`: IMAGE object
 - `mask`: MASK object
 - `model`: MODEL object
@@ -100,11 +109,13 @@ Unpacks a warp object back into individual data types.
 - `height`: Image height
 
 ### 🏭 Warp Provider Node
+
 **Category**: `Custom/WarpPipe Nodes`
 
 Generates latents and parameters for warp workflows with convenient preset dimensions.
 
 **Inputs** (all optional):
+
 - `batch_size`: Number of images to generate (default: 1)
 - `seed`: Random seed (default: 0)
 - `steps_1`: Primary sampling steps (default: 20)
@@ -118,6 +129,7 @@ Generates latents and parameters for warp workflows with convenient preset dimen
 - `custom_height`: Custom height when "Custom" preset selected
 
 **Outputs**:
+
 - `latent`: Generated empty latent
 - `batch_size`: Batch size
 - `seed`: Random seed
@@ -131,28 +143,35 @@ Generates latents and parameters for warp workflows with convenient preset dimen
 - `height`: Image height
 
 ### 🧩 FD Scheduler Adapter Node
+
 **Category**: `Custom/WarpPipe Nodes`
 
 Converts KSampler schedulers to FaceDetailer-compatible schedulers.
 
 **Inputs**:
+
 - `scheduler`: KSampler scheduler type
 
 **Outputs**:
+
 - `scheduler`: FaceDetailer-compatible scheduler
 
 ### 🚫 Dead End Node
+
 **Category**: `Custom/WarpPipe Nodes`
 
 A true dead end node that accepts any input type but produces no output. Perfect for debugging workflows, temporarily disabling branches, or testing specific parts of your workflow without affecting downstream execution.
 
 **Inputs**:
-- `input`: Any data type (*) - accepts any ComfyUI data type
+
+- `input`: Any data type (\*) - accepts any ComfyUI data type
 
 **Outputs**:
+
 - None - this node produces no outputs and does not trigger execution
 
 **Use Cases**:
+
 - **Debugging**: Connect any output to test if a workflow branch executes
 - **Temporary Disabling**: Redirect workflow paths without deleting connections
 - **Testing**: Isolate parts of complex workflows during development
@@ -161,17 +180,20 @@ A true dead end node that accepts any input type but produces no output. Perfect
 ## Usage Examples
 
 ### Basic Usage
+
 1. Add a **🔀 Warp** node to your workflow
 2. Connect your models, conditioning, and other data to the Warp node inputs
 3. Connect the Warp output to an **🔄 Unwarp** node
 4. Use the Unwarp outputs in the rest of your workflow
 
 ### Using Warp Provider
+
 1. Add a **🏭 Warp Provider** node to generate latents and parameters
 2. Choose from preset dimensions (1024x1024, 1152x896, etc.) or use custom sizes
 3. Connect the outputs directly to your sampling nodes or bundle them with a **🔀 Warp** node
 
 ### Chaining Warps
+
 ```
 [Model] → [Warp A] → [Some Processing] → [Warp B] → [Unwarp] → [KSampler]
               ↑                            ↑
@@ -181,6 +203,7 @@ A true dead end node that accepts any input type but produces no output. Perfect
 Warp B can copy all data from Warp A and add additional data, creating a cumulative bundle.
 
 ### FaceDetailer Compatibility
+
 ```
 [KSampler Scheduler] → [🧩 FD Scheduler Adapter] → [FaceDetailer Node]
 ```
@@ -188,6 +211,7 @@ Warp B can copy all data from Warp A and add additional data, creating a cumulat
 Use the FD Scheduler Adapter to ensure scheduler compatibility with FaceDetailer nodes.
 
 ### Debugging and Workflow Control
+
 ```
 [Model] → [KSampler] → [🚫 Dead End]
                     ↘ [VAE Decode] → [Save Image]
@@ -196,7 +220,9 @@ Use the FD Scheduler Adapter to ensure scheduler compatibility with FaceDetailer
 Use the Dead End node to temporarily disable the upper branch while keeping the lower branch active. Perfect for testing different workflow paths without deleting connections.
 
 ### Workflow Organization
+
 Use WarpPipe to:
+
 - **Reduce visual clutter** by bundling related data
 - **Create reusable modules** that accept and return warp objects
 - **Simplify complex workflows** with many interconnected nodes
@@ -217,11 +243,13 @@ Use WarpPipe to:
 ## Troubleshooting
 
 ### Node Not Appearing
+
 - Ensure you've restarted ComfyUI after installation
 - Check the console for any error messages during startup
 - Verify all files are in the correct directory
 
 ### Function Errors
+
 - Make sure you're using the latest version of ComfyUI
 - Check that all node connections are valid
 - Verify input data types match expected formats
@@ -236,11 +264,20 @@ MIT License - see LICENSE file for details
 
 ## Changelog
 
+### v2.2.0
+
+- **Minor Feature Release** - Expanded Resolution Presets
+- Added support for various aspect ratios: 9:16, 3:4, 2:3, 4:5, 1:1, 5:4, 3:2, 4:3, 16:9
+- Included specific resolutions optimized for SDXL
+- Added detailed labels showing aspect ratio, resolution, and megapixel count
+- Sorted presets by aspect ratio and size for better usability
+
 ### v2.1.0
+
 - **Minor Feature Release** - Added workflow debugging capabilities
 - Added **🚫 Dead End** node for workflow debugging and branch control
 - Perfect for temporarily disabling workflow paths without deleting connections
-- Accepts any input type using universal "*" type specifier
+- Accepts any input type using universal "\*" type specifier
 - True dead end - produces no outputs and doesn't trigger execution
 - Enhanced workflow organization and testing capabilities
 - Updated documentation with Dead End usage examples
@@ -248,6 +285,7 @@ MIT License - see LICENSE file for details
 - **Improvement**: Graceful error handling - returns None values instead of throwing errors
 
 ### v2.0.0
+
 - **Major Feature Release** - Complete WarpPipe ecosystem
 - Added **🏭 Warp Provider** node with preset dimensions and latent generation
 - Added **🧩 FD Scheduler Adapter** for FaceDetailer compatibility
@@ -262,6 +300,7 @@ MIT License - see LICENSE file for details
 - Full backward compatibility maintained
 
 ### v1.0.0
+
 - Initial release
 - Basic **🔀 Warp** and **🔄 Unwarp** functionality
 - Support for all major ComfyUI data types

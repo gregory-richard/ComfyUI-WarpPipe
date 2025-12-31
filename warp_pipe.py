@@ -66,6 +66,7 @@ FD_SCHEDULERS = [
     "normal",
     "linear_quadratic",
     "kl_optimal",
+    "FlowMatchEulerDiscreteScheduler",
     "bong_tangent",
     # FaceDetailer exotic options
     "AYS SDXL",
@@ -410,18 +411,51 @@ class WarpProvider:
 
     @classmethod
     def INPUT_TYPES(cls):
-        # SDXL preset dimensions (common aspect ratios and sizes)
-        sdxl_sizes = [
-            "1024x1024",   # 1:1 Square
-            "1152x896",    # 9:7 Landscape
-            "896x1152",    # 7:9 Portrait
-            "1216x832",    # 3:2 Landscape
-            "832x1216",    # 2:3 Portrait
-            "1344x768",    # 7:4 Landscape
-            "768x1344",    # 4:7 Portrait
-            "1536x640",    # 12:5 Ultrawide
-            "640x1536",    # 5:12 Tall
-            "Custom",      # Allow custom dimensions
+        # Resolution presets: Use Case | Aspect Ratio | Width × Height | Megapixels
+        # Sorted by aspect ratio (increasing: 9:16 → 16:9), then by MP (increasing)
+        # All dimensions divisible by 8, small side up to 2048
+        size_presets = [
+            # 9:16 - Mobile/Stories (portrait)
+            "Mobile/Stories (small)      |  9:16  |   576 ×  1024  |  0.59 MP",
+            "Mobile/Stories (HD)         |  9:16  |   720 ×  1280  |  0.92 MP",
+            "Mobile/Stories (Full HD)    |  9:16  |  1080 ×  1920  |  2.07 MP",
+            "Mobile/Stories (max)        |  9:16  |  1152 ×  2048  |  2.36 MP",
+            # 3:4 - Portrait
+            "Portrait (classic)          |  3:4   |   768 ×  1024  |  0.79 MP",
+            "Portrait (high-res)         |  3:4   |  1152 ×  1536  |  1.77 MP",
+            "Portrait (max)              |  3:4   |  1536 ×  2048  |  3.15 MP",
+            # 2:3 - Photo portrait
+            "Photo portrait              |  2:3   |   832 ×  1248  |  1.04 MP",
+            "Photo portrait (high-res)   |  2:3   |  1024 ×  1536  |  1.57 MP",
+            "Photo portrait (max)        |  2:3   |  1368 ×  2048  |  2.80 MP",
+            # 4:5 - Instagram portrait
+            "Instagram portrait          |  4:5   |   816 ×  1024  |  0.84 MP",
+            "Instagram portrait (hi-res) |  4:5   |  1224 ×  1536  |  1.88 MP",
+            "Instagram portrait (max)    |  4:5   |  1640 ×  2048  |  3.36 MP",
+            # 1:1 - Square
+            "Square (small)              |  1:1   |   768 ×   768  |  0.59 MP",
+            "Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP",
+            "Square (high-res)           |  1:1   |  1536 ×  1536  |  2.36 MP",
+            "Square (max)                |  1:1   |  2048 ×  2048  |  4.19 MP",
+            # 5:4 - Instagram landscape
+            "Instagram landscape         |  5:4   |  1024 ×   816  |  0.84 MP",
+            "Instagram landscape (hi-res)|  5:4   |  1536 ×  1224  |  1.88 MP",
+            "Instagram landscape (max)   |  5:4   |  2048 ×  1640  |  3.36 MP",
+            # 3:2 - Photo landscape
+            "Photo landscape             |  3:2   |  1248 ×   832  |  1.04 MP",
+            "Photo landscape (high-res)  |  3:2   |  1536 ×  1024  |  1.57 MP",
+            "Photo landscape (max)       |  3:2   |  2048 ×  1368  |  2.80 MP",
+            # 4:3 - Landscape
+            "Landscape (classic)         |  4:3   |  1024 ×   768  |  0.79 MP",
+            "Landscape (high-res)        |  4:3   |  1536 ×  1152  |  1.77 MP",
+            "Landscape (max)             |  4:3   |  2048 ×  1536  |  3.15 MP",
+            # 16:9 - Widescreen
+            "Widescreen (small)          |  16:9  |  1024 ×   576  |  0.59 MP",
+            "Widescreen (720p)           |  16:9  |  1280 ×   720  |  0.92 MP",
+            "Widescreen (1080p)          |  16:9  |  1920 ×  1080  |  2.07 MP",
+            "Widescreen (max)            |  16:9  |  2048 ×  1152  |  2.36 MP",
+            # Custom option
+            "Custom",
         ]
         
         return {
@@ -437,7 +471,7 @@ class WarpProvider:
                 "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "normal"}),
                 
                 # Image Size Parameters
-                "size_preset": (sdxl_sizes, {"default": "1024x1024"}),
+                "size_preset": (size_presets, {"default": "Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP"}),
                 "custom_width": ("INT", {"default": 1024, "min": 64, "max": 8192, "step": 8}),
                 "custom_height": ("INT", {"default": 1024, "min": 64, "max": 8192, "step": 8}),
             }
@@ -456,10 +490,11 @@ class WarpProvider:
         cfg: float = 7.0,
         sampler_name: str = "euler",
         scheduler: str = "normal",
-        size_preset: str = "1024x1024",
+        size_preset: str = "Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP",
         custom_width: int = 1024,
         custom_height: int = 1024
     ) -> tuple:
+        import re
         
         # Helper function to create empty latent image
         def create_empty_latent(width: int, height: int, batch_size: int):
@@ -470,20 +505,32 @@ class WarpProvider:
             latent_height = height // 8
             latent = torch.zeros([batch_size, 4, latent_height, latent_width])
             return {"samples": latent}
+        
+        def parse_size_preset(preset: str) -> tuple:
+            """
+            Parse resolution preset string.
+            Format: "Use Case | Aspect Ratio | Width × Height | Megapixels"
+            Example: "Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP"
+            Returns: (width, height) tuple
+            """
+            # Try to find dimensions pattern: number × number (using × character)
+            match = re.search(r'(\d+)\s*×\s*(\d+)', preset)
+            if match:
+                return int(match.group(1)), int(match.group(2))
+            
+            # Fallback: try old format with 'x' (e.g., "1024x1024")
+            match = re.search(r'(\d+)\s*x\s*(\d+)', preset, re.IGNORECASE)
+            if match:
+                return int(match.group(1)), int(match.group(2))
+            
+            # Final fallback
+            return 1024, 1024
 
         # Determine actual dimensions from preset or custom values
-        # LOGIC: If "Custom" is selected, use custom_width/custom_height fields
-        # Otherwise, parse the preset string (e.g., "1024x1024" -> width=1024, height=1024)
         if size_preset == "Custom":
             width, height = custom_width, custom_height
         else:
-            # Parse preset dimensions (e.g., "1024x1024" -> 1024, 1024)
-            try:
-                width_str, height_str = size_preset.split("x")
-                width, height = int(width_str), int(height_str)
-            except ValueError:
-                # Fallback to default if parsing fails
-                width, height = 1024, 1024
+            width, height = parse_size_preset(size_preset)
 
         # Create empty latent image based on dimensions and batch size
         latent = create_empty_latent(width, height, batch_size)
