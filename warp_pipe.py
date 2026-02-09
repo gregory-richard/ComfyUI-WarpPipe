@@ -131,14 +131,34 @@ def coerce_sampler(name: str) -> str:
 
 # Global storage for warp data; keys are unique per Warp instance
 warp_storage: Dict[str, Dict[str, Any]] = {}
+_storage_timestamps: Dict[str, float] = {}  # Track last-access time per warp ID
 _storage_lock = threading.Lock()
+_STORAGE_MAX_AGE_SECONDS = 3600  # Prune entries older than 1 hour
+_STORAGE_MAX_ENTRIES = 256       # Hard cap on stored entries
 
 def cleanup_warp_storage():
-    """Clean up unused warp storage entries"""
+    """Prune stale warp storage entries to prevent memory leaks."""
+    import time
+    now = time.time()
     with _storage_lock:
-        # In a real implementation, you'd track active warp IDs
-        # For now, we'll keep the simple approach but add the infrastructure
-        pass
+        stale_ids = [
+            wid for wid, ts in _storage_timestamps.items()
+            if now - ts > _STORAGE_MAX_AGE_SECONDS
+        ]
+        for wid in stale_ids:
+            warp_storage.pop(wid, None)
+            _storage_timestamps.pop(wid, None)
+        if stale_ids:
+            logger.debug("Cleaned up %d stale warp storage entries", len(stale_ids))
+        # If still over the hard cap, remove oldest entries
+        if len(warp_storage) > _STORAGE_MAX_ENTRIES:
+            sorted_ids = sorted(_storage_timestamps, key=_storage_timestamps.get)
+            to_remove = sorted_ids[:len(warp_storage) - _STORAGE_MAX_ENTRIES]
+            for wid in to_remove:
+                warp_storage.pop(wid, None)
+                _storage_timestamps.pop(wid, None)
+            if to_remove:
+                logger.debug("Evicted %d warp storage entries (over cap)", len(to_remove))
 
 class Warp:
     CATEGORY = "Custom/WarpPipe Nodes"
@@ -267,8 +287,13 @@ class Warp:
             if val is not None:
                 data[key] = val
 
+        import time
+        # Prune stale entries before storing new data
+        cleanup_warp_storage()
+
         with _storage_lock:
             warp_storage[self._warp_id] = data
+            _storage_timestamps[self._warp_id] = time.time()
         
         if latent is not None:
             logger.debug("Warping latent type: %s", type(latent))
@@ -352,9 +377,12 @@ class Unwarp:
             logger.warning("Invalid warp signal received. Returning empty values.")
             return self._return_empty_values()
         
+        import time
         warp_id = warp["id"]
         with _storage_lock:
             data = warp_storage.get(warp_id, {})
+            if data:
+                _storage_timestamps[warp_id] = time.time()  # Refresh on access
         
         # Handle missing warp data gracefully
         if not data:
