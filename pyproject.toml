@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "warppipe"
-version = "2.2.0"
+version = "3.0.0"
 description = "WarpPipe - A data bundling and transfer system for ComfyUI workflows"
 readme = "README.md"
 requires-python = ">=3.9"
