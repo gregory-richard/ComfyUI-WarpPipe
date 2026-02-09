@@ -597,6 +597,15 @@ class DeadEnd:
     # Do NOT mark as OUTPUT_NODE - we want it to be a true dead end
     # OUTPUT_NODE = False  # This is the default, so we don't need to specify it
 
+    @classmethod
+    def VALIDATE_INPUTS(cls, input_types=None, **kwargs):
+        """
+        Validate inputs - accept any type for wildcard '*' input.
+        The input_types parameter is required to skip backend type validation
+        when using wildcard inputs, per ComfyUI documentation.
+        """
+        return True
+
     def dead_end(self, input=None):
         """
         Accept any input and do nothing with it.
