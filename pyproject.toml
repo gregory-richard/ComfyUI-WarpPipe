@@ -26,6 +26,7 @@ classifiers = [
 ]
 
 [project.urls]
+Repository = "https://github.com/gregory-richard/ComfyUI-WarpPipe"
 "Homepage" = "https://github.com/gregory-richard/ComfyUI-WarpPipe"
 "Bug Reports" = "https://github.com/gregory-richard/ComfyUI-WarpPipe/issues"
 "Source" = "https://github.com/gregory-richard/ComfyUI-WarpPipe"
