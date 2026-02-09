@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "warppipe"
-version = "3.0.1"
+version = "3.0.2"
 description = "WarpPipe - A data bundling and transfer system for ComfyUI workflows"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -44,3 +44,4 @@ include = ["*"]
 PublisherId = "gregrichrd"
 DisplayName = "WarpPipe Nodes"
 Icon = "https://raw.githubusercontent.com/gregory-richard/ComfyUI-WarpPipe/main/icon.png"
+Banner = "https://raw.githubusercontent.com/gregory-richard/ComfyUI-WarpPipe/main/banner.png"

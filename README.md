@@ -1,10 +1,19 @@
 # WarpPipe - ComfyUI Custom Nodes
 
 <p align="center">
-  <img src="icon.png" alt="WarpPipe Icon" width="128" height="128">
+  <img src="banner.png" alt="WarpPipe Banner">
 </p>
 
 WarpPipe is a set of custom nodes for ComfyUI that provides a data bundling and transfer system. It allows you to package multiple data types (models, conditioning, images, parameters, etc.) into a single "warp" object that can be passed between nodes and unpacked later in your workflow -- like a Super Mario warp pipe for your data.
+
+## Why WarpPipe?
+
+If you've ever built a complex ComfyUI workflow, you know the pain: dozens of connections criss-crossing your canvas, making it impossible to read or maintain. WarpPipe solves this by letting you **bundle everything into a single wire**.
+
+- **Clean workflows**: Replace 20+ tangled connections with one clean Warp-to-Unwarp link. Your workflow becomes readable at a glance.
+- **Fast model switching**: Set up multiple Warp nodes -- one per model/style -- each with its own settings (steps, CFG, scheduler, sampler, resolution). Switch between them instantly by connecting a different Warp to your Unwarp.
+- **Flexible and modular**: Build reusable workflow sections that accept and return warp bundles. Change one part without touching the rest.
+- **No data loss**: Every standard ComfyUI type is supported -- models, CLIP, VAE, conditioning, images, latents, prompts, and all sampling parameters travel together.
 
 ## Features
 
@@ -14,7 +23,6 @@ WarpPipe is a set of custom nodes for ComfyUI that provides a data bundling and 
 - **FD Scheduler Adapter**: Converts KSampler schedulers to FaceDetailer-compatible schedulers
 - **Dead End Node**: Accepts any input type but produces no output -- perfect for debugging
 - **Chain-able**: Warp nodes can copy and extend data from other warp nodes
-- **Workflow Simplification**: Reduces cable clutter in complex workflows
 - **Scheduler Compatibility**: Automatic coercion of exotic schedulers to safe values
 
 ## Installation
@@ -193,6 +201,16 @@ Warp B copies all data from Warp A and adds additional data, creating a cumulati
 ```
 
 Use the Dead End node to temporarily disable a branch while keeping the rest active.
+
+### Example Workflow
+
+Here's a real workflow using WarpPipe with multiple model configurations:
+
+<p align="center">
+  <img src="examples/workflow_example.png" alt="WarpPipe Example Workflow" width="800">
+</p>
+
+Download the [example workflow JSON](examples/workflow_example.json) and drag it into ComfyUI to try it out.
 
 ## Technical Details
 
