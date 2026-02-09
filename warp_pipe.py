@@ -170,7 +170,7 @@ class Warp:
     def INPUT_TYPES(cls):
         return {
             "optional": {
-                "warp": ("CONTROL", {}),  # copy from existing warp if provided
+                "warp": ("WARPPIPE", {}),  # copy from existing warp if provided
                 "prompt_positive": ("STRING", {"forceInput": True}),
                 "prompt_negative": ("STRING", {"forceInput": True}),
                 "conditioning_positive": ("CONDITIONING", {}),
@@ -197,7 +197,7 @@ class Warp:
             }
         }
 
-    RETURN_TYPES = ("CONTROL",)
+    RETURN_TYPES = ("WARPPIPE",)
     RETURN_NAMES = ("warp",)
 
     def __init__(self):
@@ -310,7 +310,7 @@ class Unwarp:
     def INPUT_TYPES(cls):
         return {
             "optional": {
-                "warp": ("CONTROL", {}),  # CONTROL carries the warp ID
+                "warp": ("WARPPIPE", {}),  # WARPPIPE carries the warp ID
             }
         }
 
