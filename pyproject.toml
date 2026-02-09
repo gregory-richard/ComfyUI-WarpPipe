@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "warppipe"
-version = "3.0.0"
+version = "3.0.1"
 description = "WarpPipe - A data bundling and transfer system for ComfyUI workflows"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -43,4 +43,4 @@ include = ["*"]
 [tool.comfy]
 PublisherId = "gregrichrd"
 DisplayName = "WarpPipe Nodes"
-# Icon = ""  # TODO: Add an icon URL (SVG, PNG, JPG, or GIF; max 400x400px)
+Icon = "https://raw.githubusercontent.com/gregory-richard/ComfyUI-WarpPipe/main/icon.png"
