@@ -1,9 +1,12 @@
 import hashlib
+import logging
 import uuid
 import threading
 from typing import Dict, Any, Optional
 import sys
 import os
+
+logger = logging.getLogger("WarpPipe")
 
 # Add ComfyUI root to sys.path if needed
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -18,7 +21,7 @@ except ImportError:
     try:
         from nodes import comfy
     except ImportError as e:
-        print(f"WarpPipe: Failed to import comfy.samplers: {e}")
+        logger.warning("Failed to import comfy.samplers: %s", e)
         # Fallback for development/testing environments
         class MockKSampler:
             SAMPLERS = ["euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral", "lms", "dpm_fast", "dpm_adaptive", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_2m"]
@@ -227,10 +230,9 @@ class Warp:
         else:
             data = {}
 
-        # Debug inputs
-        print(f"WarpPipe: Warp Input - model_1 type: {type(model_1)}")
-        print(f"WarpPipe: Warp Input - model_2 type: {type(model_2)}")
-        print(f"WarpPipe: Warp Input - clip type: {type(clip)}")
+        logger.debug("Warp Input - model_1 type: %s", type(model_1))
+        logger.debug("Warp Input - model_2 type: %s", type(model_2))
+        logger.debug("Warp Input - clip type: %s", type(clip))
 
         # Normalize sampler/scheduler values
         normalized_sampler = coerce_sampler(sampler_name) if sampler_name is not None else None
@@ -268,9 +270,8 @@ class Warp:
         with _storage_lock:
             warp_storage[self._warp_id] = data
         
-        # Debug print
         if latent is not None:
-            print(f"WarpPipe: Warping latent type: {type(latent)}")
+            logger.debug("Warping latent type: %s", type(latent))
 
         return ({"id": self._warp_id},)
 
@@ -348,7 +349,7 @@ class Unwarp:
         
         # Handle invalid warp data gracefully
         if not isinstance(warp, dict) or "id" not in warp:
-            print("Warning: Invalid warp signal received. Returning empty values.")
+            logger.warning("Invalid warp signal received. Returning empty values.")
             return self._return_empty_values()
         
         warp_id = warp["id"]
@@ -357,7 +358,7 @@ class Unwarp:
         
         # Handle missing warp data gracefully
         if not data:
-            print(f"Warning: Warp data not found for ID: {warp_id}. Returning empty values.")
+            logger.warning("Warp data not found for ID: %s. Returning empty values.", warp_id)
             return self._return_empty_values()
         # Get width and height (either calculated from size_preset or direct values)
         width = data.get("width", 1024)
@@ -367,10 +368,10 @@ class Unwarp:
         model_out = data.get("model_1")
         clip_out = data.get("clip")
         
-        print(f"WarpPipe: Unwarp Output - model_1 type: {type(model_out)}")
-        print(f"WarpPipe: Unwarp Output - clip type: {type(clip_out)}")
+        logger.debug("Unwarp Output - model_1 type: %s", type(model_out))
+        logger.debug("Unwarp Output - clip type: %s", type(clip_out))
         if latent_out is not None:
-             print(f"WarpPipe: Unwarping latent type: {type(latent_out)}")
+            logger.debug("Unwarping latent type: %s", type(latent_out))
 
         ret = (
             data.get("model_1"),
@@ -397,8 +398,7 @@ class Unwarp:
             height,
         )
         
-        print(f"WarpPipe: Unwarp RETURN_TYPES len: {len(self.RETURN_TYPES)}")
-        print(f"WarpPipe: Unwarp return tuple len: {len(ret)}")
+        logger.debug("Unwarp RETURN_TYPES len: %d, return tuple len: %d", len(self.RETURN_TYPES), len(ret))
         
         return ret
 
