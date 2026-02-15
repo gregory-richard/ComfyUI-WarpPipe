@@ -41,10 +41,26 @@ try:
 except Exception:
     SAFE_SAMPLERS = []
 
+# Patch for RES4LYF compatibility - GLOBAL REGISTRATION
+# We must register beta57 and bong_tangent in the global comfy.samplers lists so *other* nodes (like FaceDetailer)
+# pick them up as valid scheduler options, even if RES4LYF hasn't loaded yet.
+for scheduler_name in ["beta57", "bong_tangent"]:
+    if scheduler_name not in comfy.samplers.SCHEDULER_NAMES:
+        comfy.samplers.SCHEDULER_NAMES.append(scheduler_name)
+
+    # Ensure there is a handler for it (map to karras if missing to prevent crashes)
+    if scheduler_name not in comfy.samplers.SCHEDULER_HANDLERS:
+        comfy.samplers.SCHEDULER_HANDLERS[scheduler_name] = comfy.samplers.SCHEDULER_HANDLERS.get("karras")
+
 try:
     SAFE_SCHEDULERS = getattr(comfy.samplers.KSampler, "SCHEDULERS", [])
 except Exception:
     SAFE_SCHEDULERS = []
+
+# Update SAFE_SCHEDULERS to include beta57/bong_tangent if KSampler doesn't have it yet
+for scheduler_name in ["beta57", "bong_tangent"]:
+    if scheduler_name not in SAFE_SCHEDULERS:
+        SAFE_SCHEDULERS.append(scheduler_name)
 
 # Compatibility mappings for exotic schedulers
 SCHEDULER_ALIASES = {
@@ -58,20 +74,8 @@ SCHEDULER_ALIASES = {
     "OSS Chroma": "karras",
 }
 
-# FaceDetailer-specific scheduler enum set
-FD_SCHEDULERS = [
-    "simple",
-    "sgm_uniform",
-    "karras",
-    "exponential",
-    "ddim_uniform",
-    "beta",
-    "normal",
-    "linear_quadratic",
-    "kl_optimal",
-    "FlowMatchEulerDiscreteScheduler",
-    "bong_tangent",
-    # FaceDetailer exotic options
+# Impact Pack's additional schedulers
+IMPACT_PACK_SCHEDULERS = [
     "AYS SDXL",
     "AYS SD1",
     "AYS SVD",
@@ -81,6 +85,12 @@ FD_SCHEDULERS = [
     "OSS Wan",
     "OSS Chroma",
 ]
+
+# Dynamically build FD_SCHEDULERS to match FaceDetailer's expectation
+# It expects: list(comfy.samplers.SCHEDULER_HANDLERS) + ADDITIONAL_SCHEDULERS
+# We use list(comfy.samplers.SCHEDULER_HANDLERS) to ensure exact order match.
+# Note: we use list() to get keys, which matches how FaceDetailer does it.
+FD_SCHEDULERS = list(comfy.samplers.SCHEDULER_HANDLERS) + IMPACT_PACK_SCHEDULERS
 
 def coerce_scheduler(name: str) -> str:
     """
@@ -655,10 +665,10 @@ NODE_CLASS_MAPPINGS = {
 
 # Optional: Display names for the UI (newer ComfyUI feature)
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Warp": "🔀 Warp Bundle",
-    "Unwarp": "🔄 Unwarp Bundle",
-    "Warp Provider": "🏭 Warp Provider",
-    "FD Scheduler Adapter": "🧩 FD Scheduler Adapter",
+    "Warp": "🌀 Warp",
+    "Unwarp": "🌀 Unwarp",
+    "Warp Provider": "🌀 Warp Provider",
+    "FD Scheduler Adapter": "🌀 Scheduler Adapter for FaceDetailer",
     "Dead End": "🚫 Dead End"
 }
 

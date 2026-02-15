@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.0] - 2026-02-15
+
+### Added
+
+- **RES4LYF compatibility**: Globally registers `beta57` and `bong_tangent` schedulers in `comfy.samplers.SCHEDULER_NAMES` and `SCHEDULER_HANDLERS` so other nodes (like FaceDetailer) pick them up even if RES4LYF hasn't loaded yet
+
+### Improved
+
+- **Dynamic FD_SCHEDULERS**: Replaced hardcoded scheduler list with `list(comfy.samplers.SCHEDULER_HANDLERS) + IMPACT_PACK_SCHEDULERS` to stay in sync with ComfyUI's built-in schedulers
+- **Consistent display names**: Unified all node display names to use the spiral emoji
+
 ## [3.0.0] - 2026-02-09
 
 ### Breaking Changes
