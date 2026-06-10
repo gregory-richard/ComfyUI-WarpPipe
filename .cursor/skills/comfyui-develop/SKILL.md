@@ -1,15 +1,66 @@
 ---
 name: comfyui-develop
-description: Develop ComfyUI custom nodes. Covers node class structure, INPUT_TYPES, RETURN_TYPES, datatypes (IMAGE, LATENT, MASK, MODEL, CLIP, VAE, CONDITIONING), lifecycle, lazy evaluation, node expansion, JavaScript extensions, and frontend hooks. Use when creating, modifying, or debugging ComfyUI custom nodes.
+description: Develop ComfyUI custom nodes. Covers V3 schema nodes, legacy V1 nodes, datatypes (IMAGE, LATENT, MASK, MODEL, CLIP, VAE, CONDITIONING), lifecycle, lazy evaluation, node expansion, JavaScript extensions, and frontend hooks. Use when creating, modifying, or debugging ComfyUI custom nodes.
 ---
 
 # Developing ComfyUI Custom Nodes
 
-Docs: https://docs.comfy.org/custom-nodes/overview
+Docs:
+- https://docs.comfy.org/custom-nodes/overview
+- https://docs.comfy.org/custom-nodes/v3_migration
 
 ## Node Class Structure
 
-Every custom node is a Python class with these required properties:
+Prefer the V3 schema API for new work. Keep V1 registrations only when supporting older ComfyUI versions or preserving existing workflows.
+
+### V3 Schema Node (Recommended)
+
+V3 nodes inherit from `io.ComfyNode`, define inputs/outputs with schema objects, execute via a classmethod named `execute`, and are exposed through a `ComfyExtension` returned by `comfy_entrypoint`.
+
+```python
+from comfy_api.latest import ComfyExtension, io
+
+class MyNode(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="MyNode",               # Preserve after release
+            display_name="My Node",
+            category="my_category",
+            description="Short node tooltip",
+            inputs=[
+                io.Image.Input("image"),
+                io.Mask.Input("mask", optional=True),
+            ],
+            outputs=[
+                io.Image.Output("image_out", display_name="image"),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, image, mask=None) -> io.NodeOutput:
+        return io.NodeOutput(result)
+
+class MyExtension(ComfyExtension):
+    async def get_node_list(self) -> list[type[io.ComfyNode]]:
+        return [MyNode]
+
+async def comfy_entrypoint() -> MyExtension:
+    return MyExtension()
+```
+
+### V3 Key Rules
+- `node_id` is the saved workflow identity; do not rename it after release.
+- `define_schema` and `execute` are `@classmethod`s.
+- Do not rely on mutable node instance state; Comfy sanitizes/clones node classes before execution.
+- Return `io.NodeOutput(...)`, a tuple, a dict with `result`, or `None` for no outputs.
+- Input and output IDs must be unique across the schema; use `display_name` when an output should visually match an input name.
+- Use `comfy_api.v0_0_2` for a pinned API or `comfy_api.latest` for newest features.
+- If keeping older compatibility, V3 nodes provide V1-style metadata, but test both discovery paths.
+
+### Legacy V1 Node
+
+Legacy nodes use class attributes and mapping dictionaries:
 
 ```python
 class MyNode:
@@ -30,7 +81,7 @@ class MyNode:
         return (result,)                     # Must return tuple. Trailing comma!
 ```
 
-### Key Rules
+### V1 Key Rules
 - `INPUT_TYPES` **must** be a `@classmethod` (options computed at runtime)
 - `FUNCTION` returns a `tuple` matching `RETURN_TYPES` (even if empty: `return ()`)
 - Optional inputs: only passed if connected, so provide default values
@@ -39,20 +90,20 @@ class MyNode:
 ## Datatypes
 
 ### Primitives
-| Type | Python | Widget | Extra Params |
-|------|--------|--------|--------------|
-| `INT` | `int` | Spinner | `default` (req), `min`, `max`, `step` |
-| `FLOAT` | `float` | Spinner | `default` (req), `min`, `max`, `step` |
-| `STRING` | `str` | Text | `default` (req), `multiline`, `placeholder`, `dynamicPrompts` |
-| `BOOLEAN` | `bool` | Toggle | `default` (req), `label_on`, `label_off` |
-| `COMBO` | `list[str]` -> `str` | Dropdown | Defined as `(["opt1","opt2"], {})` |
+| V1 Type | V3 Type | Python | Widget | Extra Params |
+|---------|---------|--------|--------|--------------|
+| `INT` | `io.Int.Input()` | `int` | Spinner | `default`, `min`, `max`, `step` |
+| `FLOAT` | `io.Float.Input()` | `float` | Spinner | `default`, `min`, `max`, `step` |
+| `STRING` | `io.String.Input()` | `str` | Text | `default`, `multiline`, `placeholder`, `dynamic_prompts` |
+| `BOOLEAN` | `io.Boolean.Input()` | `bool` | Toggle | `default`, `label_on`, `label_off` |
+| Combo list | `io.Combo.Input()` | `str` | Dropdown | `options`, `default` |
 
 ### Tensor Types
-| Type | Shape | Notes |
-|------|-------|-------|
-| `IMAGE` | `[B,H,W,C]` C=3 | Batch of images, channel-last. Convert to/from PIL for I/O |
-| `LATENT` | `dict` with `samples`: `[B,C,H,W]` C=4 | Channel-first. H,W = image/8 |
-| `MASK` | `[B,H,W]` or `[H,W]` | Check `len(mask.shape)`. Unsqueeze as needed |
+| V1 Type | V3 Type | Shape | Notes |
+|---------|---------|-------|-------|
+| `IMAGE` | `io.Image` | `[B,H,W,C]` C=3 | Batch of images, channel-last. Convert to/from PIL for I/O |
+| `LATENT` | `io.Latent` | `dict` with `samples`: `[B,C,H,W]` C=4 | Channel-first. H,W = image/8 |
+| `MASK` | `io.Mask` | `[B,H,W]` or `[H,W]` | Check `len(mask.shape)`. Unsqueeze as needed |
 
 ### Model Types
 `MODEL`, `CLIP`, `CLIP_VISION`, `VAE`, `CONDITIONING` - opaque objects passed through.
@@ -61,7 +112,7 @@ class MyNode:
 `NOISE`, `SAMPLER`, `SIGMAS`, `GUIDER` - advanced sampling pipeline types.
 
 ### Custom Datatypes
-Define your own by using any string as the type name. The frontend prevents connecting mismatched types.
+In V3 use `io.Custom("MY_TYPE")`. In V1 define your own by using any string as the type name. The frontend prevents connecting mismatched types.
 
 ### Additional Input Parameters
 | Key | Purpose |
@@ -75,7 +126,23 @@ Define your own by using any string as the type name. The frontend prevents conn
 
 ## Lifecycle & Registration
 
-### `__init__.py`
+### V3 `__init__.py`
+```python
+from comfy_api.latest import ComfyExtension, io
+from .my_nodes import MyNode, AnotherNode
+
+class MyExtension(ComfyExtension):
+    async def get_node_list(self) -> list[type[io.ComfyNode]]:
+        return [MyNode, AnotherNode]
+
+async def comfy_entrypoint() -> MyExtension:
+    return MyExtension()
+
+WEB_DIRECTORY = "./web"
+__all__ = ["comfy_entrypoint", "WEB_DIRECTORY"]
+```
+
+### Legacy V1 `__init__.py`
 ```python
 from .my_nodes import MyNode, AnotherNode
 
@@ -98,7 +165,7 @@ ComfyUI scans `custom_nodes/` at startup. Errors fail silently (module skipped) 
 Set `OUTPUT_NODE = True` for nodes that are workflow endpoints (save, preview). Only output nodes trigger execution.
 
 ### IS_CHANGED
-Controls caching. Return any value; node re-executes when return value differs from previous run.
+V1 `IS_CHANGED` is called `fingerprint_inputs` in V3. It controls caching. Return any value; node re-executes when return value differs from previous run.
 - Return `float("NaN")` to always execute (avoid if possible)
 - Return a hash of inputs for file-based nodes
 
@@ -106,10 +173,14 @@ Controls caching. Return any value; node re-executes when return value differs f
 @classmethod
 def IS_CHANGED(cls, **kwargs):
     return hashlib.sha256(data).hexdigest()
+
+@classmethod
+def fingerprint_inputs(cls, **kwargs):
+    return hashlib.sha256(data).hexdigest()
 ```
 
 ### VALIDATE_INPUTS
-Called before execution. Return `True` or error string.
+V1 `VALIDATE_INPUTS` is called `validate_inputs` in V3. Called before execution. Return `True` or error string.
 - Only receives constant inputs (not values from other nodes)
 - If takes `input_types` param: receives connected types dict, skips default type validation
 - If takes `**kwargs`: receives all inputs, skips all default validation
@@ -127,6 +198,14 @@ def check_lazy_status(self, mask, image1=None, image2=None):
     if image1 is None and mask.min() != 1.0:
         needed.append("image1")
     return needed
+```
+
+In V3, `check_lazy_status` is a classmethod:
+
+```python
+@classmethod
+def check_lazy_status(cls, mask, image1=None, image2=None):
+    return ["image1"] if image1 is None and mask.min() != 1.0 else []
 ```
 
 ## Node Expansion

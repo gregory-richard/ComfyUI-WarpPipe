@@ -11,9 +11,26 @@ description: Test and debug ComfyUI custom nodes. Covers local testing workflows
 
 Before publishing, always verify nodes load correctly:
 
-1. **Start ComfyUI** and check the console for import errors
-2. Search the console output for your node pack name - any errors appear here
-3. Verify nodes appear in the Add Node menu under the correct `CATEGORY`
+1. Run `python -m py_compile your_node_files.py` for syntax errors
+2. Run a plain import smoke test from the node-pack root
+3. Start ComfyUI and check the console for import errors
+4. Search the console output for your node pack name - any errors appear here
+5. Verify nodes appear in the Add Node menu under the correct category
+
+For V3 node packs, also verify the extension entrypoint:
+
+```python
+import asyncio
+import your_node_pack
+
+async def main():
+    ext = await your_node_pack.comfy_entrypoint()
+    nodes = await ext.get_node_list()
+    for node in nodes:
+        node.GET_SCHEMA()
+
+asyncio.run(main())
+```
 
 ### Symlink Development Setup
 
@@ -57,9 +74,11 @@ If running outside ComfyUI (e.g., tests), guard imports:
 try:
     import comfy.samplers
 except ImportError:
-    # Provide mock or skip
+    # Provide a complete enough mock for import-time constants, or skip.
     pass
 ```
+
+If a module mutates ComfyUI globals at import time, the fallback mock must include those mutated attributes. For sampler code, that often means both `KSampler.SCHEDULERS` and module-level `SCHEDULER_NAMES` / `SCHEDULER_HANDLERS`.
 
 ## Debugging Techniques
 
@@ -83,6 +102,8 @@ Common structural issues:
 - **RETURN_TYPES / return tuple mismatch**: lengths must match exactly
 - **INPUT_TYPES not a classmethod**: must be decorated with `@classmethod`
 - **Non-unique NODE_CLASS_MAPPINGS keys**: collisions with other node packs cause silent failures
+- **V3 schema ID collision**: input and output IDs must be unique across `io.Schema`; use `display_name` when labels should match
+- **V3 mutable state**: do not rely on `__init__` values during execution; use inputs, hidden values, or external storage keyed by `io.Hidden.unique_id`
 
 ### Tensor Shape Debugging
 
@@ -115,6 +136,13 @@ def VALIDATE_INPUTS(cls, input_types=None, **kwargs):
     return True  # Required to skip type validation for wildcard inputs
 ```
 
+For V3:
+```python
+@classmethod
+def validate_inputs(cls, input_types=None, **kwargs):
+    return True
+```
+
 ### Memory and Performance
 - Large tensor operations: use `comfy.model_management.get_torch_device()` for GPU placement
 - Thread safety: use locks for shared state (`threading.Lock`)
@@ -123,12 +151,15 @@ def VALIDATE_INPUTS(cls, input_types=None, **kwargs):
 ## Pre-Release Testing Checklist
 
 - [ ] ComfyUI starts without import errors
+- [ ] Plain Python import works or intentionally skips with clear guards
+- [ ] V3 `comfy_entrypoint()` returns an extension and every node `GET_SCHEMA()` validates
 - [ ] All nodes appear in Add Node menu
 - [ ] Each node executes with minimal inputs
 - [ ] Optional inputs work when disconnected (no crashes)
 - [ ] Default values produce valid output
 - [ ] Node works in a saved/loaded workflow (serialization roundtrip)
 - [ ] `IS_CHANGED` returns consistent results for unchanged inputs
+- [ ] V3 `fingerprint_inputs` returns consistent results for unchanged inputs
 - [ ] No `print()` statements in production code (use `logging`)
 - [ ] `requirements.txt` has no ComfyUI/torch dependencies
 - [ ] Tested on target Python versions (3.9+)

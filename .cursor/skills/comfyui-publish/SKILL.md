@@ -11,6 +11,7 @@ Publishing requires: a Comfy Registry account, a publisher ID, a `pyproject.toml
 
 Docs: https://docs.comfy.org/registry/publishing
 Specs: https://docs.comfy.org/registry/specifications
+V3 migration: https://docs.comfy.org/custom-nodes/v3_migration
 
 ## pyproject.toml Structure
 
@@ -44,6 +45,8 @@ Banner = "https://raw.githubusercontent.com/.../banner.png" # 21:9 ratio
 - `requires-comfyui = ">=1.0.0"` - ComfyUI version compatibility
 - `includes = ['dist']` - Force-include gitignored folders
 - `classifiers` for OS/GPU compatibility
+
+Add `requires-comfyui` when a release depends on V3-only APIs or newer frontend behavior. If the package keeps V1 fallbacks, test the oldest version implied by the metadata before publishing.
 
 ## Semantic Versioning
 
@@ -146,8 +149,11 @@ Prompts for API key. On Windows, right-click paste (Ctrl+V may add `\x16`).
 - [ ] Version bumped in `pyproject.toml`
 - [ ] `version.txt` updated (if used)
 - [ ] `CHANGELOG.md` updated with new version section
-- [ ] All node classes registered in `NODE_CLASS_MAPPINGS`
-- [ ] `__init__.py` exports `NODE_CLASS_MAPPINGS`, `NODE_DISPLAY_NAME_MAPPINGS`, `WEB_DIRECTORY`
+- [ ] V3 nodes are exposed by `comfy_entrypoint()` / `ComfyExtension.get_node_list()`
+- [ ] Legacy-compatible nodes are registered in `NODE_CLASS_MAPPINGS` if older ComfyUI support is still promised
+- [ ] `__init__.py` exports `comfy_entrypoint` for V3 and legacy mappings only when they are supported
 - [ ] `requirements.txt` lists all dependencies (no ComfyUI/torch/torchvision)
 - [ ] No secrets or credentials in committed files
 - [ ] Test nodes load without errors in ComfyUI console
+- [ ] Run `python -m py_compile` and a plain import smoke test before tagging/publishing
+- [ ] If shipping a V3 migration, verify saved workflows still resolve the original node IDs

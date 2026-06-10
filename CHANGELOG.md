@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.0] - 2026-06-10
+
+### Added
+
+- **ComfyUI V3 schema support**: Added optional `comfy_entrypoint()` registration with schema-backed V3 node classes when `comfy_api` is available, while keeping legacy mappings for older ComfyUI installs
+
+### Improved
+
+- **Local import validation**: Expanded the development fallback sampler mock so `warp_pipe.py` can be imported outside a ComfyUI checkout for smoke testing
+- **Developer skills**: Updated local ComfyUI development, testing, and publishing skills with V3 migration guidance
+
 ## [3.1.0] - 2026-02-15
 
 ### Added
