@@ -45,6 +45,11 @@ except ImportError:
     io = None
     COMFY_API_AVAILABLE = False
 
+# V3 combo outputs currently validate inconsistently in ComfyUI when linked to
+# sampler/scheduler inputs. Keep the stable legacy schema by default, while
+# leaving the V3 implementation available for explicit local testing.
+ENABLE_V3_NODES = COMFY_API_AVAILABLE and os.environ.get("WARPPIPE_ENABLE_V3") == "1"
+
 # Safe scheduler/sampler lists for compatibility (pulled dynamically from Comfy)
 try:
     SAFE_SAMPLERS = getattr(comfy.samplers.KSampler, "SAMPLERS", [])
@@ -148,6 +153,73 @@ def coerce_sampler(name: str) -> str:
         return name
     # Default fallback for any unknown samplers
     return "euler"
+
+def _split_type_options(value: Any) -> Optional[set[str]]:
+    if isinstance(value, str):
+        parts = [part.strip() for part in value.split(",")]
+    elif isinstance(value, (list, tuple, set)):
+        parts = [str(part).strip() for part in value]
+    else:
+        return None
+
+    options = {part for part in parts if part}
+    return options or None
+
+def _is_combo_marker(value: Any) -> bool:
+    return value == "COMBO"
+
+def _install_combo_union_validation_patch() -> None:
+    """
+    Allow enum unions like "euler,heun,..." to connect to combo/list inputs.
+
+    Some V3 and frontend-generated nodes expose combo outputs as comma-joined
+    union strings, while Comfy's prompt validator still treats list-backed combo
+    inputs separately. The runtime value is still a normal string; this only
+    relaxes prompt type validation for equivalent enum socket metadata.
+    """
+    try:
+        import comfy_execution.validation as validation
+    except Exception as e:
+        logger.debug("Could not patch ComfyUI combo validation: %s", e)
+        return
+
+    current = getattr(validation, "validate_node_input", None)
+    if current is None:
+        return
+    original = getattr(current, "_warp_pipe_original", current)
+
+    def validate_node_input(received_type, input_type, strict: bool = False) -> bool:
+        if _is_combo_marker(input_type) and isinstance(received_type, str) and "," in received_type:
+            return True
+
+        received_options = _split_type_options(received_type)
+        input_options = _split_type_options(input_type)
+        if received_options and input_options:
+            if strict:
+                if received_options.issubset(input_options):
+                    return True
+            elif received_options.intersection(input_options):
+                return True
+
+        return original(received_type, input_type, strict)
+
+    validate_node_input._warp_pipe_combo_patch = True
+    validate_node_input._warp_pipe_original = original
+    validation.validate_node_input = validate_node_input
+
+    patched_modules = ["comfy_execution.validation"]
+    for module_name, module in list(sys.modules.items()):
+        if module_name == "execution" or module_name.endswith(".execution"):
+            if hasattr(module, "validate_node_input"):
+                module.validate_node_input = validate_node_input
+                patched_modules.append(module_name)
+
+    logger.info(
+        "Installed WarpPipe combo enum validation compatibility patch for %s",
+        ", ".join(sorted(set(patched_modules))),
+    )
+
+_install_combo_union_validation_patch()
 
 # Global storage for warp data; keys are unique per Warp instance
 warp_storage: Dict[str, Dict[str, Any]] = {}
@@ -265,8 +337,8 @@ class Warp:
         return _fingerprint_inputs(kwargs)
     
     @classmethod
-    def VALIDATE_INPUTS(cls, **kwargs) -> bool:
-        """Validate inputs - always return True for optional inputs"""
+    def VALIDATE_INPUTS(cls, input_types=None, **kwargs) -> bool:
+        """Accept linked combo enums from nodes that expose wider option lists."""
         return True
 
     def warp(
@@ -619,6 +691,10 @@ class FDSchedulerAdapter:
     RETURN_TYPES = (FD_SCHEDULERS,)
     RETURN_NAMES = ("scheduler",)
 
+    @classmethod
+    def VALIDATE_INPUTS(cls, input_types=None, **kwargs) -> bool:
+        return True
+
     def adapt(self, scheduler: str) -> tuple:
         return (coerce_scheduler_fd(scheduler),)
 
@@ -664,7 +740,7 @@ class DeadEnd:
         # Simply return nothing - the input is consumed but not passed forward
         return ()
 
-if COMFY_API_AVAILABLE:
+if ENABLE_V3_NODES:
     WARPPIPE_TYPE = io.Custom("WARPPIPE")
     ANY_TYPE = io.Custom("*")
 
@@ -739,7 +815,7 @@ if COMFY_API_AVAILABLE:
             return _fingerprint_inputs(kwargs)
 
         @classmethod
-        def validate_inputs(cls, **kwargs) -> bool:
+        def validate_inputs(cls, input_types=None, **kwargs) -> bool:
             return True
 
         @classmethod
@@ -910,9 +986,9 @@ if COMFY_API_AVAILABLE:
     async def comfy_entrypoint() -> WarpPipeExtension:
         return WarpPipeExtension()
 
-# Register nodes under capitalized names. When Comfy's V3 API is available,
-# expose the schema-backed classes through legacy mappings as well.
-if COMFY_API_AVAILABLE:
+# Register nodes under capitalized names. V3 nodes are opt-in because ComfyUI's
+# current combo-output validation can reject sampler/scheduler links at runtime.
+if ENABLE_V3_NODES:
     NODE_CLASS_MAPPINGS = {
         "Warp": WarpV3,
         "Unwarp": UnwarpV3,
@@ -942,5 +1018,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 WEB_DIRECTORY = "./web"
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
-if COMFY_API_AVAILABLE:
+if ENABLE_V3_NODES:
     __all__.append("comfy_entrypoint")

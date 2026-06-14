@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.2.1] - 2026-06-14
+
+### Fixed
+
+- **Combo enum validation compatibility**: Added a narrow compatibility patch for ComfyUI builds that expose sampler and scheduler combo outputs as comma-joined enum strings, preventing false `Return type mismatch` errors when linking WarpPipe sampler/scheduler values into `COMBO` or list-backed sampler inputs.
+- **Linked sampler/scheduler inputs**: Updated Warp and FD Scheduler Adapter validation signatures so linked enum inputs from other node packs can be accepted and normalized by WarpPipe.
+- **V3 registration stability**: Made V3 schema node registration opt-in with `WARPPIPE_ENABLE_V3=1` while keeping legacy node mappings as the default path for saved workflow compatibility.
+
 ## [3.2.0] - 2026-06-10
 
 ### Added
