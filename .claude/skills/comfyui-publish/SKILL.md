@@ -32,7 +32,7 @@ Repository = "https://github.com/user/repo"
 [tool.comfy]
 PublisherId = "your-publisher-id"  # From registry.comfy.org profile
 DisplayName = "Your Node Name"
-Icon = "https://raw.githubusercontent.com/.../icon.png"    # Square, max 400x400
+Icon = "https://raw.githubusercontent.com/.../icon.png"    # Max 800x400px
 Banner = "https://raw.githubusercontent.com/.../banner.png" # 21:9 ratio
 ```
 
@@ -47,6 +47,12 @@ Banner = "https://raw.githubusercontent.com/.../banner.png" # 21:9 ratio
 - `classifiers` for OS/GPU compatibility
 
 Add `requires-comfyui` when a release depends on V3-only APIs or newer frontend behavior. If the package keeps V1 fallbacks, test the oldest version implied by the metadata before publishing.
+
+### What Gets Published
+
+- Git-tracked files are included by default
+- A `.comfyignore` file (same syntax as `.gitignore`) excludes files from the published package
+- `[tool.comfy] includes = [...]` force-includes gitignored folders (e.g. built `dist/` output)
 
 ## Semantic Versioning
 
@@ -149,9 +155,9 @@ Prompts for API key. On Windows, right-click paste (Ctrl+V may add `\x16`).
 - [ ] Version bumped in `pyproject.toml`
 - [ ] `version.txt` updated (if used)
 - [ ] `CHANGELOG.md` updated with new version section
-- [ ] V3 nodes are exposed by `comfy_entrypoint()` / `ComfyExtension.get_node_list()`
-- [ ] Legacy-compatible nodes are registered in `NODE_CLASS_MAPPINGS` if older ComfyUI support is still promised
-- [ ] `__init__.py` exports `comfy_entrypoint` for V3 and legacy mappings only when they are supported
+- [ ] Legacy `NODE_CLASS_MAPPINGS` registration works on the default path (V3 is opt-in via `WARPPIPE_ENABLE_V3=1`)
+- [ ] With `WARPPIPE_ENABLE_V3=1`: V3 nodes are exposed by `comfy_entrypoint()` / `ComfyExtension.get_node_list()`
+- [ ] `__init__.py` exports legacy mappings unconditionally and `comfy_entrypoint` only when the V3 path is enabled
 - [ ] `requirements.txt` lists all dependencies (no ComfyUI/torch/torchvision)
 - [ ] No secrets or credentials in committed files
 - [ ] Test nodes load without errors in ComfyUI console

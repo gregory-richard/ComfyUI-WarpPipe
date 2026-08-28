@@ -32,6 +32,11 @@ async def main():
 asyncio.run(main())
 ```
 
+In this repo, V3 registration is opt-in: set `WARPPIPE_ENABLE_V3=1` before running the entrypoint test, otherwise `comfy_entrypoint` is not exported. Always test both registration paths:
+
+1. Default (no env var): legacy `NODE_CLASS_MAPPINGS` registers all nodes
+2. `WARPPIPE_ENABLE_V3=1`: V3 entrypoint returns the extension and every schema validates
+
 ### Symlink Development Setup
 
 For rapid iteration, symlink your dev directory into ComfyUI's `custom_nodes/`:
@@ -152,7 +157,8 @@ def validate_inputs(cls, input_types=None, **kwargs):
 
 - [ ] ComfyUI starts without import errors
 - [ ] Plain Python import works or intentionally skips with clear guards
-- [ ] V3 `comfy_entrypoint()` returns an extension and every node `GET_SCHEMA()` validates
+- [ ] Legacy path (default, no env flag) registers all nodes via `NODE_CLASS_MAPPINGS`
+- [ ] With `WARPPIPE_ENABLE_V3=1`: `comfy_entrypoint()` returns an extension and every node `GET_SCHEMA()` validates
 - [ ] All nodes appear in Add Node menu
 - [ ] Each node executes with minimal inputs
 - [ ] Optional inputs work when disconnected (no crashes)

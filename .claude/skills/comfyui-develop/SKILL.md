@@ -11,9 +11,9 @@ Docs:
 
 ## Node Class Structure
 
-Prefer the V3 schema API for new work. Keep V1 registrations only when supporting older ComfyUI versions or preserving existing workflows.
+The V3 schema API is still unstable: `v0_0_2` is the current version and the docs state it can receive breaking changes without warning. Ship legacy V1 registrations as the default path and expose V3 registration as an opt-in until the API stabilizes — this repo gates V3 behind the `WARPPIPE_ENABLE_V3=1` environment variable. Design new nodes against the V3 schema shape so the migration is ready, but don't make V3 the only registration path.
 
-### V3 Schema Node (Recommended)
+### V3 Schema Node
 
 V3 nodes inherit from `io.ComfyNode`, define inputs/outputs with schema objects, execute via a classmethod named `execute`, and are exposed through a `ComfyExtension` returned by `comfy_entrypoint`.
 
@@ -55,7 +55,7 @@ async def comfy_entrypoint() -> MyExtension:
 - Do not rely on mutable node instance state; Comfy sanitizes/clones node classes before execution.
 - Return `io.NodeOutput(...)`, a tuple, a dict with `result`, or `None` for no outputs.
 - Input and output IDs must be unique across the schema; use `display_name` when an output should visually match an input name.
-- Use `comfy_api.v0_0_2` for a pinned API or `comfy_api.latest` for newest features.
+- Use `comfy_api.v0_0_2` for a pinned API or `comfy_api.latest` for newest features (`latest` also exposes `ui` helpers for preview outputs). Pin when stability matters; `v0_0_2` itself is still subject to change until Comfy declares it stable.
 - If keeping older compatibility, V3 nodes provide V1-style metadata, but test both discovery paths.
 
 ### Legacy V1 Node
