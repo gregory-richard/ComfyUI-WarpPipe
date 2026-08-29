@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.3.0] - 2026-08-30
+
+### Added
+
+- Unit tests for legacy and V3 registration, bundle round-trips, storage cleanup, scheduler compatibility, and latent validation
+- GitHub Actions validation on Python 3.9 and 3.13, including lint, formatting, tests, and package builds
+
+### Fixed
+
+- Removed the process-wide ComfyUI input-validator monkey-patch and switched V3 enum outputs to the native `io.Combo.Output` schema
+- Preserved backend type checks for non-enum Warp links while allowing sampler and scheduler enums from compatible node packs
+- Corrected V3 registration so `comfy_entrypoint` and legacy node mappings are never exported simultaneously
+- Enforced the warp-storage hard cap on insertion and made stale/orphan cleanup atomic
+- Preserved `None` for fields absent from a warp instead of inventing sampler, scheduler, and dimension defaults
+- Rejected invalid linked dimensions and batch sizes before creating inconsistent latent tensors
+- Corrected package configuration so built wheels contain the WarpPipe Python package and node documentation
+
 ## [3.2.1] - 2026-06-14
 
 ### Fixed

@@ -1,44 +1,59 @@
 import hashlib
 import logging
-import uuid
-import threading
-from typing import Dict, Any, Optional
-import sys
 import os
+import re
+import threading
+import time
+import uuid
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger("WarpPipe")
 
-# Add ComfyUI root to sys.path if needed
-current_dir = os.path.dirname(os.path.abspath(__file__))
-comfy_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
-if comfy_root not in sys.path:
-    sys.path.append(comfy_root)
-
 try:
     import comfy.samplers
-except ImportError:
-    # Try importing from nodes (sometimes comfy is not directly exposed but nodes is)
-    try:
-        from nodes import comfy
-    except ImportError as e:
-        logger.warning("Failed to import comfy.samplers: %s", e)
-        # Fallback for development/testing environments
-        class MockKSampler:
-            SAMPLERS = ["euler", "euler_ancestral", "heun", "dpm_2", "dpm_2_ancestral", "lms", "dpm_fast", "dpm_adaptive", "dpmpp_2s_ancestral", "dpmpp_sde", "dpmpp_2m"]
-            SCHEDULERS = ["normal", "karras", "exponential", "sgm_uniform", "simple", "ddim_uniform"]
-        
-        class MockSamplers:
-            KSampler = MockKSampler
-            SCHEDULER_NAMES = MockKSampler.SCHEDULERS.copy()
-            SCHEDULER_HANDLERS = {name: None for name in MockKSampler.SCHEDULERS}
-        
-        class MockComfy:
-            samplers = MockSamplers
-        
-        comfy = MockComfy()
+except ModuleNotFoundError as exc:
+    if exc.name not in {"comfy", "comfy.samplers"}:
+        raise
+
+    logger.warning("Failed to import comfy.samplers: %s", exc)
+
+    # Complete-enough fallback for local linting and unit tests outside ComfyUI.
+    class _MockKSampler:
+        SAMPLERS = [
+            "euler",
+            "euler_ancestral",
+            "heun",
+            "dpm_2",
+            "dpm_2_ancestral",
+            "lms",
+            "dpm_fast",
+            "dpm_adaptive",
+            "dpmpp_2s_ancestral",
+            "dpmpp_sde",
+            "dpmpp_2m",
+        ]
+        SCHEDULERS = [
+            "normal",
+            "karras",
+            "exponential",
+            "sgm_uniform",
+            "simple",
+            "ddim_uniform",
+        ]
+
+    class _MockSamplers:
+        KSampler = _MockKSampler
+        SCHEDULER_NAMES = _MockKSampler.SCHEDULERS.copy()
+        SCHEDULER_HANDLERS = {name: object() for name in _MockKSampler.SCHEDULERS}
+
+    class _MockComfy:
+        samplers = _MockSamplers
+
+    comfy = _MockComfy()
 
 try:
     from comfy_api.latest import ComfyExtension, io
+
     COMFY_API_AVAILABLE = True
 except ImportError:
     ComfyExtension = None
@@ -50,37 +65,51 @@ except ImportError:
 # leaving the V3 implementation available for explicit local testing.
 ENABLE_V3_NODES = COMFY_API_AVAILABLE and os.environ.get("WARPPIPE_ENABLE_V3") == "1"
 
-# Safe scheduler/sampler lists for compatibility (pulled dynamically from Comfy)
-try:
-    SAFE_SAMPLERS = getattr(comfy.samplers.KSampler, "SAMPLERS", [])
-except Exception:
-    SAFE_SAMPLERS = []
-
 # Patch for RES4LYF compatibility - GLOBAL REGISTRATION
 # We must register beta57 and bong_tangent in the global comfy.samplers lists so *other* nodes (like FaceDetailer)
 # pick them up as valid scheduler options, even if RES4LYF hasn't loaded yet.
-for scheduler_name in ["beta57", "bong_tangent"]:
-    if scheduler_name not in comfy.samplers.SCHEDULER_NAMES:
-        comfy.samplers.SCHEDULER_NAMES.append(scheduler_name)
+RES4LYF_SCHEDULERS = ("beta57", "bong_tangent")
 
-    # Ensure there is a handler for it (map to karras if missing to prevent crashes)
-    if scheduler_name not in comfy.samplers.SCHEDULER_HANDLERS:
-        comfy.samplers.SCHEDULER_HANDLERS[scheduler_name] = comfy.samplers.SCHEDULER_HANDLERS.get("karras")
 
-try:
-    SAFE_SCHEDULERS = getattr(comfy.samplers.KSampler, "SCHEDULERS", [])
-except Exception:
-    SAFE_SCHEDULERS = []
+def _register_res4lyf_scheduler_fallbacks() -> None:
+    handlers = getattr(comfy.samplers, "SCHEDULER_HANDLERS", None)
+    if not isinstance(handlers, dict) or handlers.get("karras") is None:
+        logger.warning("Cannot register RES4LYF scheduler fallbacks: ComfyUI has no karras handler")
+        return
 
-# Update SAFE_SCHEDULERS to include beta57/bong_tangent if KSampler doesn't have it yet
-for scheduler_name in ["beta57", "bong_tangent"]:
-    if scheduler_name not in SAFE_SCHEDULERS:
-        SAFE_SCHEDULERS.append(scheduler_name)
+    scheduler_names = getattr(comfy.samplers, "SCHEDULER_NAMES", None)
+    if not isinstance(scheduler_names, list):
+        scheduler_names = list(scheduler_names or ())
+        comfy.samplers.SCHEDULER_NAMES = scheduler_names
+
+    ksampler_schedulers = getattr(comfy.samplers.KSampler, "SCHEDULERS", None)
+    if not isinstance(ksampler_schedulers, list):
+        ksampler_schedulers = list(ksampler_schedulers or ())
+        comfy.samplers.KSampler.SCHEDULERS = ksampler_schedulers
+
+    for scheduler_name in RES4LYF_SCHEDULERS:
+        handlers.setdefault(scheduler_name, handlers["karras"])
+        if scheduler_name not in scheduler_names:
+            scheduler_names.append(scheduler_name)
+        if scheduler_name not in ksampler_schedulers:
+            ksampler_schedulers.append(scheduler_name)
+
+
+_register_res4lyf_scheduler_fallbacks()
+
+# Safe scheduler/sampler lists for compatibility (pulled dynamically from Comfy).
+SAFE_SAMPLERS = getattr(comfy.samplers.KSampler, "SAMPLERS", [])
+if not isinstance(SAFE_SAMPLERS, list):
+    SAFE_SAMPLERS = list(SAFE_SAMPLERS)
+
+SAFE_SCHEDULERS = getattr(comfy.samplers.KSampler, "SCHEDULERS", [])
+if not isinstance(SAFE_SCHEDULERS, list):
+    SAFE_SCHEDULERS = list(SAFE_SCHEDULERS)
 
 # Compatibility mappings for exotic schedulers
 SCHEDULER_ALIASES = {
     "AYS SDXL": "karras",
-    "AYS SD1": "karras", 
+    "AYS SD1": "karras",
     "AYS SVD": "karras",
     "GITS[coeff=1.2]": "karras",
     "LTXV[default]": "karras",
@@ -105,15 +134,22 @@ IMPACT_PACK_SCHEDULERS = [
 # It expects: list(comfy.samplers.SCHEDULER_HANDLERS) + ADDITIONAL_SCHEDULERS
 # We use list(comfy.samplers.SCHEDULER_HANDLERS) to ensure exact order match.
 # Note: we use list() to get keys, which matches how FaceDetailer does it.
-FD_SCHEDULERS = list(comfy.samplers.SCHEDULER_HANDLERS) + IMPACT_PACK_SCHEDULERS
+FD_SCHEDULERS = list(
+    dict.fromkeys(
+        list(getattr(comfy.samplers, "SCHEDULER_HANDLERS", {}))
+        + SAFE_SCHEDULERS
+        + IMPACT_PACK_SCHEDULERS
+    )
+)
+
 
 def coerce_scheduler(name: str) -> str:
     """
     Coerce scheduler name to a safe, compatible value.
-    
+
     Args:
         name: The scheduler name to coerce
-        
+
     Returns:
         A safe scheduler name that ComfyUI will accept
     """
@@ -121,13 +157,14 @@ def coerce_scheduler(name: str) -> str:
         return name
     return SCHEDULER_ALIASES.get(name, "karras")
 
+
 def coerce_scheduler_fd(name: str) -> str:
     """
     Coerce scheduler into FaceDetailer's accepted set.
-    
+
     Args:
         name: The scheduler name to coerce for FaceDetailer compatibility
-        
+
     Returns:
         A scheduler name that FaceDetailer will accept
     """
@@ -139,13 +176,14 @@ def coerce_scheduler_fd(name: str) -> str:
         return alias
     return "karras"
 
+
 def coerce_sampler(name: str) -> str:
     """
     Coerce sampler name to a safe, compatible value.
-    
+
     Args:
         name: The sampler name to coerce
-        
+
     Returns:
         A safe sampler name that ComfyUI will accept
     """
@@ -154,103 +192,74 @@ def coerce_sampler(name: str) -> str:
     # Default fallback for any unknown samplers
     return "euler"
 
-def _split_type_options(value: Any) -> Optional[set[str]]:
-    if isinstance(value, str):
-        parts = [part.strip() for part in value.split(",")]
-    elif isinstance(value, (list, tuple, set)):
-        parts = [str(part).strip() for part in value]
-    else:
-        return None
 
-    options = {part for part in parts if part}
-    return options or None
+def _validate_linked_input_types(
+    input_types: Optional[Dict[str, Any]],
+    declared_inputs: Dict[str, tuple],
+    relaxed_inputs: set[str],
+):
+    """Retain normal socket checks while allowing compatible external enums."""
+    if not input_types:
+        return True
 
-def _is_combo_marker(value: Any) -> bool:
-    return value == "COMBO"
+    for input_name, received_type in input_types.items():
+        if input_name in relaxed_inputs or input_name not in declared_inputs:
+            continue
 
-def _install_combo_union_validation_patch() -> None:
-    """
-    Allow enum unions like "euler,heun,..." to connect to combo/list inputs.
+        expected_type = declared_inputs[input_name][0]
+        if received_type == expected_type or received_type == "*" or expected_type == "*":
+            continue
 
-    Some V3 and frontend-generated nodes expose combo outputs as comma-joined
-    union strings, while Comfy's prompt validator still treats list-backed combo
-    inputs separately. The runtime value is still a normal string; this only
-    relaxes prompt type validation for equivalent enum socket metadata.
-    """
-    try:
-        import comfy_execution.validation as validation
-    except Exception as e:
-        logger.debug("Could not patch ComfyUI combo validation: %s", e)
-        return
+        if isinstance(received_type, str) and isinstance(expected_type, str):
+            received_types = {item.strip() for item in received_type.split(",")}
+            expected_types = {item.strip() for item in expected_type.split(",")}
+            if received_types.intersection(expected_types):
+                continue
 
-    current = getattr(validation, "validate_node_input", None)
-    if current is None:
-        return
-    original = getattr(current, "_warp_pipe_original", current)
+        return f"Linked input '{input_name}' has type {received_type!r}; expected {expected_type!r}"
 
-    def validate_node_input(received_type, input_type, strict: bool = False) -> bool:
-        if _is_combo_marker(input_type) and isinstance(received_type, str) and "," in received_type:
-            return True
+    return True
 
-        received_options = _split_type_options(received_type)
-        input_options = _split_type_options(input_type)
-        if received_options and input_options:
-            if strict:
-                if received_options.issubset(input_options):
-                    return True
-            elif received_options.intersection(input_options):
-                return True
-
-        return original(received_type, input_type, strict)
-
-    validate_node_input._warp_pipe_combo_patch = True
-    validate_node_input._warp_pipe_original = original
-    validation.validate_node_input = validate_node_input
-
-    patched_modules = ["comfy_execution.validation"]
-    for module_name, module in list(sys.modules.items()):
-        if module_name == "execution" or module_name.endswith(".execution"):
-            if hasattr(module, "validate_node_input"):
-                module.validate_node_input = validate_node_input
-                patched_modules.append(module_name)
-
-    logger.info(
-        "Installed WarpPipe combo enum validation compatibility patch for %s",
-        ", ".join(sorted(set(patched_modules))),
-    )
-
-_install_combo_union_validation_patch()
 
 # Global storage for warp data; keys are unique per Warp instance
 warp_storage: Dict[str, Dict[str, Any]] = {}
 _storage_timestamps: Dict[str, float] = {}  # Track last-access time per warp ID
 _storage_lock = threading.Lock()
 _STORAGE_MAX_AGE_SECONDS = 3600  # Prune entries older than 1 hour
-_STORAGE_MAX_ENTRIES = 256       # Hard cap on stored entries
+_STORAGE_MAX_ENTRIES = 256  # Hard cap on stored entries
 
-def cleanup_warp_storage():
+
+def _cleanup_warp_storage_locked(now: float) -> None:
+    stale_ids = [
+        warp_id
+        for warp_id in warp_storage
+        if now - _storage_timestamps.get(warp_id, float("-inf")) > _STORAGE_MAX_AGE_SECONDS
+    ]
+    for warp_id in stale_ids:
+        warp_storage.pop(warp_id, None)
+        _storage_timestamps.pop(warp_id, None)
+
+    if stale_ids:
+        logger.debug("Cleaned up %d stale warp storage entries", len(stale_ids))
+
+    overflow = len(warp_storage) - _STORAGE_MAX_ENTRIES
+    if overflow > 0:
+        oldest_ids = sorted(
+            warp_storage,
+            key=lambda warp_id: _storage_timestamps.get(warp_id, float("-inf")),
+        )[:overflow]
+        for warp_id in oldest_ids:
+            warp_storage.pop(warp_id, None)
+            _storage_timestamps.pop(warp_id, None)
+        logger.debug("Evicted %d warp storage entries (over cap)", len(oldest_ids))
+
+
+def cleanup_warp_storage() -> None:
     """Prune stale warp storage entries to prevent memory leaks."""
-    import time
     now = time.time()
     with _storage_lock:
-        stale_ids = [
-            wid for wid, ts in _storage_timestamps.items()
-            if now - ts > _STORAGE_MAX_AGE_SECONDS
-        ]
-        for wid in stale_ids:
-            warp_storage.pop(wid, None)
-            _storage_timestamps.pop(wid, None)
-        if stale_ids:
-            logger.debug("Cleaned up %d stale warp storage entries", len(stale_ids))
-        # If still over the hard cap, remove oldest entries
-        if len(warp_storage) > _STORAGE_MAX_ENTRIES:
-            sorted_ids = sorted(_storage_timestamps, key=_storage_timestamps.get)
-            to_remove = sorted_ids[:len(warp_storage) - _STORAGE_MAX_ENTRIES]
-            for wid in to_remove:
-                warp_storage.pop(wid, None)
-                _storage_timestamps.pop(wid, None)
-            if to_remove:
-                logger.debug("Evicted %d warp storage entries (over cap)", len(to_remove))
+        _cleanup_warp_storage_locked(now)
+
 
 def _fingerprint_inputs(kwargs: Dict[str, Any]) -> str:
     h = hashlib.sha256()
@@ -259,25 +268,41 @@ def _fingerprint_inputs(kwargs: Dict[str, Any]) -> str:
             h.update(f"{key}:{repr(kwargs[key])}".encode("utf-8"))
     return h.hexdigest()
 
+
 def _get_v3_node_id(cls, fallback_prefix: str) -> str:
     unique_id = getattr(getattr(cls, "hidden", None), "unique_id", None)
     if unique_id:
         return f"v3:{unique_id}"
     return f"{fallback_prefix}:{uuid.uuid4().hex}"
 
+
 def _create_empty_latent(width: int, height: int, batch_size: int):
+    for name, value, minimum, maximum in (
+        ("width", width, 64, 8192),
+        ("height", height, 64, 8192),
+        ("batch_size", batch_size, 1, 64),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise TypeError(f"{name} must be an integer, got {type(value).__name__}")
+        if not minimum <= value <= maximum:
+            raise ValueError(f"{name} must be between {minimum} and {maximum}, got {value}")
+
+    if width % 8 or height % 8:
+        raise ValueError(f"width and height must be divisible by 8, got {width} x {height}")
+
     import torch
+
     latent_width = width // 8
     latent_height = height // 8
     latent = torch.zeros([batch_size, 4, latent_height, latent_width])
     return {"samples": latent}
+
 
 def _parse_size_preset(preset: str) -> tuple:
     """
     Parse resolution preset strings like:
     "Square (SDXL native)        |  1:1   |  1024 x  1024  |  1.05 MP"
     """
-    import re
     match = re.search(r"(\d+)\s*×\s*(\d+)", preset)
     if match:
         return int(match.group(1)), int(match.group(2))
@@ -288,10 +313,10 @@ def _parse_size_preset(preset: str) -> tuple:
 
     return 1024, 1024
 
+
 class Warp:
     CATEGORY = "Custom/WarpPipe Nodes"
     FUNCTION = "warp"
-    DISPLAY_NAME = "Warp Bundle"
     DESCRIPTION = "Bundle multiple data types into a single warp object"
 
     @classmethod
@@ -335,11 +360,15 @@ class Warp:
     @classmethod
     def IS_CHANGED(cls, **kwargs) -> str:
         return _fingerprint_inputs(kwargs)
-    
+
     @classmethod
-    def VALIDATE_INPUTS(cls, input_types=None, **kwargs) -> bool:
+    def VALIDATE_INPUTS(cls, input_types=None):
         """Accept linked combo enums from nodes that expose wider option lists."""
-        return True
+        return _validate_linked_input_types(
+            input_types,
+            cls.INPUT_TYPES()["optional"],
+            {"sampler_name", "scheduler"},
+        )
 
     def warp(
         self,
@@ -365,12 +394,13 @@ class Warp:
         sampler_name: Optional[str] = None,
         scheduler: Optional[str] = None,
         width: Optional[int] = None,
-        height: Optional[int] = None
+        height: Optional[int] = None,
     ) -> tuple:
         # If warp input provided, copy existing data
         if isinstance(warp, dict) and "id" in warp:
             prev_id = warp["id"]
-            data = warp_storage.get(prev_id, {}).copy()
+            with _storage_lock:
+                data = warp_storage.get(prev_id, {}).copy()
         else:
             data = {}
 
@@ -405,29 +435,27 @@ class Warp:
             "sampler_name": normalized_sampler,
             "scheduler": normalized_scheduler,
             "width": width,
-            "height": height
+            "height": height,
         }
         for key, val in updates.items():
             if val is not None:
                 data[key] = val
 
-        import time
-        # Prune stale entries before storing new data
-        cleanup_warp_storage()
-
         with _storage_lock:
+            now = time.time()
             warp_storage[self._warp_id] = data
-            _storage_timestamps[self._warp_id] = time.time()
-        
+            _storage_timestamps[self._warp_id] = now
+            _cleanup_warp_storage_locked(now)
+
         if latent is not None:
             logger.debug("Warping latent type: %s", type(latent))
 
         return ({"id": self._warp_id},)
 
+
 class Unwarp:
     CATEGORY = "Custom/WarpPipe Nodes"
     FUNCTION = "unwarp"
-    DISPLAY_NAME = "Unwarp Bundle"
     DESCRIPTION = "Unpack a warp object back into individual data types"
 
     @classmethod
@@ -495,31 +523,30 @@ class Unwarp:
         # Handle case where no warp is connected - return all None values
         if warp is None:
             return self._return_empty_values()
-        
+
         # Handle invalid warp data gracefully
         if not isinstance(warp, dict) or "id" not in warp:
             logger.warning("Invalid warp signal received. Returning empty values.")
             return self._return_empty_values()
-        
-        import time
+
         warp_id = warp["id"]
         with _storage_lock:
-            data = warp_storage.get(warp_id, {})
-            if data:
+            stored_data = warp_storage.get(warp_id)
+            if stored_data is not None:
                 _storage_timestamps[warp_id] = time.time()  # Refresh on access
-        
+                data = stored_data.copy()
+            else:
+                data = None
+
         # Handle missing warp data gracefully
-        if not data:
+        if data is None:
             logger.warning("Warp data not found for ID: %s. Returning empty values.", warp_id)
             return self._return_empty_values()
-        # Get width and height (either calculated from size_preset or direct values)
-        width = data.get("width", 1024)
-        height = data.get("height", 1024)
-        
+
         latent_out = data.get("latent")
         model_out = data.get("model_1")
         clip_out = data.get("clip")
-        
+
         logger.debug("Unwarp Output - model_1 type: %s", type(model_out))
         logger.debug("Unwarp Output - clip type: %s", type(clip_out))
         if latent_out is not None:
@@ -544,21 +571,28 @@ class Unwarp:
             data.get("steps_2"),
             data.get("steps_3"),
             data.get("cfg"),
-            coerce_sampler(data.get("sampler_name", "euler")),
-            coerce_scheduler(data.get("scheduler", "karras")),
-            width,
-            height,
+            (
+                coerce_sampler(data["sampler_name"])
+                if data.get("sampler_name") is not None
+                else None
+            ),
+            (coerce_scheduler(data["scheduler"]) if data.get("scheduler") is not None else None),
+            data.get("width"),
+            data.get("height"),
         )
-        
-        logger.debug("Unwarp RETURN_TYPES len: %d, return tuple len: %d", len(self.RETURN_TYPES), len(ret))
-        
+
+        logger.debug(
+            "Unwarp RETURN_TYPES len: %d, return tuple len: %d", len(self.RETURN_TYPES), len(ret)
+        )
+
         return ret
+
 
 class WarpProvider:
     """Parameter and latent provider for warp workflows"""
+
     CATEGORY = "Custom/WarpPipe Nodes"
     FUNCTION = "provide"
-    DISPLAY_NAME = "Warp Provider"
     DESCRIPTION = "Generate latents and parameters for warp workflows"
 
     @classmethod
@@ -609,28 +643,54 @@ class WarpProvider:
             # Custom option
             "Custom",
         ]
-        
+
         return {
             "optional": {
                 # Generation Parameters
                 "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
                 "steps_1": ("INT", {"default": 20, "min": 1, "max": 200}),
                 "steps_2": ("INT", {"default": 0, "min": 0, "max": 200}),
                 "steps_3": ("INT", {"default": 0, "min": 0, "max": 200}),
                 "cfg": ("FLOAT", {"default": 7.0, "min": 0.0, "max": 50.0}),
                 "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": "euler"}),
                 "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "normal"}),
-                
                 # Image Size Parameters
-                "size_preset": (size_presets, {"default": "Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP"}),
+                "size_preset": (
+                    size_presets,
+                    {"default": "Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP"},
+                ),
                 "custom_width": ("INT", {"default": 1024, "min": 64, "max": 8192, "step": 8}),
                 "custom_height": ("INT", {"default": 1024, "min": 64, "max": 8192, "step": 8}),
             }
         }
 
-    RETURN_TYPES = ("LATENT", "INT", "INT", "INT", "INT", "INT", "FLOAT", SAFE_SAMPLERS, SAFE_SCHEDULERS, "INT", "INT")
-    RETURN_NAMES = ("latent", "batch_size", "seed", "steps_1", "steps_2", "steps_3", "cfg", "sampler_name", "scheduler", "width", "height")
+    RETURN_TYPES = (
+        "LATENT",
+        "INT",
+        "INT",
+        "INT",
+        "INT",
+        "INT",
+        "FLOAT",
+        SAFE_SAMPLERS,
+        SAFE_SCHEDULERS,
+        "INT",
+        "INT",
+    )
+    RETURN_NAMES = (
+        "latent",
+        "batch_size",
+        "seed",
+        "steps_1",
+        "steps_2",
+        "steps_3",
+        "cfg",
+        "sampler_name",
+        "scheduler",
+        "width",
+        "height",
+    )
 
     def provide(
         self,
@@ -644,7 +704,7 @@ class WarpProvider:
         scheduler: str = "normal",
         size_preset: str = "Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP",
         custom_width: int = 1024,
-        custom_height: int = 1024
+        custom_height: int = 1024,
     ) -> tuple:
         # Determine actual dimensions from preset or custom values
         if size_preset == "Custom":
@@ -654,30 +714,30 @@ class WarpProvider:
 
         # Create empty latent image based on dimensions and batch size
         latent = _create_empty_latent(width, height, batch_size)
-        
+
         # Use the provided seed directly (rgthree-comfy will handle seed control)
         actual_seed = seed
-        
+
         # Return all outputs with coercion for compatibility
         return (
-            latent,                          # LATENT
-            batch_size,                      # INT
-            actual_seed,                     # INT
-            steps_1,                         # INT
-            steps_2,                         # INT
-            steps_3,                         # INT
-            cfg,                             # FLOAT
-            coerce_sampler(sampler_name),    # SAMPLER
-            coerce_scheduler(scheduler),     # SCHEDULER
-            width,                           # INT
-            height                           # INT
+            latent,  # LATENT
+            batch_size,  # INT
+            actual_seed,  # INT
+            steps_1,  # INT
+            steps_2,  # INT
+            steps_3,  # INT
+            cfg,  # FLOAT
+            coerce_sampler(sampler_name),  # SAMPLER
+            coerce_scheduler(scheduler),  # SCHEDULER
+            width,  # INT
+            height,  # INT
         )
+
 
 # Adapter: KSampler scheduler enum -> FaceDetailer scheduler enum
 class FDSchedulerAdapter:
     CATEGORY = "Custom/WarpPipe Nodes"
     FUNCTION = "adapt"
-    DISPLAY_NAME = "FD Scheduler Adapter"
     DESCRIPTION = "Convert KSampler scheduler to FaceDetailer scheduler"
 
     @classmethod
@@ -692,17 +752,18 @@ class FDSchedulerAdapter:
     RETURN_NAMES = ("scheduler",)
 
     @classmethod
-    def VALIDATE_INPUTS(cls, input_types=None, **kwargs) -> bool:
+    def VALIDATE_INPUTS(cls, input_types=None) -> bool:
         return True
 
     def adapt(self, scheduler: str) -> tuple:
         return (coerce_scheduler_fd(scheduler),)
 
+
 class DeadEnd:
     """A dead end node that accepts any input type but produces no output"""
+
     CATEGORY = "Custom/WarpPipe Nodes"
     FUNCTION = "dead_end"
-    DISPLAY_NAME = "Dead End"
     DESCRIPTION = "A dead end node that accepts any input but produces no output - useful for debugging or temporarily disabling workflow paths"
 
     @classmethod
@@ -717,12 +778,12 @@ class DeadEnd:
     # No return types - this is a true dead end
     RETURN_TYPES = ()
     RETURN_NAMES = ()
-    
+
     # Do NOT mark as OUTPUT_NODE - we want it to be a true dead end
     # OUTPUT_NODE = False  # This is the default, so we don't need to specify it
 
     @classmethod
-    def VALIDATE_INPUTS(cls, input_types=None, **kwargs):
+    def VALIDATE_INPUTS(cls, input_types=None):
         """
         Validate inputs - accept any type for wildcard '*' input.
         The input_types parameter is required to skip backend type validation
@@ -740,9 +801,10 @@ class DeadEnd:
         # Simply return nothing - the input is consumed but not passed forward
         return ()
 
+
 if ENABLE_V3_NODES:
     WARPPIPE_TYPE = io.Custom("WARPPIPE")
-    ANY_TYPE = io.Custom("*")
+    ANY_TYPE = getattr(io, "AnyType", io.Custom("*"))
 
     def _io_type(name: str):
         aliases = {
@@ -767,9 +829,8 @@ if ENABLE_V3_NODES:
             kwargs.pop("force_input", None)
             return io.Combo.Input(input_id, options=options, **kwargs)
 
-    def _enum_output(output_id: str, options: list[str], display_name: str):
-        io_type = ",".join(options) if options else "STRING"
-        return io.Custom(io_type).Output(output_id, display_name=display_name)
+    def _combo_output(output_id: str, options: list[str], display_name: str):
+        return io.Combo.Output(output_id, display_name=display_name, options=options)
 
     class WarpV3(io.ComfyNode):
         @classmethod
@@ -808,6 +869,7 @@ if ENABLE_V3_NODES:
                 outputs=[
                     WARPPIPE_TYPE.Output("warp_out", display_name="warp"),
                 ],
+                not_idempotent=True,
             )
 
         @classmethod
@@ -815,8 +877,8 @@ if ENABLE_V3_NODES:
             return _fingerprint_inputs(kwargs)
 
         @classmethod
-        def validate_inputs(cls, input_types=None, **kwargs) -> bool:
-            return True
+        def validate_inputs(cls, input_types=None):
+            return Warp.VALIDATE_INPUTS(input_types)
 
         @classmethod
         def execute(cls, **kwargs) -> io.NodeOutput:
@@ -843,8 +905,12 @@ if ENABLE_V3_NODES:
                     _io_type("CLIP").Output("clip", display_name="clip"),
                     _io_type("CLIP_VISION").Output("clip_vision", display_name="clip_vision"),
                     _io_type("VAE").Output("vae", display_name="vae"),
-                    _io_type("CONDITIONING").Output("conditioning_positive", display_name="conditioning_positive"),
-                    _io_type("CONDITIONING").Output("conditioning_negative", display_name="conditioning_negative"),
+                    _io_type("CONDITIONING").Output(
+                        "conditioning_positive", display_name="conditioning_positive"
+                    ),
+                    _io_type("CONDITIONING").Output(
+                        "conditioning_negative", display_name="conditioning_negative"
+                    ),
                     _io_type("LATENT").Output("latent", display_name="latent"),
                     io.String.Output("prompt_positive", display_name="prompt_positive"),
                     io.String.Output("prompt_negative", display_name="prompt_negative"),
@@ -854,8 +920,8 @@ if ENABLE_V3_NODES:
                     io.Int.Output("steps_2", display_name="steps_2"),
                     io.Int.Output("steps_3", display_name="steps_3"),
                     io.Float.Output("cfg", display_name="cfg"),
-                    _enum_output("sampler_name", SAFE_SAMPLERS, "sampler_name"),
-                    _enum_output("scheduler", SAFE_SCHEDULERS, "scheduler"),
+                    _combo_output("sampler_name", SAFE_SAMPLERS, "sampler_name"),
+                    _combo_output("scheduler", SAFE_SCHEDULERS, "scheduler"),
                     io.Int.Output("width", display_name="width"),
                     io.Int.Output("height", display_name="height"),
                 ],
@@ -876,14 +942,22 @@ if ENABLE_V3_NODES:
                 description=WarpProvider.DESCRIPTION,
                 inputs=[
                     io.Int.Input("batch_size", default=1, min=1, max=64),
-                    io.Int.Input("seed", default=0, min=0, max=0xffffffffffffffff),
+                    io.Int.Input("seed", default=0, min=0, max=0xFFFFFFFFFFFFFFFF),
                     io.Int.Input("steps_1", default=20, min=1, max=200),
                     io.Int.Input("steps_2", default=0, min=0, max=200),
                     io.Int.Input("steps_3", default=0, min=0, max=200),
                     io.Float.Input("cfg", default=7.0, min=0.0, max=50.0),
-                    _combo_input("sampler_name", list(comfy.samplers.KSampler.SAMPLERS), default="euler"),
-                    _combo_input("scheduler", list(comfy.samplers.KSampler.SCHEDULERS), default="normal"),
-                    _combo_input("size_preset", size_presets, default="Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP"),
+                    _combo_input(
+                        "sampler_name", list(comfy.samplers.KSampler.SAMPLERS), default="euler"
+                    ),
+                    _combo_input(
+                        "scheduler", list(comfy.samplers.KSampler.SCHEDULERS), default="normal"
+                    ),
+                    _combo_input(
+                        "size_preset",
+                        size_presets,
+                        default="Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP",
+                    ),
                     io.Int.Input("custom_width", default=1024, min=64, max=8192, step=8),
                     io.Int.Input("custom_height", default=1024, min=64, max=8192, step=8),
                 ],
@@ -895,8 +969,8 @@ if ENABLE_V3_NODES:
                     io.Int.Output("steps_2_out", display_name="steps_2"),
                     io.Int.Output("steps_3_out", display_name="steps_3"),
                     io.Float.Output("cfg_out", display_name="cfg"),
-                    _enum_output("sampler_name_out", SAFE_SAMPLERS, "sampler_name"),
-                    _enum_output("scheduler_out", SAFE_SCHEDULERS, "scheduler"),
+                    _combo_output("sampler_name_out", SAFE_SAMPLERS, "sampler_name"),
+                    _combo_output("scheduler_out", SAFE_SCHEDULERS, "scheduler"),
                     io.Int.Output("width", display_name="width"),
                     io.Int.Output("height", display_name="height"),
                 ],
@@ -917,19 +991,21 @@ if ENABLE_V3_NODES:
             custom_width: int = 1024,
             custom_height: int = 1024,
         ) -> io.NodeOutput:
-            return io.NodeOutput(*WarpProvider().provide(
-                batch_size,
-                seed,
-                steps_1,
-                steps_2,
-                steps_3,
-                cfg,
-                sampler_name,
-                scheduler,
-                size_preset,
-                custom_width,
-                custom_height,
-            ))
+            return io.NodeOutput(
+                *WarpProvider().provide(
+                    batch_size,
+                    seed,
+                    steps_1,
+                    steps_2,
+                    steps_3,
+                    cfg,
+                    sampler_name,
+                    scheduler,
+                    size_preset,
+                    custom_width,
+                    custom_height,
+                )
+            )
 
     class FDSchedulerAdapterV3(io.ComfyNode):
         @classmethod
@@ -943,7 +1019,7 @@ if ENABLE_V3_NODES:
                     _combo_input("scheduler", SAFE_SCHEDULERS),
                 ],
                 outputs=[
-                    _enum_output("scheduler_out", FD_SCHEDULERS, "scheduler"),
+                    _combo_output("scheduler_out", FD_SCHEDULERS, "scheduler"),
                 ],
             )
 
@@ -966,7 +1042,7 @@ if ENABLE_V3_NODES:
             )
 
         @classmethod
-        def validate_inputs(cls, input_types=None, **kwargs):
+        def validate_inputs(cls, input_types=None):
             return True
 
         @classmethod
@@ -986,17 +1062,10 @@ if ENABLE_V3_NODES:
     async def comfy_entrypoint() -> WarpPipeExtension:
         return WarpPipeExtension()
 
-# Register nodes under capitalized names. V3 nodes are opt-in because ComfyUI's
-# current combo-output validation can reject sampler/scheduler links at runtime.
-if ENABLE_V3_NODES:
-    NODE_CLASS_MAPPINGS = {
-        "Warp": WarpV3,
-        "Unwarp": UnwarpV3,
-        "Warp Provider": WarpProviderV3,
-        "FD Scheduler Adapter": FDSchedulerAdapterV3,
-        "Dead End": DeadEndV3,
-    }
-else:
+
+# Legacy mappings remain the default registration path. In V3 mode ComfyUI loads
+# the same node IDs exclusively through comfy_entrypoint().
+if not ENABLE_V3_NODES:
     NODE_CLASS_MAPPINGS = {
         "Warp": Warp,
         "Unwarp": Unwarp,
@@ -1005,18 +1074,18 @@ else:
         "Dead End": DeadEnd,
     }
 
-# Optional: Display names for the UI (newer ComfyUI feature)
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "Warp": "🌀 Warp",
-    "Unwarp": "🌀 Unwarp",
-    "Warp Provider": "🌀 Warp Provider",
-    "FD Scheduler Adapter": "🌀 Scheduler Adapter for FaceDetailer",
-    "Dead End": "🚫 Dead End"
-}
+    NODE_DISPLAY_NAME_MAPPINGS = {
+        "Warp": "🌀 Warp",
+        "Unwarp": "🌀 Unwarp",
+        "Warp Provider": "🌀 Warp Provider",
+        "FD Scheduler Adapter": "🌀 Scheduler Adapter for FaceDetailer",
+        "Dead End": "🚫 Dead End",
+    }
 
 # Optional: Web directory for custom UI files (if you add them later)
 WEB_DIRECTORY = "./web"
 
-__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 if ENABLE_V3_NODES:
-    __all__.append("comfy_entrypoint")
+    __all__ = ["comfy_entrypoint", "WEB_DIRECTORY"]
+else:
+    __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]

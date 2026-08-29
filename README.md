@@ -52,7 +52,7 @@ Restart ComfyUI after installation.
 
 ### Warp Node
 
-**Category**: `Custom/WarpPipe Nodes` | **Display Name**: Warp Bundle
+**Category**: `Custom/WarpPipe Nodes` | **Display Name**: 🌀 Warp
 
 Bundles multiple data types into a single "warp" object.
 
@@ -79,7 +79,7 @@ Bundles multiple data types into a single "warp" object.
 
 ### Unwarp Node
 
-**Category**: `Custom/WarpPipe Nodes` | **Display Name**: Unwarp Bundle
+**Category**: `Custom/WarpPipe Nodes` | **Display Name**: 🌀 Unwarp
 
 Unpacks a warp object back into individual data types.
 
@@ -106,7 +106,7 @@ Unpacks a warp object back into individual data types.
 
 ### Warp Provider Node
 
-**Category**: `Custom/WarpPipe Nodes` | **Display Name**: Warp Provider
+**Category**: `Custom/WarpPipe Nodes` | **Display Name**: 🌀 Warp Provider
 
 Generates latents and parameters with convenient preset dimensions. Features 30+ resolution presets covering all major aspect ratios (9:16, 3:4, 2:3, 4:5, 1:1, 5:4, 3:2, 4:3, 16:9), each labeled with use case, aspect ratio, resolution, and megapixel count.
 
@@ -132,7 +132,7 @@ Generates latents and parameters with convenient preset dimensions. Features 30+
 
 ### FD Scheduler Adapter Node
 
-**Category**: `Custom/WarpPipe Nodes` | **Display Name**: FD Scheduler Adapter
+**Category**: `Custom/WarpPipe Nodes` | **Display Name**: 🌀 Scheduler Adapter for FaceDetailer
 
 Converts KSampler schedulers to FaceDetailer-compatible schedulers. Exotic schedulers (AYS SDXL, GITS, OSS variants, etc.) are automatically mapped to their closest compatible equivalent.
 
@@ -146,7 +146,7 @@ Converts KSampler schedulers to FaceDetailer-compatible schedulers. Exotic sched
 
 ### Dead End Node
 
-**Category**: `Custom/WarpPipe Nodes` | **Display Name**: Dead End
+**Category**: `Custom/WarpPipe Nodes` | **Display Name**: 🚫 Dead End
 
 A true dead end node that accepts any input type but produces no output. Does not trigger execution.
 
@@ -218,8 +218,14 @@ Download the [example workflow JSON](examples/workflow_example.json) and drag it
 - **Data Storage**: Global storage with unique UUIDs per warp instance, thread-safe with locking
 - **Memory Management**: Automatic time-based cleanup (1-hour expiry) with a 256-entry hard cap
 - **Scheduler Compatibility**: Automatic coercion of exotic schedulers to safe, compatible values
+- **RES4LYF Compatibility**: Registers the `beta57` and `bong_tangent` schedulers globally so other node packs (like FaceDetailer) accept them even if RES4LYF hasn't loaded yet
+- **V3 Combo Compatibility**: Uses ComfyUI's native combo-output schema so sampler and scheduler links validate without modifying ComfyUI's global prompt validator
 - **Preset Dimensions**: 30+ SDXL-optimized resolution presets across all major aspect ratios
 - **Logging**: Uses Python `logging` module (set to DEBUG level to see internal details)
+
+### V3 Schema Support (Experimental)
+
+WarpPipe includes optional ComfyUI V3 schema node implementations. Legacy registration is the default because the V3 API is still unstable upstream. To try the V3 nodes, set the environment variable `WARPPIPE_ENABLE_V3=1` before starting ComfyUI. Saved workflows keep working either way — both paths register the same node IDs.
 
 ## Troubleshooting
 
@@ -235,7 +241,13 @@ v3.0.0 renamed the internal data type from `CONTROL` to `WARPPIPE`. If you load 
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Before submitting a pull request, run:
+
+```bash
+python -m ruff check . --exclude .agents --exclude .claude
+python -m ruff format --check . --exclude .agents --exclude .claude
+python -m pytest -q
+```
 
 ## License
 

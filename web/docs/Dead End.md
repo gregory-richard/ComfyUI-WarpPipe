@@ -22,4 +22,4 @@ None — this node has no outputs.
 
 ## Important Note
 
-Because this node has no outputs and is not marked as an output node, it will **not trigger execution** on its own. It only runs if it's part of an execution path leading to an output node.
+Because this node has no outputs and is not marked as an output node, it will **not trigger execution**. Connecting a branch to it marks that branch as intentionally unused without causing the upstream nodes to run.

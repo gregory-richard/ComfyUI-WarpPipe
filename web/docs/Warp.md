@@ -1,4 +1,4 @@
-# Warp Bundle
+# Warp
 
 Bundle multiple data types into a single warp object for easy transfer through your workflow.
 
