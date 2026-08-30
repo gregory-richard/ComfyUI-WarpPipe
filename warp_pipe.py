@@ -821,6 +821,7 @@ AUTOV2_LENGTH = 10
 # Matches an A1111 LoRA tag: <lora:name:0.8>, tolerating a trailing clip weight.
 _LORA_TAG_RE = re.compile(r"<lora:([^:>]+):(-?[0-9]*\.?[0-9]+)[^>]*>", re.IGNORECASE)
 
+
 _hash_cache: dict[str, str] = {}
 _hash_cache_lock = threading.Lock()
 _hash_cache_loaded = False
@@ -1188,38 +1189,80 @@ def available_loras() -> list[str]:
         return []
 
 
-def resolve_lora_name(query: str, candidates: Optional[list[str]] = None) -> Optional[str]:
-    """Match what someone typed in a tag against the LoRAs actually on disk.
+class LoraTagError(ValueError):
+    """A LoRA tag names no file, or names too many."""
 
-    Nobody wants to type "sdxl\\creator - name - v2 (sdxl).safetensors" into a
-    prompt, so a tag may name any unambiguous fragment of the filename.
+
+def _normalise(value: str) -> str:
+    """Compare paths without caring about slash direction or case."""
+    return value.replace("\\", "/").strip().lower()
+
+
+def resolve_lora_name(
+    query: str,
+    candidates: Optional[list[str]] = None,
+    strict: bool = False,
+) -> Optional[str]:
+    """Match what a tag names against the LoRAs on disk.
+
+    Tried in order: the full name, the filename without folder or extension,
+    then a unique substring. A folder prefix disambiguates, which matters: a
+    real collection here holds 24 files whose names all contain "secret sauce",
+    so a bare fragment cannot identify one.
+
+    With strict=True an unresolvable tag raises instead of returning None, so a
+    typo fails the run rather than silently producing an image without the LoRA.
     """
-    if not query:
+    if not query or not query.strip():
         return None
     names = available_loras() if candidates is None else candidates
     if not names:
         return None
 
-    lowered = query.strip().lower()
+    wanted = _normalise(query)
 
     for name in names:
-        if name.lower() == lowered:
+        if _normalise(name) == wanted:
             return name
 
     for name in names:
-        stem = os.path.splitext(os.path.basename(name))[0].lower()
-        if stem == lowered:
+        stem = _normalise(os.path.splitext(os.path.basename(name))[0])
+        if stem == wanted:
             return name
 
-    partial = [name for name in names if lowered in name.lower()]
+    # A folder-qualified fragment, e.g. "sdxl/secret sauce".
+    suffix = [name for name in names if _normalise(name).startswith(wanted)]
+    if len(suffix) == 1:
+        return suffix[0]
+
+    partial = [name for name in names if wanted in _normalise(name)]
     if len(partial) == 1:
         return partial[0]
+
+    # Fall back to matching every word separately, so a folder and a fragment
+    # can be combined even though the creator's name sits between them:
+    # "anima/grabbing breasts" finds "anima/bolero537 - grabbing breasts (anima)".
+    terms = wanted.replace("/", " ").split()
+    if len(terms) > 1:
+        every = [name for name in names if all(term in _normalise(name) for term in terms)]
+        if len(every) == 1:
+            return every[0]
+        if every:
+            partial = every
+
     if partial:
-        logger.warning(
-            "LoRA tag %r matches %d files; ignoring it. Be more specific.", query, len(partial)
+        shown = ", ".join(os.path.basename(name) for name in partial[:4])
+        more = f" and {len(partial) - 4} more" if len(partial) > 4 else ""
+        message = (
+            f"LoRA tag '{query}' matches {len(partial)} files ({shown}{more}). "
+            "Add the folder or more of the name to pick one."
         )
     else:
-        logger.warning("LoRA tag %r matches no file in the loras folder.", query)
+        message = f"LoRA tag '{query}' matches no file in the loras folder."
+
+    if strict:
+        raise LoraTagError(message)
+    logger.warning("%s", message)
     return None
 
 
@@ -1273,7 +1316,7 @@ class WarpLoraPrompt:
     def IS_CHANGED(cls, **kwargs) -> str:
         return _fingerprint_inputs(kwargs)
 
-    def plan(self, text: str) -> tuple[list[dict[str, Any]], list[str]]:
+    def plan(self, text: str, strict: bool = False) -> tuple[list[dict[str, Any]], list[str]]:
         """Work out which LoRAs a prompt asks for, without loading anything.
 
         Returns the resolved LoRAs and any trigger words they declare, so the
@@ -1284,7 +1327,7 @@ class WarpLoraPrompt:
         trigger_words: list[str] = []
 
         for query, weight in extract_lora_tags(text):
-            name = resolve_lora_name(query, candidates)
+            name = resolve_lora_name(query, candidates, strict=strict)
             if name is None:
                 continue
             path = _resolve_model_path("loras", name)
@@ -1312,7 +1355,9 @@ class WarpLoraPrompt:
         clip: Optional[Any] = None,
         warp: Optional[dict[str, Any]] = None,
     ) -> tuple:
-        resolved, trigger_words = self.plan(text)
+        # A tag that cannot be resolved fails the run: generating without a
+        # LoRA the prompt asked for produces a wrong image and wrong metadata.
+        resolved, trigger_words = self.plan(text, strict=True)
 
         prompt = strip_lora_tags(text)
         if insert_trigger_words and trigger_words:

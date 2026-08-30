@@ -16,18 +16,24 @@ Switching a LoRA becomes an edit to the text rather than a rewire.
 
 ## Naming a LoRA
 
-A tag does not need the full filename. Any fragment that matches exactly one
-file in your `loras` folder works, so this:
+A tag does not need the full filename, but it does need enough to identify one
+file. Measured against a real collection of 761 LoRAs, a short fragment like
+`detail tweaker` is unique only about half the time — 24 files there contain
+`secret sauce` alone.
 
-```
-loras/sdxl/w4r10ck - detail tweaker (sdxl).safetensors
-```
+Matching is tried in this order, ignoring case and slash direction:
 
-can be written as `<lora:detail tweaker:0.8>`.
+1. the full name, `sdxl/creator - detail tweaker (sdxl).safetensors`
+2. the filename without folder or extension, `creator - detail tweaker (sdxl)`
+3. every word, in any order — `sdxl detail tweaker` finds the above
+4. a unique fragment, `detail tweaker`
 
-If a fragment matches several files, or none, the tag is skipped and the reason
-is written to the ComfyUI console. The rest of the prompt still runs — a typo
-costs you one LoRA, not the whole generation.
+Option 2 always works. Option 3 is usually the shortest thing worth typing.
+
+**A tag that matches nothing, or matches several files, stops the run** with a
+message naming what it matched. That is deliberate: generating an image without
+a LoRA the prompt asked for gives you a wrong picture and wrong metadata, and a
+console warning is too easy to miss.
 
 ## Trigger words
 

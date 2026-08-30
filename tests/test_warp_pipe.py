@@ -485,12 +485,42 @@ def test_save_node_prefers_the_warp_over_the_graph(warp_pipe, lora_folder):
     assert "detail.safetensors" not in text
 
 
-def test_node_survives_a_tag_naming_a_missing_file(warp_pipe, lora_folder):
-    model, clip, prompt, warp = warp_pipe.WarpLoraPrompt().apply(text="a portrait <lora:ghost:1>")
+def test_an_unresolvable_tag_fails_the_run(warp_pipe, lora_folder):
+    # Generating without a LoRA the prompt asked for gives a wrong image and
+    # wrong metadata, so this is louder than a console warning on purpose.
+    with pytest.raises(warp_pipe.LoraTagError, match="matches no file"):
+        warp_pipe.WarpLoraPrompt().apply(text="a portrait <lora:ghost:1>")
 
-    assert prompt == "a portrait"
-    assert warp_pipe.warp_storage[warp["id"]]["loras"] == []
-    assert model is None and clip is None
+
+def test_an_ambiguous_tag_names_the_candidates(warp_pipe):
+    names = [
+        "sdxl/creator - secret sauce (sdxl).safetensors",
+        "flux2/creator - secret sauce (flux2).safetensors",
+    ]
+
+    with pytest.raises(warp_pipe.LoraTagError) as excinfo:
+        warp_pipe.resolve_lora_name("secret sauce", names, strict=True)
+
+    assert "matches 2 files" in str(excinfo.value)
+    assert "secret sauce (sdxl)" in str(excinfo.value)
+
+
+def test_a_folder_prefix_disambiguates(warp_pipe):
+    names = [
+        "sdxl/creator - secret sauce (sdxl).safetensors",
+        "flux2/creator - secret sauce (flux2).safetensors",
+    ]
+
+    assert warp_pipe.resolve_lora_name("sdxl/", names) == names[0]
+    assert warp_pipe.resolve_lora_name("flux2/creator", names) == names[1]
+
+
+def test_slash_direction_does_not_matter(warp_pipe):
+    # Filenames come back with backslashes on Windows; nobody types those.
+    names = ["sdxl\creator - thing (sdxl).safetensors"]
+
+    assert warp_pipe.resolve_lora_name("sdxl/creator - thing (sdxl)", names) == names[0]
+    assert warp_pipe.resolve_lora_name("SDXL/CREATOR - THING (SDXL)", names) == names[0]
 
 
 def test_lora_tags_in_text_are_found_without_a_warp(warp_pipe, lora_folder):
