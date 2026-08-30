@@ -1155,6 +1155,209 @@ def build_civitai_parameters(
     return "\n".join(lines)
 
 
+def civitai_trigger_words(file_path: Optional[str]) -> list[str]:
+    """Trigger words for a model, from its .civitai.info sidecar."""
+    if not file_path:
+        return []
+    payload = read_civitai_sidecar(file_path)
+    if not payload:
+        return []
+
+    words: list[str] = []
+    for entry in payload.get("trainedWords") or ():
+        if not isinstance(entry, str):
+            continue
+        # Civitai often packs several comma-separated words into one entry.
+        words.extend(part.strip() for part in entry.split(",") if part.strip())
+    return words
+
+
+def available_loras() -> list[str]:
+    try:
+        import folder_paths
+
+        return list(folder_paths.get_filename_list("loras"))
+    except Exception:
+        return []
+
+
+def resolve_lora_name(query: str, candidates: Optional[list[str]] = None) -> Optional[str]:
+    """Match what someone typed in a tag against the LoRAs actually on disk.
+
+    Nobody wants to type "sdxl\\creator - name - v2 (sdxl).safetensors" into a
+    prompt, so a tag may name any unambiguous fragment of the filename.
+    """
+    if not query:
+        return None
+    names = available_loras() if candidates is None else candidates
+    if not names:
+        return None
+
+    lowered = query.strip().lower()
+
+    for name in names:
+        if name.lower() == lowered:
+            return name
+
+    for name in names:
+        stem = os.path.splitext(os.path.basename(name))[0].lower()
+        if stem == lowered:
+            return name
+
+    partial = [name for name in names if lowered in name.lower()]
+    if len(partial) == 1:
+        return partial[0]
+    if partial:
+        logger.warning(
+            "LoRA tag %r matches %d files; ignoring it. Be more specific.", query, len(partial)
+        )
+    else:
+        logger.warning("LoRA tag %r matches no file in the loras folder.", query)
+    return None
+
+
+def strip_lora_tags(text: Optional[str]) -> str:
+    """Remove <lora:...> tags, leaving the prompt that should be encoded."""
+    if not isinstance(text, str):
+        return ""
+    return re.sub(r"\s{2,}", " ", _LORA_TAG_RE.sub("", text)).strip()
+
+
+class WarpLoraPrompt:
+    CATEGORY = "Custom/WarpPipe Nodes"
+    FUNCTION = "apply"
+    DESCRIPTION = "Write the prompt and its LoRAs in one place, A1111 style"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": (
+                    "STRING",
+                    {
+                        "multiline": True,
+                        "default": "",
+                        "placeholder": "a portrait, dramatic lighting <lora:detail tweaker:0.8>",
+                    },
+                ),
+                "insert_trigger_words": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "label_on": "add trigger words",
+                        "label_off": "prompt as written",
+                    },
+                ),
+            },
+            "optional": {
+                "model": ("MODEL", {}),
+                "clip": ("CLIP", {}),
+                "warp": ("WARPPIPE", {}),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL", "CLIP", "STRING", "WARPPIPE")
+    RETURN_NAMES = ("model", "clip", "prompt", "warp")
+
+    def __init__(self):
+        self._warp_id = uuid.uuid4().hex
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs) -> str:
+        return _fingerprint_inputs(kwargs)
+
+    def plan(self, text: str) -> tuple[list[dict[str, Any]], list[str]]:
+        """Work out which LoRAs a prompt asks for, without loading anything.
+
+        Returns the resolved LoRAs and any trigger words they declare, so the
+        parsing can be tested without a ComfyUI runtime.
+        """
+        candidates = available_loras()
+        resolved: list[dict[str, Any]] = []
+        trigger_words: list[str] = []
+
+        for query, weight in extract_lora_tags(text):
+            name = resolve_lora_name(query, candidates)
+            if name is None:
+                continue
+            path = _resolve_model_path("loras", name)
+            resolved.append(
+                {
+                    "query": query,
+                    "name": name,
+                    "path": path,
+                    "weight": weight,
+                    "display": _lora_display_name(name),
+                    "hash": model_autov2(path),
+                }
+            )
+            for word in civitai_trigger_words(path):
+                if word not in trigger_words:
+                    trigger_words.append(word)
+
+        return resolved, trigger_words
+
+    def apply(
+        self,
+        text: str = "",
+        insert_trigger_words: bool = False,
+        model: Optional[Any] = None,
+        clip: Optional[Any] = None,
+        warp: Optional[dict[str, Any]] = None,
+    ) -> tuple:
+        resolved, trigger_words = self.plan(text)
+
+        prompt = strip_lora_tags(text)
+        if insert_trigger_words and trigger_words:
+            missing = [w for w in trigger_words if w.lower() not in prompt.lower()]
+            if missing:
+                prompt = ", ".join([prompt, *missing]) if prompt else ", ".join(missing)
+
+        for entry in resolved:
+            if entry["path"] is None:
+                continue
+            if model is None and clip is None:
+                break
+            try:
+                import comfy.sd
+                import comfy.utils
+
+                lora, metadata = comfy.utils.load_torch_file(
+                    entry["path"], safe_load=True, return_metadata=True
+                )
+                model, clip = comfy.sd.load_lora_for_models(
+                    model, clip, lora, entry["weight"], entry["weight"], lora_metadata=metadata
+                )
+            except Exception as exc:
+                logger.warning("Could not apply LoRA %s: %s", entry["name"], exc)
+
+        # Carry the resolved LoRAs in the warp so the save node does not have to
+        # rediscover them from the graph.
+        if isinstance(warp, dict) and "id" in warp:
+            with _storage_lock:
+                data = warp_storage.get(warp["id"], {}).copy()
+        else:
+            data = {}
+
+        data["loras"] = [
+            {"name": entry["display"], "weight": entry["weight"], "hash": entry["hash"]}
+            for entry in resolved
+        ]
+        data["prompt_positive"] = prompt
+        if model is not None:
+            data["model_1"] = model
+        if clip is not None:
+            data["clip"] = clip
+
+        with _storage_lock:
+            now = time.time()
+            warp_storage[self._warp_id] = data
+            _storage_timestamps[self._warp_id] = now
+            _cleanup_warp_storage_locked(now)
+
+        return (model, clip, prompt, {"id": self._warp_id})
+
+
 class SaveImageCivitai:
     CATEGORY = "Custom/WarpPipe Nodes"
     FUNCTION = "save_images"
@@ -1217,16 +1420,25 @@ class SaveImageCivitai:
         positive = values.get("prompt_positive") or ""
         negative = values.get("prompt_negative") or ""
 
-        # Tags already written into the prompt count as used LoRAs too.
-        tagged = extract_lora_tags(positive)
-        combined = list(graph_loras)
-        known = {name.lower() for name, _ in combined}
-        combined.extend((name, weight) for name, weight in tagged if name.lower() not in known)
+        # A Prompt + LoRAs node records exactly what it applied, which beats
+        # rediscovering it from the graph. Fall back to the graph otherwise.
+        recorded = values.get("loras")
+        if isinstance(recorded, list) and recorded:
+            loras = [
+                (str(entry.get("name")), _as_float(entry.get("weight")), entry.get("hash"))
+                for entry in recorded
+                if isinstance(entry, dict) and entry.get("name")
+            ]
+        else:
+            tagged = extract_lora_tags(positive)
+            combined = list(graph_loras)
+            known = {name.lower() for name, _ in combined}
+            combined.extend((n, w) for n, w in tagged if n.lower() not in known)
 
-        loras: list[tuple[str, float, Optional[str]]] = []
-        for name, weight in combined:
-            path = _resolve_model_path("loras", name)
-            loras.append((_lora_display_name(name), weight, model_autov2(path)))
+            loras = []
+            for name, weight in combined:
+                path = _resolve_model_path("loras", name)
+                loras.append((_lora_display_name(name), weight, model_autov2(path)))
 
         checkpoint = model_name.strip() or graph_model
         checkpoint_hash = model_autov2(resolve_model_file(checkpoint))
@@ -1571,6 +1783,7 @@ if not ENABLE_V3_NODES:
         "FD Scheduler Adapter": FDSchedulerAdapter,
         "Dead End": DeadEnd,
         "Save Image Civitai": SaveImageCivitai,
+        "Warp Lora Prompt": WarpLoraPrompt,
     }
 
     NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1580,6 +1793,7 @@ if not ENABLE_V3_NODES:
         "FD Scheduler Adapter": "🌀 Scheduler Adapter for FaceDetailer",
         "Dead End": "🚫 Dead End",
         "Save Image Civitai": "🌀 Save Image (Civitai)",
+        "Warp Lora Prompt": "🌀 Prompt + LoRAs",
     }
 
 # Optional: Web directory for custom UI files (if you add them later)

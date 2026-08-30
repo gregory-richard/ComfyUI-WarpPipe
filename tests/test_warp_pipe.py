@@ -2,13 +2,15 @@ import asyncio
 import hashlib
 import inspect
 import json
+import sys
 import time
+import types
 
 import pytest
 
 V3_NODE_IDS = {"Warp", "Unwarp", "Warp Provider", "FD Scheduler Adapter", "Dead End"}
 # The Civitai save node is currently registered on the legacy path only.
-NODE_IDS = V3_NODE_IDS | {"Save Image Civitai"}
+NODE_IDS = V3_NODE_IDS | {"Save Image Civitai", "Warp Lora Prompt"}
 
 
 def test_legacy_registration_and_node_contracts(warp_pipe):
@@ -370,3 +372,121 @@ def test_trace_upstream_walks_links(warp_pipe):
 def test_trace_upstream_handles_unknown_start(warp_pipe):
     assert warp_pipe.trace_upstream(BRANCHED_GRAPH, None) is None
     assert warp_pipe.trace_upstream(BRANCHED_GRAPH, "does-not-exist") is None
+
+
+# ---------------------------------------------------------------------------
+# Prompt + LoRAs
+# ---------------------------------------------------------------------------
+
+# Long, foldered names like the ones a real loras folder holds.
+LORA_ON_DISK = "sdxl/w4r10ck - detail tweaker (sdxl).safetensors"
+OTHER_LORA = "ill/somebody - other thing (ill).safetensors"
+
+
+@pytest.fixture
+def lora_folder(monkeypatch, tmp_path):
+    """A loras folder holding one real file with a Civitai sidecar."""
+    weights = tmp_path / "detail.safetensors"
+    weights.write_bytes(b"weights")
+    (tmp_path / "detail.civitai.info").write_text(
+        json.dumps(
+            {
+                "files": [{"hashes": {"SHA256": "ABCDEF0123456789"}}],
+                "trainedWords": ["detail tweaker, sharp focus"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    module = types.ModuleType("folder_paths")
+    module.get_filename_list = lambda kind: [LORA_ON_DISK, OTHER_LORA]
+    module.get_full_path = lambda kind, name: str(weights) if name == LORA_ON_DISK else None
+    monkeypatch.setitem(sys.modules, "folder_paths", module)
+    return weights
+
+
+def test_a_tag_may_name_any_unambiguous_fragment(warp_pipe, lora_folder):
+    names = [LORA_ON_DISK, OTHER_LORA]
+
+    assert warp_pipe.resolve_lora_name(LORA_ON_DISK, names) == LORA_ON_DISK
+    assert warp_pipe.resolve_lora_name("detail tweaker", names) == LORA_ON_DISK
+    assert warp_pipe.resolve_lora_name("w4r10ck - detail tweaker (sdxl)", names) == LORA_ON_DISK
+
+
+def test_ambiguous_or_unknown_tags_are_skipped(warp_pipe, caplog):
+    names = ["a/thing one.safetensors", "b/thing two.safetensors"]
+
+    assert warp_pipe.resolve_lora_name("thing", names) is None
+    assert warp_pipe.resolve_lora_name("nothing like this", names) is None
+    assert warp_pipe.resolve_lora_name("", names) is None
+
+
+def test_strip_lora_tags_leaves_a_clean_prompt(warp_pipe):
+    text = "a portrait <lora:foo:0.8> in the rain <lora:bar:1>"
+
+    assert warp_pipe.strip_lora_tags(text) == "a portrait in the rain"
+    assert warp_pipe.strip_lora_tags(None) == ""
+
+
+def test_trigger_words_are_split_out_of_the_sidecar(warp_pipe, lora_folder):
+    assert warp_pipe.civitai_trigger_words(str(lora_folder)) == ["detail tweaker", "sharp focus"]
+    assert warp_pipe.civitai_trigger_words(None) == []
+
+
+def test_plan_resolves_hash_and_trigger_words(warp_pipe, lora_folder):
+    resolved, words = warp_pipe.WarpLoraPrompt().plan("a portrait <lora:detail tweaker:0.8>")
+
+    assert len(resolved) == 1
+    assert resolved[0]["name"] == LORA_ON_DISK
+    assert resolved[0]["weight"] == 0.8
+    # Read from the sidecar rather than hashing the file again.
+    assert resolved[0]["hash"] == "abcdef0123"
+    assert words == ["detail tweaker", "sharp focus"]
+
+
+def test_trigger_words_are_only_added_when_asked(warp_pipe, lora_folder):
+    node = warp_pipe.WarpLoraPrompt()
+    text = "a portrait <lora:detail tweaker:0.8>"
+
+    _, _, plain, _ = node.apply(text=text)
+    assert plain == "a portrait"
+
+    _, _, expanded, _ = node.apply(text=text, insert_trigger_words=True)
+    assert expanded == "a portrait, detail tweaker, sharp focus"
+
+
+def test_trigger_words_are_not_duplicated(warp_pipe, lora_folder):
+    node = warp_pipe.WarpLoraPrompt()
+
+    _, _, prompt, _ = node.apply(
+        text="a portrait, sharp focus <lora:detail tweaker:0.8>", insert_trigger_words=True
+    )
+
+    assert prompt.lower().count("sharp focus") == 1
+
+
+def test_applied_loras_are_recorded_in_the_warp(warp_pipe, lora_folder):
+    _, _, _, warp = warp_pipe.WarpLoraPrompt().apply(text="x <lora:detail tweaker:0.8>")
+
+    stored = warp_pipe.warp_storage[warp["id"]]["loras"]
+    assert stored == [
+        {"name": "w4r10ck - detail tweaker (sdxl)", "weight": 0.8, "hash": "abcdef0123"}
+    ]
+
+
+def test_save_node_prefers_the_warp_over_the_graph(warp_pipe, lora_folder):
+    _, _, _, warp = warp_pipe.WarpLoraPrompt().apply(text="a portrait <lora:detail tweaker:0.8>")
+
+    # A graph naming a different LoRA must not override what was actually applied.
+    text = warp_pipe.SaveImageCivitai().build_metadata(warp=warp, prompt=BRANCHED_GRAPH)
+
+    assert "w4r10ck - detail tweaker (sdxl): abcdef0123" in text
+    assert "detail.safetensors" not in text
+
+
+def test_node_survives_a_tag_naming_a_missing_file(warp_pipe, lora_folder):
+    model, clip, prompt, warp = warp_pipe.WarpLoraPrompt().apply(text="a portrait <lora:ghost:1>")
+
+    assert prompt == "a portrait"
+    assert warp_pipe.warp_storage[warp["id"]]["loras"] == []
+    assert model is None and clip is None
