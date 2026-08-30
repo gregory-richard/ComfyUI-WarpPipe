@@ -548,3 +548,14 @@ def test_every_node_has_a_documentation_page():
     documented = {path.stem for path in docs.glob("*.md")}
 
     assert NODE_IDS <= documented
+
+
+def test_save_node_is_idle_when_nothing_is_connected(warp_pipe):
+    # Bypassing an upstream branch should leave this node idle rather than
+    # failing the whole prompt on a missing required input.
+    node = warp_pipe.NODE_CLASS_MAPPINGS["Save Image Civitai"]
+    assert "images" in node.INPUT_TYPES()["optional"]
+    assert "images" not in node.INPUT_TYPES()["required"]
+
+    assert warp_pipe.SaveImageCivitai().save_images(images=None) == {"ui": {"images": []}}
+    assert warp_pipe.SaveImageCivitai().save_images(images=[]) == {"ui": {"images": []}}

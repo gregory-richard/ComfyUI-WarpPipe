@@ -40,7 +40,10 @@ used directly instead, since that node knows exactly what it applied.
 
 ## Inputs
 
-- **images** — The images to save. Required.
+- **images** (optional) — The images to save. Optional so that bypassing an
+  upstream branch leaves this node idle rather than failing the prompt with
+  a missing connection. With nothing connected it saves nothing and says so
+  in the console.
 - **filename_prefix** — Prefix for saved files.
 - **embed_workflow** — Embed the ComfyUI workflow alongside the metadata.
 - **warp** (optional) — Supplies prompt, seed, steps, CFG, sampler, scheduler

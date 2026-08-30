@@ -1422,7 +1422,6 @@ class SaveImageCivitai:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "images": ("IMAGE", {}),
                 "filename_prefix": ("STRING", {"default": "WarpPipe"}),
                 "embed_workflow": (
                     "BOOLEAN",
@@ -1434,6 +1433,9 @@ class SaveImageCivitai:
                 ),
             },
             "optional": {
+                # Optional so that bypassing an upstream branch leaves this node
+                # idle instead of failing the whole prompt with a missing input.
+                "images": ("IMAGE", {}),
                 "warp": ("WARPPIPE", {}),
                 # Detected from the graph; this only overrides that.
                 "model_name_override": ("STRING", {"default": "", "multiline": False}),
@@ -1515,7 +1517,7 @@ class SaveImageCivitai:
 
     def save_images(
         self,
-        images,
+        images=None,
         filename_prefix: str = "WarpPipe",
         embed_workflow: bool = True,
         warp: Optional[dict[str, Any]] = None,
@@ -1524,6 +1526,10 @@ class SaveImageCivitai:
         extra_pnginfo: Optional[dict[str, Any]] = None,
         unique_id: Optional[str] = None,
     ) -> dict[str, Any]:
+        if images is None or len(images) == 0:
+            logger.info("Save Image (Civitai): no images connected, nothing to save.")
+            return {"ui": {"images": []}}
+
         import folder_paths
         import numpy as np
         from PIL import Image, PngImagePlugin
