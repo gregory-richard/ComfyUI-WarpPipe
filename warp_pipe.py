@@ -982,48 +982,96 @@ def extract_lora_tags(text: Optional[str]) -> list[tuple[str, float]]:
     return [(m.group(1).strip(), _as_float(m.group(2))) for m in _LORA_TAG_RE.finditer(text)]
 
 
+# Model loaders are recognised by the input they carry rather than by class
+# name, so checkpoint, UNet/diffusion and GGUF loaders are all covered without
+# naming each pack. Each entry maps the input to the folder_paths keys to try.
+MODEL_INPUT_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("ckpt_name", ("checkpoints",)),
+    ("unet_name", ("diffusion_models", "unet")),
+    ("model_name", ("diffusion_models", "checkpoints")),
+)
+
+
+def trace_upstream(graph: dict[str, Any], start_id: Optional[str]) -> Optional[set[str]]:
+    """Node ids that feed the given node, following links backwards.
+
+    A large workflow holds many loaders behind switches and subgraphs; only the
+    ones upstream of the image being saved actually produced it. Returns None
+    when there is no usable starting point, meaning "consider the whole graph".
+    """
+    if start_id is None or not isinstance(graph, dict):
+        return None
+
+    start = str(start_id)
+    if start not in graph:
+        return None
+
+    seen: set[str] = set()
+    pending = [start]
+    while pending:
+        node_id = pending.pop()
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+
+        node = graph.get(node_id)
+        if not isinstance(node, dict):
+            continue
+        for value in (node.get("inputs") or {}).values():
+            # A link is encoded as [source_node_id, output_index].
+            if isinstance(value, list) and value and isinstance(value[0], (str, int)):
+                pending.append(str(value[0]))
+    return seen
+
+
 def collect_graph_resources(
     prompt_graph: Optional[dict[str, Any]],
+    start_id: Optional[str] = None,
 ) -> tuple[Optional[str], list[tuple[str, float]]]:
-    """Find the checkpoint and LoRAs used, from the executing prompt graph.
+    """Find the model and LoRAs that produced the image being saved.
 
-    Handles ComfyUI's own loaders and the stacked widget format used by
-    rgthree's Power Lora Loader, where each slot is a dict on the node's inputs.
+    Handles ComfyUI's own loaders, UNet/diffusion and GGUF loaders, and the
+    stacked slot format used by rgthree's Power Lora Loader. When start_id is
+    given, only nodes upstream of it are considered, so unrelated branches of a
+    large workflow do not contribute.
     """
-    checkpoint: Optional[str] = None
+    model_name: Optional[str] = None
     loras: list[tuple[str, float]] = []
 
     if not isinstance(prompt_graph, dict):
-        return checkpoint, loras
+        return model_name, loras
 
-    for node in prompt_graph.values():
+    upstream = trace_upstream(prompt_graph, start_id)
+    for node_id, node in prompt_graph.items():
+        if upstream is not None and str(node_id) not in upstream:
+            continue
         if not isinstance(node, dict):
             continue
-        class_type = str(node.get("class_type") or "")
         inputs = node.get("inputs")
         if not isinstance(inputs, dict):
             continue
 
-        if checkpoint is None and "CheckpointLoader" in class_type:
-            name = inputs.get("ckpt_name")
-            if isinstance(name, str) and name:
-                checkpoint = name
+        if model_name is None:
+            for key, _folders in MODEL_INPUT_KEYS:
+                value = inputs.get(key)
+                if isinstance(value, str) and value and value.lower() != "none":
+                    model_name = value
+                    break
 
-        if "LoraLoader" in class_type:
-            name = inputs.get("lora_name")
-            if isinstance(name, str) and name:
-                loras.append((name, _as_float(inputs.get("strength_model"))))
+        name = inputs.get("lora_name")
+        if isinstance(name, str) and name and name.lower() != "none":
+            loras.append((name, _as_float(inputs.get("strength_model"))))
 
         # Stacked loaders keep one dict per slot, e.g. {"lora": ..., "on": ...}.
         for value in inputs.values():
             if not isinstance(value, dict):
                 continue
-            name = value.get("lora")
-            if not isinstance(name, str) or not name or name.lower() == "none":
+            slot = value.get("lora")
+            if not isinstance(slot, str) or not slot or slot.lower() == "none":
                 continue
             if value.get("on") is False:
                 continue
-            loras.append((name, _as_float(value.get("strength"))))
+            loras.append((slot, _as_float(value.get("strength"))))
 
     deduped: list[tuple[str, float]] = []
     seen: set[str] = set()
@@ -1031,7 +1079,19 @@ def collect_graph_resources(
         if name not in seen:
             seen.add(name)
             deduped.append((name, weight))
-    return checkpoint, deduped
+    return model_name, deduped
+
+
+def resolve_model_file(name: Optional[str]) -> Optional[str]:
+    """Locate a model file across the folder types different loaders use."""
+    if not name:
+        return None
+    for _key, folders in MODEL_INPUT_KEYS:
+        for folder in folders:
+            path = _resolve_model_path(folder, name)
+            if path:
+                return path
+    return None
 
 
 def _lora_display_name(name: str) -> str:
@@ -1120,9 +1180,14 @@ class SaveImageCivitai:
             },
             "optional": {
                 "warp": ("WARPPIPE", {}),
-                "model_name": ("STRING", {"default": "", "multiline": False}),
+                # Detected from the graph; this only overrides that.
+                "model_name_override": ("STRING", {"default": "", "multiline": False}),
             },
-            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+            "hidden": {
+                "prompt": "PROMPT",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+                "unique_id": "UNIQUE_ID",
+            },
         }
 
     def _warp_values(self, warp: Optional[dict[str, Any]]) -> dict[str, Any]:
@@ -1139,6 +1204,7 @@ class SaveImageCivitai:
         model_name: str = "",
         width: Optional[int] = None,
         height: Optional[int] = None,
+        unique_id: Optional[str] = None,
     ) -> str:
         """Resolve every resource and return the parameters block.
 
@@ -1146,7 +1212,7 @@ class SaveImageCivitai:
         filesystem.
         """
         values = self._warp_values(warp)
-        graph_checkpoint, graph_loras = collect_graph_resources(prompt)
+        graph_model, graph_loras = collect_graph_resources(prompt, start_id=unique_id)
 
         positive = values.get("prompt_positive") or ""
         negative = values.get("prompt_negative") or ""
@@ -1162,8 +1228,8 @@ class SaveImageCivitai:
             path = _resolve_model_path("loras", name)
             loras.append((_lora_display_name(name), weight, model_autov2(path)))
 
-        checkpoint = model_name.strip() or graph_checkpoint
-        checkpoint_hash = model_autov2(_resolve_model_path("checkpoints", checkpoint))
+        checkpoint = model_name.strip() or graph_model
+        checkpoint_hash = model_autov2(resolve_model_file(checkpoint))
 
         return build_civitai_parameters(
             positive=positive,
@@ -1186,9 +1252,10 @@ class SaveImageCivitai:
         filename_prefix: str = "WarpPipe",
         embed_workflow: bool = True,
         warp: Optional[dict[str, Any]] = None,
-        model_name: str = "",
+        model_name_override: str = "",
         prompt: Optional[dict[str, Any]] = None,
         extra_pnginfo: Optional[dict[str, Any]] = None,
+        unique_id: Optional[str] = None,
     ) -> dict[str, Any]:
         import folder_paths
         import numpy as np
@@ -1197,7 +1264,12 @@ class SaveImageCivitai:
         height = int(images[0].shape[0])
         width = int(images[0].shape[1])
         parameters = self.build_metadata(
-            warp=warp, prompt=prompt, model_name=model_name, width=width, height=height
+            warp=warp,
+            prompt=prompt,
+            model_name=model_name_override,
+            width=width,
+            height=height,
+            unique_id=unique_id,
         )
         logger.debug("Civitai parameters: %s", parameters)
 

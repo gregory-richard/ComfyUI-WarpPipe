@@ -8,6 +8,8 @@ All notable changes to this project will be documented in this file.
 
 - **Save Image (Civitai)** node: writes an A1111-style `parameters` block that Civitai parses, so uploaded images show their prompt, sampler settings and linked resources. Embedding the ComfyUI workflow stays optional via a toggle.
 - **Resource identification**: checkpoints and LoRAs are identified by AutoV2 hash (the first 10 characters of the file's SHA256). Hashes are read from `.civitai.info` sidecars when present and otherwise computed once and cached on disk.
+- **Model detection**: recognises loaders by the input they carry (`ckpt_name`, `unet_name`), so checkpoint, UNet/diffusion and GGUF loaders are all found without naming each pack. The model field on the node is an override, not a requirement.
+- **Upstream tracing**: resources are collected only from nodes that actually fed the saved image, so unrelated branches of a large workflow do not contribute the wrong model or LoRA.
 - **LoRA detection**: reads ComfyUI's own loaders, the stacked slot format used by rgthree's Power Lora Loader (skipping disabled slots), and `<lora:name:weight>` tags written into the prompt.
 
 ### Improved

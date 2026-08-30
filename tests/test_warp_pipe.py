@@ -312,3 +312,61 @@ def test_build_metadata_combines_warp_values_and_graph(warp_pipe):
     # Names come through even when the files are absent and cannot be hashed.
     assert "<lora:abstract:0.8>" in text
     assert "<lora:detail:0.6>" in text
+
+
+# A Flux-style graph: a UNet loader, a stacked LoRA loader with one slot off,
+# and a second unrelated branch that must not leak into the metadata.
+BRANCHED_GRAPH = {
+    "10": {"class_type": "UNETLoader", "inputs": {"unet_name": "flux/krea2.safetensors"}},
+    "11": {
+        "class_type": "Power Lora Loader (rgthree)",
+        "inputs": {
+            "model": ["10", 0],
+            "lora_1": {"lora": "detail.safetensors", "strength": 0.7, "on": True},
+            "lora_2": {"lora": "unused.safetensors", "strength": 1.0, "on": False},
+        },
+    },
+    "12": {"class_type": "KSampler", "inputs": {"model": ["11", 0]}},
+    "13": {"class_type": "VAEDecode", "inputs": {"samples": ["12", 0]}},
+    "20": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": "sdxl/other.safetensors"},
+    },
+    "21": {
+        "class_type": "LoraLoader",
+        "inputs": {"model": ["20", 0], "lora_name": "wrong.safetensors", "strength_model": 1.0},
+    },
+    "99": {"class_type": "Save Image Civitai", "inputs": {"images": ["13", 0]}},
+}
+
+
+def test_unet_loaders_are_detected_not_just_checkpoints(warp_pipe):
+    model, _ = warp_pipe.collect_graph_resources(BRANCHED_GRAPH, start_id="99")
+
+    assert model == "flux/krea2.safetensors"
+
+
+def test_tracing_ignores_branches_that_did_not_make_the_image(warp_pipe):
+    _, loras = warp_pipe.collect_graph_resources(BRANCHED_GRAPH, start_id="99")
+
+    assert loras == [("detail.safetensors", 0.7)]
+
+
+def test_without_a_start_id_the_whole_graph_is_considered(warp_pipe):
+    _, loras = warp_pipe.collect_graph_resources(BRANCHED_GRAPH)
+    names = [name for name, _ in loras]
+
+    assert "wrong.safetensors" in names
+
+
+def test_trace_upstream_walks_links(warp_pipe):
+    reachable = warp_pipe.trace_upstream(BRANCHED_GRAPH, "99")
+
+    assert {"99", "13", "12", "11", "10"} <= reachable
+    assert "20" not in reachable
+    assert "21" not in reachable
+
+
+def test_trace_upstream_handles_unknown_start(warp_pipe):
+    assert warp_pipe.trace_upstream(BRANCHED_GRAPH, None) is None
+    assert warp_pipe.trace_upstream(BRANCHED_GRAPH, "does-not-exist") is None
