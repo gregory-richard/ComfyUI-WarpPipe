@@ -129,20 +129,16 @@ async function loadIndex() {
   return indexCache;
 }
 
-// Walk back from the node to whichever loader fed it, and read the folder its
-// model file sits in. Folders are how these collections separate architectures,
-// so this is what decides which LoRAs can actually apply.
-function connectedModelFolder(node) {
+// Walk back from the node to whichever loader fed it and read the model's file
+// name. What that model *is* comes from its own metadata, not from the name.
+function connectedModelName(node) {
   const seen = new Set();
   const walk = (current, depth) => {
     if (!current || depth > 12 || seen.has(current.id)) return null;
     seen.add(current.id);
     for (const widget of current.widgets || []) {
       const isModel = /^(unet_name|ckpt_name|model_name)$/.test(widget.name || "");
-      if (isModel && typeof widget.value === "string" && widget.value) {
-        const parts = widget.value.replace(/\\/g, "/").split("/");
-        return parts.length > 1 ? parts[0] : "";
-      }
+      if (isModel && typeof widget.value === "string" && widget.value) return widget.value;
     }
     for (let slot = 0; slot < (current.inputs || []).length; slot++) {
       const found = walk(current.getInputNode?.(slot), depth + 1);
@@ -153,6 +149,34 @@ function connectedModelFolder(node) {
   return walk(node, 0);
 }
 
+/** What a LoRA is filed under: what it says it is, else where it sits.
+ *
+ * base_model comes from the .civitai.info sidecar and means the same thing in
+ * anybody's collection. Folder names only mean something to whoever chose them,
+ * so they are the fallback rather than the rule.
+ */
+function groupOf(entry) {
+  return entry.base_model || entry.folder || "Unsorted";
+}
+
+/** The base model of the file wired into this node, asked of the server. */
+async function connectedBase(node) {
+  const name = connectedModelName(node);
+  if (!name) return null;
+  try {
+    const info = await fetch(`/warppipe/model/base?name=${encodeURIComponent(name)}`).then((r) =>
+      r.json()
+    );
+    if (info.base_model) return info.base_model;
+  } catch {
+    /* fall through to the folder */
+  }
+  // No sidecar: fall back to the folder, which is right for collections filed
+  // that way and simply matches nothing for the rest.
+  const parts = name.replace(/\\/g, "/").split("/");
+  return parts.length > 1 ? parts[0] : null;
+}
+
 function insertTag(node, entry) {
   const widget = (node.widgets || []).find((w) => w.name === TEXT_WIDGET);
   if (!widget) return;
@@ -161,10 +185,9 @@ function insertTag(node, entry) {
   const stem = entry.id.replace(/\\/g, "/").split("/").pop().replace(/\.[^.]+$/, "");
   const tag = `<lora:${stem}:1.0>`;
 
-  // The prompt editor owns the text when the extension is loaded.
-  if (typeof node._warppipeGetText === "function" && typeof node._warppipeSetText === "function") {
-    const current = node._warppipeGetText();
-    node._warppipeSetText(current ? `${current.trimEnd()} ${tag}` : tag);
+  // A LoRA joins the list below the prompt rather than the prompt itself.
+  if (typeof node._warppipeAddLora === "function") {
+    node._warppipeAddLora(stem);
     node.setDirtyCanvas?.(true, true);
     return;
   }
@@ -223,17 +246,17 @@ function openBrowser(node) {
   document.body.appendChild(backdrop);
   search.focus();
 
-  const connected = connectedModelFolder(node);
+  let connected = null;
   let entries = [];
-  let folder = connected || null;
+  let folder = null;
 
   function render() {
     const query = search.value.trim().toLowerCase();
     const terms = query ? query.split(/\s+/) : [];
     const visible = entries.filter((e) => {
-      if (folder && e.folder !== folder) return false;
+      if (folder && groupOf(e) !== folder) return false;
       if (!terms.length) return true;
-      const hay = `${e.creator || ""} ${e.name} ${e.version || ""} ${e.folder}`.toLowerCase();
+      const hay = `${e.creator || ""} ${e.name} ${e.version || ""} ${groupOf(e)}`.toLowerCase();
       return terms.every((t) => hay.includes(t));
     });
 
@@ -280,8 +303,9 @@ function openBrowser(node) {
 
       const tail = document.createElement("div");
       tail.className = "wp-tail";
-      const version = entry.version ? `${entry.version} · ` : "";
-      tail.innerHTML = `${version}<b>${entry.folder || "—"}</b>`;
+      // Only claim a version when the filename actually carried one.
+      const version = entry.structured && entry.version ? `${entry.version} · ` : "";
+      tail.innerHTML = `${version}<b>${groupOf(entry)}</b>`;
       meta.appendChild(tail);
 
       if (entry.triggers?.length) {
@@ -314,7 +338,7 @@ function openBrowser(node) {
 
   function renderRail() {
     const counts = new Map();
-    for (const e of entries) counts.set(e.folder, (counts.get(e.folder) || 0) + 1);
+    for (const e of entries) counts.set(groupOf(e), (counts.get(groupOf(e)) || 0) + 1);
     const folders = [...counts.entries()].sort((a, b) => b[1] - a[1]);
 
     rail.replaceChildren();
@@ -350,10 +374,13 @@ function openBrowser(node) {
 
   search.addEventListener("input", render);
 
-  loadIndex()
-    .then((data) => {
+  Promise.all([loadIndex(), connectedBase(node)])
+    .then(([data, base]) => {
       entries = data;
-      if (folder && !entries.some((e) => e.folder === folder)) folder = null;
+      connected = base;
+      // Only pre-filter when the connected model's base is one we actually have
+      // LoRAs for; otherwise show everything rather than an empty grid.
+      folder = base && entries.some((e) => groupOf(e) === base) ? base : null;
       renderRail();
       render();
     })

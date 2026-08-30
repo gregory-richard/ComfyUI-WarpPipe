@@ -14,6 +14,16 @@ a portrait, dramatic lighting <lora:detail tweaker:0.8>
 
 Switching a LoRA becomes an edit to the text rather than a rewire.
 
+## Filenames it does not recognise
+
+A name shaped `creator - title - version (base)` is split into those parts for
+display. Any other name is left whole — it is shown as-is rather than guessed
+at, and nothing depends on the shape.
+
+What a LoRA is compatible with comes from its `.civitai.info` sidecar, not from
+its name or folder, so the library groups correctly whatever the files are
+called. Files without a sidecar fall back to grouping by folder.
+
 ## Naming a LoRA
 
 A tag does not need the full filename, but it does need enough to identify one
@@ -52,6 +62,15 @@ The prompt box colours what it finds, so the text says what it will do:
 
 A tag inside a note is coloured as a note, because that is what happens to it:
 it does not load.
+
+## Where the LoRAs live
+
+Picking a LoRA adds it to the list under the prompt, not into the prompt text.
+The prompt stays prose; the list is what the rows show and what gets applied.
+
+Tags typed straight into the prompt still work and are applied too, so an older
+workflow keeps running. If both name the same LoRA, the list wins, since that is
+what the rows are showing you.
 
 ## Adding a LoRA without typing its name
 

@@ -1370,6 +1370,10 @@ class WarpLoraPrompt:
                 ),
             },
             "optional": {
+                # Written by the node's interface rather than by hand: keeping
+                # the LoRA list out of the prompt means the prompt stays prose.
+                # Tags typed directly into the prompt still work.
+                "loras": ("STRING", {"default": "", "multiline": False}),
                 "model": ("MODEL", {}),
                 "clip": ("CLIP", {}),
                 "warp": ("WARPPIPE", {}),
@@ -1386,7 +1390,9 @@ class WarpLoraPrompt:
     def IS_CHANGED(cls, **kwargs) -> str:
         return _fingerprint_inputs(kwargs)
 
-    def plan(self, text: str, strict: bool = False) -> tuple[list[dict[str, Any]], list[str]]:
+    def plan(
+        self, text: str, strict: bool = False, loras: str = ""
+    ) -> tuple[list[dict[str, Any]], list[str]]:
         """Work out which LoRAs a prompt asks for, without loading anything.
 
         Returns the resolved LoRAs and any trigger words they declare, so the
@@ -1395,8 +1401,14 @@ class WarpLoraPrompt:
         candidates = available_loras()
         resolved: list[dict[str, Any]] = []
         trigger_words: list[str] = []
+        seen: set[str] = set()
 
-        for query, weight in extract_lora_tags(text):
+        # The list the interface maintains, then any tags typed into the prompt.
+        wanted = extract_lora_tags(loras) + extract_lora_tags(text)
+        for query, weight in wanted:
+            if query.lower() in seen:
+                continue
+            seen.add(query.lower())
             name = resolve_lora_name(query, candidates, strict=strict)
             if name is None:
                 continue
@@ -1422,13 +1434,16 @@ class WarpLoraPrompt:
         text: str = "",
         insert_trigger_words: bool = False,
         apply_to_clip: bool = True,
+        loras: str = "",
         model: Optional[Any] = None,
         clip: Optional[Any] = None,
         warp: Optional[dict[str, Any]] = None,
     ) -> tuple:
         # A tag that cannot be resolved fails the run: generating without a
         # LoRA the prompt asked for produces a wrong image and wrong metadata.
-        resolved, trigger_words = self.plan(strip_comments(text), strict=True)
+        resolved, trigger_words = self.plan(
+            strip_comments(text), strict=True, loras=strip_comments(loras)
+        )
 
         prompt = clean_prompt(text)
         if insert_trigger_words and trigger_words:
@@ -1593,6 +1608,35 @@ def parse_lora_filename(name: str) -> dict[str, Optional[str]]:
     }
 
 
+def normalise_base_model(value: Optional[str]) -> Optional[str]:
+    """Tidy Civitai's base-model spellings without merging distinct ones.
+
+    The same base is written several ways ("Flux.2 Klein 9B" and
+    "Flux.2 Klein 9B-base"), but neighbouring names are genuinely different
+    models, so only trivial variants are folded together - never whole families.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    cleaned = re.sub(r"\s+", " ", value.strip())
+    cleaned = re.sub(r"[-\s]*base$", "", cleaned, flags=re.I)
+    return cleaned or None
+
+
+def base_model_of(file_path: Optional[str]) -> Optional[str]:
+    """The base model a file declares in its sidecar, if it has one."""
+    payload = read_civitai_sidecar(file_path) if file_path else None
+    return normalise_base_model(_sidecar_base_model(payload))
+
+
+def find_model_path(name: str) -> Optional[str]:
+    """Locate a model by name across the folders different loaders use."""
+    for folder in ("loras", "checkpoints", "diffusion_models", "unet", "embeddings"):
+        path = _resolve_model_path(folder, name)
+        if path:
+            return path
+    return None
+
+
 def lora_preview_path(model_path: Optional[str]) -> Optional[str]:
     """The preview image sitting beside a model file, if there is one."""
     if not model_path:
@@ -1696,7 +1740,12 @@ def model_index(folder_key: str = "loras") -> list[dict[str, Any]]:
                 "version": parsed["version"],
                 # What the filename claims, and what Civitai recorded.
                 "tagged_base": parsed["tagged_base"],
-                "base_model": _sidecar_base_model(payload),
+                "base_model": normalise_base_model(_sidecar_base_model(payload)),
+                # True when the filename actually followed a
+                # "creator - name - version" shape. Anything else keeps its
+                # whole stem as the name, and callers should not pretend
+                # otherwise.
+                "structured": parsed["creator"] is not None,
                 "triggers": civitai_trigger_words(path) if path else [],
                 "has_preview": has_preview,
                 # The server owns URL construction; the client just uses it.
@@ -1734,6 +1783,15 @@ def _register_routes() -> None:
     @routes.get("/warppipe/embeddings")
     async def _embeddings(request):
         return web.json_response({"embeddings": embedding_index()})
+
+    @routes.get("/warppipe/model/base")
+    async def _model_base(request):
+        """The base model of an arbitrary model file, for matching LoRAs to it."""
+        name = request.query.get("name", "")
+        path = find_model_path(name)
+        return web.json_response(
+            {"name": name, "base_model": base_model_of(path), "found": bool(path)}
+        )
 
     @routes.get("/warppipe/lora/thumbnail")
     async def _thumbnail(request):

@@ -10,6 +10,7 @@ import { app } from "../../scripts/app.js";
 
 const NODE_ID = "Warp Lora Prompt";
 const TEXT_WIDGET = "text";
+const LIST_WIDGET = "loras";
 
 const TAG_RE = /<lora:([^:>]+):(-?[0-9]*\.?[0-9]+)([^>]*)>/gi;
 const COMMENT_RE = /\/\/[^\n]*/g;
@@ -17,6 +18,7 @@ const EMBED_RE = /\bembedding:([^\s,]+)/gi;
 
 const FRIENDLY_LABELS = {
   text: "Prompt",
+  loras: "LoRAs",
   insert_trigger_words: "Trigger words",
   apply_to_clip: "Apply to",
 };
@@ -223,7 +225,11 @@ function light(textarea) {
   layer.className = "wpe-hl";
   layer.setAttribute("aria-hidden", "true");
   holder.insertBefore(layer, textarea);
+  // Read the ink colour before hiding it, or the caret inherits the
+  // transparency and there is nothing left to show where you are typing.
+  const ink = getComputedStyle(textarea).color;
   textarea.classList.add("wpe-live", "is-lit");
+  textarea.style.caretColor = ink;
   textarea._wpeLayer = layer;
 
   let known = null;
@@ -241,8 +247,6 @@ function light(textarea) {
     layer.style.top = `${textarea.offsetTop}px`;
     layer.style.width = `${textarea.offsetWidth}px`;
     layer.style.height = `${textarea.offsetHeight}px`;
-    // The ink is transparent, so the caret needs its colour back.
-    textarea.style.caretColor = cs.color;
     // ComfyUI hides the textarea at low zoom; the layer follows it.
     layer.style.display = cs.display === "none" ? "none" : "";
   };
@@ -283,7 +287,7 @@ function light(textarea) {
 
 // --- the picker ------------------------------------------------------------
 
-function openPicker(node, el, commit) {
+function openPicker(node, el, list, commit) {
   if (!el || el._wpeMenu) return;
 
   const menu = document.createElement("div");
@@ -309,14 +313,27 @@ function openPicker(node, el, commit) {
 
   const choose = (entry) => {
     const text = el.value || "";
-    const snippet =
-      entry.kind === "embeddings"
-        ? `embedding:${stemOf(entry.id)}`
-        : `<lora:${stemOf(entry.id)}:1.0>`;
-    const next = text.slice(0, slashAt) + snippet + text.slice(el.selectionStart);
-    el.value = next;
-    const caret = slashAt + snippet.length;
-    el.setSelectionRange(caret, caret);
+    // The slash and whatever was typed after it are removed either way; a LoRA
+    // then joins the list below rather than cluttering the prompt, while an
+    // embedding is part of the prompt and stays in it.
+    const before = text.slice(0, slashAt);
+    const after = text.slice(el.selectionStart);
+    if (entry.kind === "embeddings") {
+      const snippet = `embedding:${stemOf(entry.id)}`;
+      el.value = before + snippet + after;
+      const caret = slashAt + snippet.length;
+      el.setSelectionRange(caret, caret);
+    } else if (list.separate) {
+      el.value = before + after;
+      el.setSelectionRange(slashAt, slashAt);
+      list.add(stemOf(entry.id));
+    } else {
+      const snippet = `<lora:${stemOf(entry.id)}:1.0>`;
+      el.value = before + snippet + after;
+      const caret = slashAt + snippet.length;
+      el.setSelectionRange(caret, caret);
+    }
+    el.dispatchEvent(new Event("input", { bubbles: true }));
     el.focus();
     commit();
     close();
@@ -418,21 +435,13 @@ function openPicker(node, el, commit) {
 
 // --- rows ------------------------------------------------------------------
 
-function buildRows(node, getEl, host, commit) {
+function buildRows(node, list, host, commit) {
   let generation = 0;
-
-  const setText = (value) => {
-    const el = getEl();
-    if (!el) return;
-    el.value = value;
-    // Vue owns this input; an input event is how the widget value follows.
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    commit();
-  };
+  const setText = (value) => list.set(value);
 
   const render = async () => {
     const mine = ++generation;
-    const tags = parseTags(getEl()?.value || "");
+    const tags = parseTags(list.get());
     host.replaceChildren();
 
     if (!tags.length) {
@@ -465,8 +474,13 @@ function buildRows(node, getEl, host, commit) {
       const name = document.createElement("div");
       name.className = "wpc-name";
       name.title = tag.name;
-      if (entry) name.innerHTML = `${escapeHTML(entry.name)} <small>${escapeHTML(entry.version || "")}</small>`;
-      else name.textContent = tag.name;
+      if (entry) {
+        // Only claim a version when the filename really carried one.
+        const detail = entry.structured && entry.version ? entry.version : "";
+        name.innerHTML = `${escapeHTML(entry.name)} <small>${escapeHTML(detail)}</small>`;
+      } else {
+        name.textContent = tag.name;
+      }
       row.appendChild(name);
 
       if (entry?.triggers?.length) {
@@ -476,7 +490,7 @@ function buildRows(node, getEl, host, commit) {
         trig.textContent = `⊕${entry.triggers.length}`;
         trig.title = `Insert: ${entry.triggers.join(", ")}`;
         trig.addEventListener("click", () => {
-          const text = getEl()?.value || "";
+          const text = node._warppipeGetText?.() || "";
           const missing = entry.triggers.filter((w) => !text.toLowerCase().includes(w.toLowerCase()));
           if (missing.length) setText(`${text.trim()}, ${missing.join(", ")}`);
         });
@@ -484,7 +498,7 @@ function buildRows(node, getEl, host, commit) {
       }
 
       const rewrite = (i, replacement) => {
-        const current = getEl()?.value || "";
+        const current = list.get();
         const t = parseTags(current)[i];
         if (!t) return;
         setText(current.slice(0, t.start) + replacement + current.slice(t.start + t.raw.length));
@@ -514,11 +528,11 @@ function buildRows(node, getEl, host, commit) {
       row.appendChild(weight);
 
       const move = (delta) => {
-        const current = getEl()?.value || "";
-        const list = parseTags(current);
-        const other = list[index + delta];
+        const current = list.get();
+        const tagList = parseTags(current);
+        const other = tagList[index + delta];
         if (!other) return;
-        const [a, b] = delta > 0 ? [list[index], other] : [other, list[index]];
+        const [a, b] = delta > 0 ? [tagList[index], other] : [other, tagList[index]];
         let next = current;
         next = next.slice(0, b.start) + a.raw + next.slice(b.start + b.raw.length);
         next = next.slice(0, a.start) + b.raw + next.slice(a.start + a.raw.length);
@@ -568,6 +582,54 @@ app.registerExtension({
       if (FRIENDLY_LABELS[widget.name]) widget.label = FRIENDLY_LABELS[widget.name];
     }
     if (!(node.widgets || []).some((w) => w.name === TEXT_WIDGET)) return;
+    // Absent on an older backend. Everything still works; the LoRA list just
+    // lives in the prompt text, as it used to.
+    const listWidget = (node.widgets || []).find((w) => w.name === LIST_WIDGET);
+
+    // The list is written by the rows below, so its own field is noise. This
+    // frontend ignores widget.hidden, so the row is hidden in the document
+    // instead; if that ever stops working the field reappears, which is untidy
+    // rather than broken.
+    const hideListRow = () => {
+      if (!listWidget) return;
+      const root = document.querySelector(`[data-node-id="${node.id}"]`);
+      if (!root) return;
+      for (const row of root.querySelectorAll("[node-id]")) {
+        if (row.textContent.trim().startsWith("LoRAs")) row.style.display = "none";
+      }
+    };
+
+    let lit = null;
+    const getEl = () => lit?.textarea ?? findTextarea(node);
+
+    const writeText = (value) => {
+      const el = getEl();
+      if (!el) return;
+      el.value = value;
+      // Vue owns this input; an input event is how the widget value follows.
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+
+    const list = listWidget
+      ? {
+          separate: true,
+          get: () => listWidget.value || "",
+          set: (value) => {
+            listWidget.value = value;
+            node.setDirtyCanvas?.(true, true);
+          },
+        }
+      : {
+          separate: false,
+          get: () => getEl()?.value || "",
+          set: writeText,
+        };
+    list.add = (stem) => {
+      const current = list.get().trim();
+      if (current.toLowerCase().includes(`<lora:${stem.toLowerCase()}:`)) return;
+      const tag = `<lora:${stem}:1.0>`;
+      list.set(current ? `${current} ${tag}` : tag);
+    };
 
     const host = document.createElement("div");
     host.className = "wpc";
@@ -581,14 +643,12 @@ app.registerExtension({
       rowsWidget.computeSize = () => [node.size[0], 92];
     }
 
-    let lit = null;
-    const getEl = () => lit?.textarea ?? findTextarea(node);
-
     const refreshVocabulary = async () => {
       const entries = await library();
       const byStem = new Map(entries.map((e) => [stemOf(e.id).toLowerCase(), e]));
       const words = new Set();
-      for (const tag of parseTags(getEl()?.value || "")) {
+      // Trigger words come from the list as well as anything typed inline.
+      for (const tag of [...parseTags(list.get()), ...parseTags(getEl()?.value || "")]) {
         for (const w of byStem.get(tag.name.toLowerCase())?.triggers || []) words.add(w);
       }
       lit?.setVocabulary(new Set(byStem.keys()), [...words]);
@@ -599,20 +659,20 @@ app.registerExtension({
       lit?.paint();
       renderRows();
       refreshVocabulary();
+      hideListRow();
       node.setDirtyCanvas?.(true, true);
     };
-    renderRows = buildRows(node, getEl, host, commit);
+    renderRows = buildRows(node, list, host, commit);
 
     const wire = (el) => {
       lit = light(el);
       el.addEventListener("input", commit);
       el.addEventListener("keydown", (e) => {
-        if (e.key === "/") setTimeout(() => openPicker(node, el, commit), 0);
+        if (e.key === "/") setTimeout(() => openPicker(node, el, list, commit), 0);
       });
       commit();
     };
 
-    // The widget is Vue-rendered: wait for it, and re-attach if it is replaced.
     const ensure = () => {
       const el = findTextarea(node);
       if (el && !el._wpeLayer) {
@@ -621,6 +681,7 @@ app.registerExtension({
       } else if (el && lit) {
         lit.measure();
       }
+      hideListRow();
       return !!el;
     };
 
@@ -637,6 +698,10 @@ app.registerExtension({
       if (!el) return;
       el.value = value;
       el.dispatchEvent(new Event("input", { bubbles: true }));
+      commit();
+    };
+    node._warppipeAddLora = (stem) => {
+      list.add(stem);
       commit();
     };
     node._warppipeRefresh = commit;

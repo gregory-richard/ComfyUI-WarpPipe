@@ -810,3 +810,68 @@ def test_embeddings_are_indexed_like_loras(warp_pipe, monkeypatch, tmp_path):
     assert entries[0]["kind"] == "embeddings"
     assert entries[0]["creator"] == "creator"
     assert entries[0]["name"] == "lazy neg"
+
+
+# ---------------------------------------------------------------------------
+# Portability: other people name their files differently
+# ---------------------------------------------------------------------------
+
+
+def test_base_model_normalisation_folds_only_trivial_variants(warp_pipe):
+    assert warp_pipe.normalise_base_model("Flux.2 Klein 9B-base") == "Flux.2 Klein 9B"
+    assert warp_pipe.normalise_base_model("  Krea 2 ") == "Krea 2"
+    # Neighbouring names are genuinely different models and must stay apart.
+    assert warp_pipe.normalise_base_model("Flux.2 Klein 4B") != warp_pipe.normalise_base_model(
+        "Flux.2 Klein 9B"
+    )
+    assert warp_pipe.normalise_base_model(None) is None
+    assert warp_pipe.normalise_base_model("") is None
+
+
+def test_a_filename_without_the_convention_keeps_its_whole_name(warp_pipe):
+    for name in ["myLoRA.safetensors", "style/some_lora_v2.safetensors", "AAA_BBB-CCC.safetensors"]:
+        parsed = warp_pipe.parse_lora_filename(name)
+        assert parsed["creator"] is None
+        assert parsed["name"] == os.path.splitext(os.path.basename(name))[0]
+
+
+def test_index_says_whether_a_name_was_structured(warp_pipe, monkeypatch, tmp_path):
+    plain = tmp_path / "myLoRA.safetensors"
+    plain.write_bytes(b"w")
+    module = types.ModuleType("folder_paths")
+    module.get_filename_list = lambda kind: ["myLoRA.safetensors"] if kind == "loras" else []
+    module.get_full_path = lambda kind, name: str(plain) if kind == "loras" else None
+    monkeypatch.setitem(sys.modules, "folder_paths", module)
+
+    entry = warp_pipe.lora_index()[0]
+
+    assert entry["structured"] is False
+    assert entry["name"] == "myLoRA"
+
+
+def test_loras_input_is_applied_alongside_the_prompt(warp_pipe, lora_folder):
+    node = warp_pipe.WarpLoraPrompt()
+
+    resolved, _ = node.plan("a portrait", loras="<lora:detail tweaker:0.8>")
+
+    assert len(resolved) == 1
+    assert resolved[0]["weight"] == 0.8
+
+
+def test_the_prompt_is_unchanged_by_the_loras_input(warp_pipe, lora_folder):
+    _, _, prompt, _ = warp_pipe.WarpLoraPrompt().apply(
+        text="a photo in a kitchen", loras="<lora:detail tweaker:0.8>"
+    )
+
+    # The list lives beside the prompt, so the prompt stays prose.
+    assert prompt == "a photo in a kitchen"
+
+
+def test_a_lora_is_not_applied_twice_if_it_is_in_both(warp_pipe, lora_folder):
+    resolved, _ = warp_pipe.WarpLoraPrompt().plan(
+        "a portrait <lora:detail tweaker:0.5>", loras="<lora:detail tweaker:0.8>"
+    )
+
+    assert len(resolved) == 1
+    # The interface's list wins, since that is what the rows show.
+    assert resolved[0]["weight"] == 0.8
