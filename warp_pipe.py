@@ -1286,11 +1286,47 @@ def resolve_lora_name(
     return None
 
 
+# Everything from // to the end of the line is a note to yourself.
+_COMMENT_RE = re.compile(r"//[^\n]*")
+# Tidy-ups applied after removing tags and comments, in order.
+_TIDY = (
+    (re.compile(r"[ \t]+"), " "),  # runs of spaces
+    (re.compile(r"\s+([,.;:!?])"), r"\1"),  # space stranded before punctuation
+    (re.compile(r"(,\s*){2,}"), ", "),  # commas left adjacent by a removal
+    (re.compile(r"\n{3,}"), "\n\n"),  # more than one blank line
+    (re.compile(r"^[\s,]+|[\s,]+$"), ""),  # leading and trailing debris
+)
+
+
+def strip_comments(text: Optional[str]) -> str:
+    """Remove // notes. They are for the person writing the prompt, not the model."""
+    if not isinstance(text, str):
+        return ""
+    return _COMMENT_RE.sub("", text)
+
+
 def strip_lora_tags(text: Optional[str]) -> str:
     """Remove <lora:...> tags, leaving the prompt that should be encoded."""
     if not isinstance(text, str):
         return ""
-    return re.sub(r"\s{2,}", " ", _LORA_TAG_RE.sub("", text)).strip()
+    return _LORA_TAG_RE.sub("", text)
+
+
+def clean_prompt(text: Optional[str]) -> str:
+    """The prompt as the encoder should see it: no tags, no notes, no debris.
+
+    Removing a tag from the middle of a sentence leaves gaps behind it - a space
+    before a comma, or two commas in a row - so the text is tidied afterwards.
+    """
+    if not isinstance(text, str):
+        return ""
+    cleaned = strip_lora_tags(strip_comments(text))
+    # A line holding only a note, or only a tag, should not survive as a blank.
+    lines = [line.strip() for line in cleaned.splitlines()]
+    cleaned = "\n".join(line for line in lines if line)
+    for pattern, replacement in _TIDY:
+        cleaned = pattern.sub(replacement, cleaned)
+    return cleaned.strip()
 
 
 class WarpLoraPrompt:
@@ -1308,6 +1344,10 @@ class WarpLoraPrompt:
                         "multiline": True,
                         "default": "",
                         "placeholder": "a portrait, dramatic lighting <lora:detail tweaker:0.8>",
+                        "tooltip": (
+                            "The prompt. LoRAs go inline as <lora:name:weight>, and "
+                            "anything after // is a note that is not sent."
+                        ),
                     },
                 ),
                 "insert_trigger_words": (
@@ -1388,9 +1428,9 @@ class WarpLoraPrompt:
     ) -> tuple:
         # A tag that cannot be resolved fails the run: generating without a
         # LoRA the prompt asked for produces a wrong image and wrong metadata.
-        resolved, trigger_words = self.plan(text, strict=True)
+        resolved, trigger_words = self.plan(strip_comments(text), strict=True)
 
-        prompt = strip_lora_tags(text)
+        prompt = clean_prompt(text)
         if insert_trigger_words and trigger_words:
             missing = [w for w in trigger_words if w.lower() not in prompt.lower()]
             if missing:
@@ -1616,11 +1656,33 @@ def thumbnail_for(preview_path: str) -> Optional[str]:
     return cached
 
 
+def available_models(folder_key: str) -> list[str]:
+    try:
+        import folder_paths
+
+        return list(folder_paths.get_filename_list(folder_key))
+    except Exception:
+        return []
+
+
+def embedding_index() -> list[dict[str, Any]]:
+    """Embeddings, in the same shape as the LoRA index.
+
+    An embedding is used by writing embedding:name in the prompt, so "insert"
+    means something different, but everything the browser shows is the same.
+    """
+    return model_index("embeddings")
+
+
 def lora_index() -> list[dict[str, Any]]:
-    """Everything the browser needs to list the library, without any image data."""
+    return model_index("loras")
+
+
+def model_index(folder_key: str = "loras") -> list[dict[str, Any]]:
+    """Everything the browser needs to list a library, without any image data."""
     entries: list[dict[str, Any]] = []
-    for name in available_loras():
-        path = _resolve_model_path("loras", name)
+    for name in available_models(folder_key):
+        path = _resolve_model_path(folder_key, name)
         payload = read_civitai_sidecar(path) if path else None
         parsed = parse_lora_filename(name)
         has_preview = lora_preview_path(path) is not None
@@ -1638,8 +1700,12 @@ def lora_index() -> list[dict[str, Any]]:
                 "triggers": civitai_trigger_words(path) if path else [],
                 "has_preview": has_preview,
                 # The server owns URL construction; the client just uses it.
+                "kind": folder_key,
                 "thumbnail": (
-                    "/warppipe/lora/thumbnail?name=" + urllib.parse.quote(name)
+                    "/warppipe/lora/thumbnail?name="
+                    + urllib.parse.quote(name)
+                    + "&kind="
+                    + urllib.parse.quote(folder_key)
                     if has_preview
                     else None
                 ),
@@ -1665,12 +1731,19 @@ def _register_routes() -> None:
     async def _loras(request):
         return web.json_response({"loras": lora_index()})
 
+    @routes.get("/warppipe/embeddings")
+    async def _embeddings(request):
+        return web.json_response({"embeddings": embedding_index()})
+
     @routes.get("/warppipe/lora/thumbnail")
     async def _thumbnail(request):
         name = request.query.get("name", "")
+        kind = request.query.get("kind", "loras")
+        if kind not in {"loras", "embeddings"}:
+            return web.Response(status=400, text="unknown kind")
         # Resolving through folder_paths is what keeps this to configured
         # model folders; an arbitrary path can never be requested.
-        path = _resolve_model_path("loras", name)
+        path = _resolve_model_path(kind, name)
         preview = lora_preview_path(path)
         if not preview:
             return web.Response(status=404, text="no preview")

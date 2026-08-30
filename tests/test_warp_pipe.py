@@ -423,11 +423,13 @@ def test_ambiguous_or_unknown_tags_are_skipped(warp_pipe, caplog):
     assert warp_pipe.resolve_lora_name("", names) is None
 
 
-def test_strip_lora_tags_leaves_a_clean_prompt(warp_pipe):
+def test_strip_lora_tags_removes_only_the_tags(warp_pipe):
+    # strip_lora_tags is deliberately literal; clean_prompt does the tidying.
     text = "a portrait <lora:foo:0.8> in the rain <lora:bar:1>"
 
-    assert warp_pipe.strip_lora_tags(text) == "a portrait in the rain"
+    assert warp_pipe.strip_lora_tags(text) == "a portrait  in the rain "
     assert warp_pipe.strip_lora_tags(None) == ""
+    assert warp_pipe.clean_prompt(text) == "a portrait in the rain"
 
 
 def test_trigger_words_are_split_out_of_the_sidecar(warp_pipe, lora_folder):
@@ -751,3 +753,60 @@ def test_a_broken_image_does_not_break_the_listing(warp_pipe, tmp_path, monkeypa
     monkeypatch.setattr(warp_pipe, "_thumbnail_dir", lambda: str(cache))
 
     assert warp_pipe.thumbnail_for(str(preview)) is None
+
+
+# ---------------------------------------------------------------------------
+# Prompt text: notes and tags
+# ---------------------------------------------------------------------------
+
+
+def test_notes_after_a_double_slash_are_not_sent(warp_pipe):
+    assert warp_pipe.clean_prompt("cat // trying the warm one") == "cat"
+    assert warp_pipe.clean_prompt("cat, // note\n// another\ndog") == "cat,\ndog"
+    assert warp_pipe.clean_prompt("  // only a note  ") == ""
+
+
+def test_removing_a_tag_does_not_leave_debris(warp_pipe):
+    # The gap a removed tag leaves would otherwise show as " ," or a double comma.
+    assert warp_pipe.clean_prompt("a portrait <lora:x:0.8>, dramatic") == "a portrait, dramatic"
+    assert warp_pipe.clean_prompt("a, <lora:x:1> <lora:y:1> b") == "a, b"
+    assert warp_pipe.clean_prompt("<lora:only:1>") == ""
+
+
+def test_deliberate_line_breaks_survive(warp_pipe):
+    assert warp_pipe.clean_prompt("keep\nmy\nlines") == "keep\nmy\nlines"
+
+
+def test_a_tag_inside_a_note_is_not_loaded(warp_pipe, lora_folder):
+    # Commenting a LoRA out should stop it applying, not just hide it.
+    resolved, _ = warp_pipe.WarpLoraPrompt().plan(
+        warp_pipe.strip_comments("a portrait // <lora:detail tweaker:0.8>")
+    )
+
+    assert resolved == []
+
+
+def test_the_node_sends_the_cleaned_prompt(warp_pipe, lora_folder):
+    _, _, prompt, _ = warp_pipe.WarpLoraPrompt().apply(
+        text="a portrait <lora:detail tweaker:0.8>, lit // remember to try 0.6"
+    )
+
+    assert prompt == "a portrait, lit"
+
+
+def test_embeddings_are_indexed_like_loras(warp_pipe, monkeypatch, tmp_path):
+    embedding = tmp_path / "creator - lazy neg - v3 (ill).safetensors"
+    embedding.write_bytes(b"e")
+    module = types.ModuleType("folder_paths")
+    module.get_filename_list = lambda kind: (
+        [r"ill\creator - lazy neg - v3 (ill).safetensors"] if kind == "embeddings" else []
+    )
+    module.get_full_path = lambda kind, name: str(embedding) if kind == "embeddings" else None
+    monkeypatch.setitem(sys.modules, "folder_paths", module)
+
+    entries = warp_pipe.embedding_index()
+
+    assert len(entries) == 1
+    assert entries[0]["kind"] == "embeddings"
+    assert entries[0]["creator"] == "creator"
+    assert entries[0]["name"] == "lazy neg"

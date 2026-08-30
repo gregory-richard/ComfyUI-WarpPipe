@@ -38,6 +38,21 @@ message naming what it matched. That is deliberate: generating an image without
 a LoRA the prompt asked for gives you a wrong picture and wrong metadata, and a
 console warning is too easy to miss.
 
+## Notes
+
+Anything after `//` to the end of the line is a note for you, not for the model.
+It is removed before the prompt is encoded, so a line can be commented out to
+disable it — including a LoRA tag, which then does not load either.
+
+```
+a photo in a sunlit kitchen   // try 0.6 next time
+// <lora:detail tweaker:0.8>  <- parked for now
+```
+
+Removing a tag or a note leaves gaps behind it, so the prompt is tidied
+afterwards: no stranded spaces before commas, no doubled commas, no blank lines
+left where a note used to be.
+
 ## Trigger words
 
 With **insert_trigger_words** enabled, the node appends the trigger words each
