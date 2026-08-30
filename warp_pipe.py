@@ -1062,6 +1062,13 @@ def collect_graph_resources(
         if isinstance(name, str) and name and name.lower() != "none":
             loras.append((name, _as_float(inputs.get("strength_model"))))
 
+        # Nodes that take LoRAs as <lora:name:weight> in their text - this pack's
+        # Prompt + LoRAs node, and power-prompt nodes from other packs - keep the
+        # tags in a plain string input, so the graph still records what was used.
+        for value in inputs.values():
+            if isinstance(value, str) and "<lora:" in value.lower():
+                loras.extend(extract_lora_tags(value))
+
         # Stacked loaders keep one dict per slot, e.g. {"lora": ..., "on": ...}.
         for value in inputs.values():
             if not isinstance(value, dict):
@@ -1436,9 +1443,12 @@ class SaveImageCivitai:
             combined.extend((n, w) for n, w in tagged if n.lower() not in known)
 
             loras = []
+            candidates = available_loras()
             for name, weight in combined:
-                path = _resolve_model_path("loras", name)
-                loras.append((_lora_display_name(name), weight, model_autov2(path)))
+                # A tag may hold a fragment rather than a full filename.
+                resolved = resolve_lora_name(name, candidates) or name
+                path = _resolve_model_path("loras", resolved)
+                loras.append((_lora_display_name(resolved), weight, model_autov2(path)))
 
         checkpoint = model_name.strip() or graph_model
         checkpoint_hash = model_autov2(resolve_model_file(checkpoint))

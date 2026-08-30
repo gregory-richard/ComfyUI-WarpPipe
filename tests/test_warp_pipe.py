@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import pathlib
 import sys
 import time
 import types
@@ -490,3 +491,30 @@ def test_node_survives_a_tag_naming_a_missing_file(warp_pipe, lora_folder):
     assert prompt == "a portrait"
     assert warp_pipe.warp_storage[warp["id"]]["loras"] == []
     assert model is None and clip is None
+
+
+def test_lora_tags_in_text_are_found_without_a_warp(warp_pipe, lora_folder):
+    # The Prompt + LoRAs node keeps its tags in a text input, so the graph still
+    # records them even when its warp output is left unconnected.
+    graph = {
+        "5": {"class_type": "UNETLoader", "inputs": {"unet_name": "flux/krea2.safetensors"}},
+        "6": {
+            "class_type": "Warp Lora Prompt",
+            "inputs": {"model": ["5", 0], "text": "a portrait <lora:detail tweaker:0.8>"},
+        },
+        "7": {"class_type": "KSampler", "inputs": {"model": ["6", 0]}},
+        "9": {"class_type": "Save Image Civitai", "inputs": {"images": ["7", 0]}},
+    }
+
+    text = warp_pipe.SaveImageCivitai().build_metadata(warp=None, prompt=graph, unique_id="9")
+
+    assert "Model: krea2" in text
+    # The fragment in the tag is expanded to the real file, then hashed.
+    assert 'Lora hashes: "w4r10ck - detail tweaker (sdxl): abcdef0123"' in text
+
+
+def test_every_node_has_a_documentation_page():
+    docs = pathlib.Path(__file__).resolve().parents[1] / "web" / "docs"
+    documented = {path.stem for path in docs.glob("*.md")}
+
+    assert NODE_IDS <= documented
