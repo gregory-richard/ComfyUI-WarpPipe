@@ -38,6 +38,43 @@ message naming what it matched. That is deliberate: generating an image without
 a LoRA the prompt asked for gives you a wrong picture and wrong metadata, and a
 console warning is too easy to miss.
 
+## Colours in the prompt
+
+The prompt box colours what it finds, so the text says what it will do:
+
+| | |
+| --- | --- |
+| cyan | a LoRA tag that matches a file |
+| red, underlined | a tag matching nothing — check the spelling |
+| amber | an embedding |
+| green | a trigger word belonging to one of the LoRAs in use |
+| grey italic | a note, which is not sent |
+
+A tag inside a note is coloured as a note, because that is what happens to it:
+it does not load.
+
+## Adding a LoRA without typing its name
+
+Press **/** anywhere in the prompt for a picker of LoRAs and embeddings, with
+previews. Type to filter, arrow keys to move, Enter or click to insert. A LoRA
+is inserted as `<lora:name:1.0>`, an embedding as `embedding:name`.
+
+The **Browse LoRAs** button opens the full library instead, with a rail of model
+families.
+
+## The rows under the prompt
+
+Every tag in the prompt appears as a row: its preview, its name, and controls to
+
+- drag the weight, or type one
+- move it earlier or later
+- insert its trigger words
+- remove it
+
+The rows are a view of the text, not a second copy of it. Every control rewrites
+the tag in place, so what you type and what you click can never disagree. A row
+outlined in red names a file that does not exist.
+
 ## Notes
 
 Anything after `//` to the end of the line is a note for you, not for the model.

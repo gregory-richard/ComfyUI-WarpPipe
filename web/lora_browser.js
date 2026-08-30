@@ -161,6 +161,14 @@ function insertTag(node, entry) {
   const stem = entry.id.replace(/\\/g, "/").split("/").pop().replace(/\.[^.]+$/, "");
   const tag = `<lora:${stem}:1.0>`;
 
+  // The prompt editor owns the text when the extension is loaded.
+  if (typeof node._warppipeGetText === "function" && typeof node._warppipeSetText === "function") {
+    const current = node._warppipeGetText();
+    node._warppipeSetText(current ? `${current.trimEnd()} ${tag}` : tag);
+    node.setDirtyCanvas?.(true, true);
+    return;
+  }
+
   const el = widget.inputEl;
   const current = widget.value || "";
   if (el && typeof el.selectionStart === "number") {
