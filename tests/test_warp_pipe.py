@@ -1,10 +1,14 @@
 import asyncio
+import hashlib
 import inspect
+import json
 import time
 
 import pytest
 
-NODE_IDS = {"Warp", "Unwarp", "Warp Provider", "FD Scheduler Adapter", "Dead End"}
+V3_NODE_IDS = {"Warp", "Unwarp", "Warp Provider", "FD Scheduler Adapter", "Dead End"}
+# The Civitai save node is currently registered on the legacy path only.
+NODE_IDS = V3_NODE_IDS | {"Save Image Civitai"}
 
 
 def test_legacy_registration_and_node_contracts(warp_pipe):
@@ -135,7 +139,7 @@ def test_v3_entrypoint_schemas_and_execution(warp_pipe_loader):
     nodes = asyncio.run(extension.get_node_list())
     schemas = [node.GET_SCHEMA() for node in nodes]
 
-    assert {schema.node_id for schema in schemas} == NODE_IDS
+    assert {schema.node_id for schema in schemas} == V3_NODE_IDS
     combo_outputs = [
         output for schema in schemas for output in schema.outputs if output.io_type == "COMBO"
     ]
@@ -163,3 +167,148 @@ def test_package_exports_only_one_registration_path(package_loader, enable_v3):
             "NODE_DISPLAY_NAME_MAPPINGS",
             "WEB_DIRECTORY",
         }
+
+
+# ---------------------------------------------------------------------------
+# Civitai metadata
+# ---------------------------------------------------------------------------
+
+RGTHREE_GRAPH = {
+    "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sdxl/base.safetensors"}},
+    "2": {
+        "class_type": "LoraLoader",
+        "inputs": {"lora_name": "style/abstract.safetensors", "strength_model": 0.8},
+    },
+    "3": {
+        "class_type": "Power Lora Loader (rgthree)",
+        "inputs": {
+            "lora_1": {"lora": "detail.safetensors", "strength": 0.6, "on": True},
+            "lora_2": {"lora": "off.safetensors", "strength": 1.0, "on": False},
+            "lora_3": {"lora": "None", "strength": 1.0, "on": True},
+        },
+    },
+}
+
+
+def test_collect_graph_resources_reads_standard_and_stacked_loaders(warp_pipe):
+    checkpoint, loras = warp_pipe.collect_graph_resources(RGTHREE_GRAPH)
+
+    assert checkpoint == "sdxl/base.safetensors"
+    assert loras == [("style/abstract.safetensors", 0.8), ("detail.safetensors", 0.6)]
+
+
+def test_collect_graph_resources_tolerates_junk(warp_pipe):
+    assert warp_pipe.collect_graph_resources(None) == (None, [])
+    assert warp_pipe.collect_graph_resources({"a": "not-a-node"}) == (None, [])
+    assert warp_pipe.collect_graph_resources({"a": {"class_type": "X"}}) == (None, [])
+
+
+def test_extract_lora_tags(warp_pipe):
+    tags = warp_pipe.extract_lora_tags("a cat <lora:foo:0.5> and <lora:bar:1.2>")
+
+    assert tags == [("foo", 0.5), ("bar", 1.2)]
+    assert warp_pipe.extract_lora_tags(None) == []
+    assert warp_pipe.extract_lora_tags("no tags here") == []
+
+
+def test_build_parameters_matches_a1111_shape(warp_pipe):
+    text = warp_pipe.build_civitai_parameters(
+        positive="a portrait",
+        negative="blurry",
+        steps=30,
+        sampler_name="dpmpp_2m",
+        scheduler="karras",
+        cfg=7.0,
+        seed=123,
+        width=1024,
+        height=768,
+        model_name="sdxl/base.safetensors",
+        model_hash="67ab2fd8ec",
+        loras=[("AbstractPainting", 0.8, "df7c757437")],
+    )
+    lines = text.split("\n")
+
+    assert lines[0] == "a portrait <lora:AbstractPainting:0.8>"
+    assert lines[1] == "Negative prompt: blurry"
+    assert "Steps: 30" in lines[2]
+    assert "Schedule type: karras" in lines[2]
+    assert "Size: 1024x768" in lines[2]
+    assert "Model hash: 67ab2fd8ec" in lines[2]
+    assert "Model: base" in lines[2]
+    assert 'Lora hashes: "AbstractPainting: df7c757437"' in lines[2]
+
+
+def test_build_parameters_does_not_duplicate_existing_tags(warp_pipe):
+    text = warp_pipe.build_civitai_parameters(
+        positive="a cat <lora:foo:0.5>",
+        loras=[("foo", 0.5, "aaaaaaaaaa")],
+    )
+
+    assert text.split("\n")[0].count("<lora:foo") == 1
+
+
+def test_build_parameters_omits_missing_fields(warp_pipe):
+    text = warp_pipe.build_civitai_parameters(positive="just a prompt")
+
+    assert "Negative prompt:" not in text
+    assert "Lora hashes" not in text
+    assert "Steps:" not in text
+
+
+def test_sidecar_hash_is_preferred_over_rehashing(warp_pipe, tmp_path):
+    model = tmp_path / "some_lora.safetensors"
+    model.write_bytes(b"pretend weights")
+    sidecar = tmp_path / "some_lora.civitai.info"
+    sidecar.write_text(
+        json.dumps({"files": [{"hashes": {"SHA256": "DF7C757437EF3696E76EE5CC18C06368"}}]}),
+        encoding="utf-8",
+    )
+
+    # Ten characters, lowercased - the AutoV2 form Civitai indexes on.
+    assert warp_pipe.model_autov2(str(model)) == "df7c757437"
+
+
+def test_falls_back_to_hashing_when_no_sidecar(warp_pipe, tmp_path):
+    model = tmp_path / "bare.safetensors"
+    model.write_bytes(b"pretend weights")
+
+    expected = hashlib.sha256(b"pretend weights").hexdigest()[:10]
+    assert warp_pipe.model_autov2(str(model)) == expected
+
+
+def test_missing_file_hashes_to_none(warp_pipe, tmp_path):
+    assert warp_pipe.model_autov2(str(tmp_path / "nope.safetensors")) is None
+    assert warp_pipe.model_autov2(None) is None
+
+
+def test_save_node_contract(warp_pipe):
+    node = warp_pipe.NODE_CLASS_MAPPINGS["Save Image Civitai"]
+
+    assert node.OUTPUT_NODE is True
+    assert node.RETURN_TYPES == ()
+    hidden = node.INPUT_TYPES()["hidden"]
+    assert hidden["prompt"] == "PROMPT"
+    assert hidden["extra_pnginfo"] == "EXTRA_PNGINFO"
+
+
+def test_build_metadata_combines_warp_values_and_graph(warp_pipe):
+    warp = warp_pipe.Warp().warp(
+        prompt_positive="a portrait",
+        prompt_negative="blurry",
+        seed=123,
+        steps_1=30,
+        cfg=7.0,
+        width=1024,
+        height=768,
+    )[0]
+
+    text = warp_pipe.SaveImageCivitai().build_metadata(warp=warp, prompt=RGTHREE_GRAPH)
+
+    assert text.startswith("a portrait")
+    assert "Negative prompt: blurry" in text
+    assert "Steps: 30" in text
+    assert "Seed: 123" in text
+    assert "Size: 1024x768" in text
+    # Names come through even when the files are absent and cannot be hashed.
+    assert "<lora:abstract:0.8>" in text
+    assert "<lora:detail:0.6>" in text

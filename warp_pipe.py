@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import os
 import re
@@ -804,6 +805,429 @@ class DeadEnd:
         return ()
 
 
+# ---------------------------------------------------------------------------
+# Civitai-compatible image saving
+#
+# Civitai identifies a checkpoint or LoRA by a hash of the file, not by its
+# name: AutoV2 is the first 10 hex characters of the file's SHA256. It reads
+# those hashes out of an A1111-style "parameters" text chunk, which is a
+# different dialect from ComfyUI's own "prompt"/"workflow" chunks. Writing both
+# lets one PNG satisfy Civitai and still reopen as a workflow.
+# ---------------------------------------------------------------------------
+
+CIVITAI_INFO_SUFFIX = ".civitai.info"
+AUTOV2_LENGTH = 10
+
+# Matches an A1111 LoRA tag: <lora:name:0.8>, tolerating a trailing clip weight.
+_LORA_TAG_RE = re.compile(r"<lora:([^:>]+):(-?[0-9]*\.?[0-9]+)[^>]*>", re.IGNORECASE)
+
+_hash_cache: dict[str, str] = {}
+_hash_cache_lock = threading.Lock()
+_hash_cache_loaded = False
+
+
+def _hash_cache_path() -> Optional[str]:
+    """Writable location for the hash cache, or None when running outside ComfyUI."""
+    try:
+        import folder_paths
+    except ImportError:
+        return None
+
+    for getter in ("get_user_directory", "get_output_directory", "get_temp_directory"):
+        resolve = getattr(folder_paths, getter, None)
+        if not callable(resolve):
+            continue
+        try:
+            base = resolve()
+        except Exception:
+            continue
+        if base and os.path.isdir(base):
+            return os.path.join(base, "warppipe_hashes.json")
+    return None
+
+
+def _load_hash_cache() -> None:
+    global _hash_cache_loaded
+    if _hash_cache_loaded:
+        return
+    _hash_cache_loaded = True
+
+    path = _hash_cache_path()
+    if not path or not os.path.isfile(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as handle:
+            stored = json.load(handle)
+        if isinstance(stored, dict):
+            _hash_cache.update({k: v for k, v in stored.items() if isinstance(v, str)})
+    except (OSError, ValueError) as exc:
+        logger.debug("Could not read hash cache: %s", exc)
+
+
+def _persist_hash_cache() -> None:
+    path = _hash_cache_path()
+    if not path:
+        return
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(_hash_cache, handle)
+    except OSError as exc:
+        logger.debug("Could not write hash cache: %s", exc)
+
+
+def _cache_key(file_path: str) -> Optional[str]:
+    """Identify a file by path, size and mtime so a replaced file re-hashes."""
+    try:
+        stat = os.stat(file_path)
+    except OSError:
+        return None
+    return f"{os.path.abspath(file_path)}|{stat.st_size}|{int(stat.st_mtime)}"
+
+
+def sha256_file(file_path: str, chunk_size: int = 1024 * 1024) -> Optional[str]:
+    """SHA256 of a file, cached on disk. Returns None if the file cannot be read."""
+    key = _cache_key(file_path)
+    if key is None:
+        return None
+
+    with _hash_cache_lock:
+        _load_hash_cache()
+        cached = _hash_cache.get(key)
+    if cached:
+        return cached
+
+    digest = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(chunk_size), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        logger.warning("Could not hash %s: %s", file_path, exc)
+        return None
+
+    value = digest.hexdigest()
+    with _hash_cache_lock:
+        _hash_cache[key] = value
+        _persist_hash_cache()
+    return value
+
+
+def read_civitai_sidecar(file_path: str) -> Optional[dict[str, Any]]:
+    """Read the .civitai.info sidecar written by Civitai Updater and similar tools."""
+    base, _ = os.path.splitext(file_path)
+    sidecar = base + CIVITAI_INFO_SUFFIX
+    if not os.path.isfile(sidecar):
+        return None
+    try:
+        with open(sidecar, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError) as exc:
+        logger.debug("Could not read sidecar %s: %s", sidecar, exc)
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _sha256_from_sidecar(payload: dict[str, Any]) -> Optional[str]:
+    for entry in payload.get("files") or ():
+        if not isinstance(entry, dict):
+            continue
+        hashes = entry.get("hashes")
+        if isinstance(hashes, dict):
+            value = hashes.get("SHA256") or hashes.get("sha256")
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def model_autov2(file_path: Optional[str]) -> Optional[str]:
+    """AutoV2 for a model file: the sidecar's SHA256 when present, else hash it."""
+    if not file_path:
+        return None
+
+    payload = read_civitai_sidecar(file_path)
+    if payload:
+        sha = _sha256_from_sidecar(payload)
+        if sha:
+            return sha[:AUTOV2_LENGTH].lower()
+
+    sha = sha256_file(file_path)
+    return sha[:AUTOV2_LENGTH].lower() if sha else None
+
+
+def _resolve_model_path(folder: str, name: Optional[str]) -> Optional[str]:
+    if not name:
+        return None
+    try:
+        import folder_paths
+    except ImportError:
+        return None
+    try:
+        return folder_paths.get_full_path(folder, name)
+    except Exception as exc:
+        logger.debug("Could not resolve %s/%s: %s", folder, name, exc)
+        return None
+
+
+def _as_float(value: Any, default: float = 1.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def extract_lora_tags(text: Optional[str]) -> list[tuple[str, float]]:
+    """Pull <lora:name:weight> tags out of prompt text."""
+    if not isinstance(text, str):
+        return []
+    return [(m.group(1).strip(), _as_float(m.group(2))) for m in _LORA_TAG_RE.finditer(text)]
+
+
+def collect_graph_resources(
+    prompt_graph: Optional[dict[str, Any]],
+) -> tuple[Optional[str], list[tuple[str, float]]]:
+    """Find the checkpoint and LoRAs used, from the executing prompt graph.
+
+    Handles ComfyUI's own loaders and the stacked widget format used by
+    rgthree's Power Lora Loader, where each slot is a dict on the node's inputs.
+    """
+    checkpoint: Optional[str] = None
+    loras: list[tuple[str, float]] = []
+
+    if not isinstance(prompt_graph, dict):
+        return checkpoint, loras
+
+    for node in prompt_graph.values():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "")
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+
+        if checkpoint is None and "CheckpointLoader" in class_type:
+            name = inputs.get("ckpt_name")
+            if isinstance(name, str) and name:
+                checkpoint = name
+
+        if "LoraLoader" in class_type:
+            name = inputs.get("lora_name")
+            if isinstance(name, str) and name:
+                loras.append((name, _as_float(inputs.get("strength_model"))))
+
+        # Stacked loaders keep one dict per slot, e.g. {"lora": ..., "on": ...}.
+        for value in inputs.values():
+            if not isinstance(value, dict):
+                continue
+            name = value.get("lora")
+            if not isinstance(name, str) or not name or name.lower() == "none":
+                continue
+            if value.get("on") is False:
+                continue
+            loras.append((name, _as_float(value.get("strength"))))
+
+    deduped: list[tuple[str, float]] = []
+    seen: set[str] = set()
+    for name, weight in loras:
+        if name not in seen:
+            seen.add(name)
+            deduped.append((name, weight))
+    return checkpoint, deduped
+
+
+def _lora_display_name(name: str) -> str:
+    """Civitai shows the bare filename, without folders or extension."""
+    return os.path.splitext(os.path.basename(name))[0]
+
+
+def build_civitai_parameters(
+    positive: str = "",
+    negative: str = "",
+    steps: Optional[int] = None,
+    sampler_name: Optional[str] = None,
+    scheduler: Optional[str] = None,
+    cfg: Optional[float] = None,
+    seed: Optional[int] = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    model_name: Optional[str] = None,
+    model_hash: Optional[str] = None,
+    loras: Optional[list[tuple[str, float, Optional[str]]]] = None,
+) -> str:
+    """Assemble the A1111-style parameters block that Civitai parses."""
+    loras = loras or []
+    positive = positive or ""
+
+    # A1111 carries LoRAs as tags in the prompt. Only add ones not already there,
+    # so prompts that already use tag syntax are not duplicated.
+    existing = {name.lower() for name, _ in extract_lora_tags(positive)}
+    additions = [
+        f"<lora:{display}:{weight:g}>"
+        for display, weight, _ in loras
+        if display.lower() not in existing
+    ]
+    if additions:
+        positive = " ".join([positive.strip(), *additions]).strip()
+
+    fields: list[tuple[str, Any]] = [
+        ("Steps", steps),
+        ("Sampler", sampler_name),
+        ("Schedule type", scheduler),
+        ("CFG scale", cfg),
+        ("Seed", seed),
+        ("Size", f"{width}x{height}" if width and height else None),
+        ("Model hash", model_hash),
+        ("Model", os.path.splitext(os.path.basename(model_name))[0] if model_name else None),
+    ]
+
+    hashed = [(display, sha) for display, _, sha in loras if sha]
+    if hashed:
+        pairs = ", ".join(f"{display}: {sha}" for display, sha in hashed)
+        fields.append(("Lora hashes", '"' + pairs + '"'))
+
+    fields.append(("Version", "ComfyUI-WarpPipe"))
+
+    rendered = ", ".join(f"{key}: {value}" for key, value in fields if value not in (None, ""))
+
+    lines = [positive]
+    if negative:
+        lines.append("Negative prompt: " + negative)
+    lines.append(rendered)
+    return "\n".join(lines)
+
+
+class SaveImageCivitai:
+    CATEGORY = "Custom/WarpPipe Nodes"
+    FUNCTION = "save_images"
+    OUTPUT_NODE = True
+    RETURN_TYPES = ()
+    RETURN_NAMES = ()
+    DESCRIPTION = "Save images with Civitai-readable generation metadata"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE", {}),
+                "filename_prefix": ("STRING", {"default": "WarpPipe"}),
+                "embed_workflow": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "label_on": "workflow embedded",
+                        "label_off": "metadata only",
+                    },
+                ),
+            },
+            "optional": {
+                "warp": ("WARPPIPE", {}),
+                "model_name": ("STRING", {"default": "", "multiline": False}),
+            },
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+        }
+
+    def _warp_values(self, warp: Optional[dict[str, Any]]) -> dict[str, Any]:
+        if not isinstance(warp, dict) or "id" not in warp:
+            return {}
+        with _storage_lock:
+            stored = warp_storage.get(warp["id"])
+        return dict(stored) if isinstance(stored, dict) else {}
+
+    def build_metadata(
+        self,
+        warp: Optional[dict[str, Any]] = None,
+        prompt: Optional[dict[str, Any]] = None,
+        model_name: str = "",
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+    ) -> str:
+        """Resolve every resource and return the parameters block.
+
+        Kept separate from saving so it can be exercised without an image or a
+        filesystem.
+        """
+        values = self._warp_values(warp)
+        graph_checkpoint, graph_loras = collect_graph_resources(prompt)
+
+        positive = values.get("prompt_positive") or ""
+        negative = values.get("prompt_negative") or ""
+
+        # Tags already written into the prompt count as used LoRAs too.
+        tagged = extract_lora_tags(positive)
+        combined = list(graph_loras)
+        known = {name.lower() for name, _ in combined}
+        combined.extend((name, weight) for name, weight in tagged if name.lower() not in known)
+
+        loras: list[tuple[str, float, Optional[str]]] = []
+        for name, weight in combined:
+            path = _resolve_model_path("loras", name)
+            loras.append((_lora_display_name(name), weight, model_autov2(path)))
+
+        checkpoint = model_name.strip() or graph_checkpoint
+        checkpoint_hash = model_autov2(_resolve_model_path("checkpoints", checkpoint))
+
+        return build_civitai_parameters(
+            positive=positive,
+            negative=negative,
+            steps=values.get("steps_1"),
+            sampler_name=values.get("sampler_name"),
+            scheduler=values.get("scheduler"),
+            cfg=values.get("cfg"),
+            seed=values.get("seed"),
+            width=width or values.get("width"),
+            height=height or values.get("height"),
+            model_name=checkpoint,
+            model_hash=checkpoint_hash,
+            loras=loras,
+        )
+
+    def save_images(
+        self,
+        images,
+        filename_prefix: str = "WarpPipe",
+        embed_workflow: bool = True,
+        warp: Optional[dict[str, Any]] = None,
+        model_name: str = "",
+        prompt: Optional[dict[str, Any]] = None,
+        extra_pnginfo: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        import folder_paths
+        import numpy as np
+        from PIL import Image, PngImagePlugin
+
+        height = int(images[0].shape[0])
+        width = int(images[0].shape[1])
+        parameters = self.build_metadata(
+            warp=warp, prompt=prompt, model_name=model_name, width=width, height=height
+        )
+        logger.debug("Civitai parameters: %s", parameters)
+
+        full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
+            filename_prefix, folder_paths.get_output_directory(), width, height
+        )
+
+        results = []
+        for image in images:
+            array = np.clip(255.0 * image.cpu().numpy(), 0, 255).astype(np.uint8)
+            png_info = PngImagePlugin.PngInfo()
+            png_info.add_text("parameters", parameters)
+            if embed_workflow:
+                if prompt is not None:
+                    png_info.add_text("prompt", json.dumps(prompt))
+                for key, value in (extra_pnginfo or {}).items():
+                    png_info.add_text(key, json.dumps(value))
+
+            file_name = f"{filename}_{counter:05}_.png"
+            Image.fromarray(array).save(
+                os.path.join(full_output_folder, file_name),
+                pnginfo=png_info,
+                compress_level=4,
+            )
+            results.append({"filename": file_name, "subfolder": subfolder, "type": "output"})
+            counter += 1
+
+        return {"ui": {"images": results}}
+
+
 if ENABLE_V3_NODES:
     WARPPIPE_TYPE = io.Custom("WARPPIPE")
     ANY_TYPE = getattr(io, "AnyType", io.Custom("*"))
@@ -1074,6 +1498,7 @@ if not ENABLE_V3_NODES:
         "Warp Provider": WarpProvider,
         "FD Scheduler Adapter": FDSchedulerAdapter,
         "Dead End": DeadEnd,
+        "Save Image Civitai": SaveImageCivitai,
     }
 
     NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1082,6 +1507,7 @@ if not ENABLE_V3_NODES:
         "Warp Provider": "🌀 Warp Provider",
         "FD Scheduler Adapter": "🌀 Scheduler Adapter for FaceDetailer",
         "Dead End": "🚫 Dead End",
+        "Save Image Civitai": "🌀 Save Image (Civitai)",
     }
 
 # Optional: Web directory for custom UI files (if you add them later)

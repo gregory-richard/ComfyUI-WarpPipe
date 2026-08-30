@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Save Image (Civitai)** node: writes an A1111-style `parameters` block that Civitai parses, so uploaded images show their prompt, sampler settings and linked resources. Embedding the ComfyUI workflow stays optional via a toggle.
+- **Resource identification**: checkpoints and LoRAs are identified by AutoV2 hash (the first 10 characters of the file's SHA256). Hashes are read from `.civitai.info` sidecars when present and otherwise computed once and cached on disk.
+- **LoRA detection**: reads ComfyUI's own loaders, the stacked slot format used by rgthree's Power Lora Loader (skipping disabled slots), and `<lora:name:weight>` tags written into the prompt.
+
 ### Improved
 
 - **Reproducible CI toolchain**: Pinned `build`, `pytest`, and `ruff` so lint and test results depend on the repository rather than on when a build happens to run
