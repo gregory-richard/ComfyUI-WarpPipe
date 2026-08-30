@@ -1,3 +1,4 @@
+import difflib
 import hashlib
 import json
 import logging
@@ -1259,6 +1260,24 @@ def resolve_lora_name(
         )
     else:
         message = f"LoRA tag '{query}' matches no file in the loras folder."
+        # With hundreds of LoRAs installed a typo is the likeliest cause, so
+        # point at the nearest names rather than leaving a dead end.
+        # Compare against whole names and their dash-separated parts, so a typo
+        # in a short fragment ("fake breast slidr") still finds its file.
+        keys: dict[str, str] = {}
+        for name in names:
+            stem = os.path.splitext(os.path.basename(name))[0]
+            keys.setdefault(stem, stem)
+            for part in stem.split(" - "):
+                keys.setdefault(part.strip(), stem)
+        close = difflib.get_close_matches(query.strip(), list(keys), n=5, cutoff=0.7)
+        suggestions: list[str] = []
+        for key in close:
+            full = keys[key]
+            if full not in suggestions:
+                suggestions.append(full)
+        if suggestions:
+            message += " Did you mean: " + "; ".join(suggestions[:3]) + "?"
 
     if strict:
         raise LoraTagError(message)

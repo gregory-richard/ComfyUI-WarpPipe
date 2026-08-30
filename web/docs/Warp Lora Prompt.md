@@ -30,6 +30,9 @@ Matching is tried in this order, ignoring case and slash direction:
 
 Option 2 always works. Option 3 is usually the shortest thing worth typing.
 
+A tag that matches nothing suggests the nearest names, so a typo is a
+question rather than a dead end.
+
 **A tag that matches nothing, or matches several files, stops the run** with a
 message naming what it matched. That is deliberate: generating an image without
 a LoRA the prompt asked for gives you a wrong picture and wrong metadata, and a

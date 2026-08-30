@@ -559,3 +559,21 @@ def test_save_node_is_idle_when_nothing_is_connected(warp_pipe):
 
     assert warp_pipe.SaveImageCivitai().save_images(images=None) == {"ui": {"images": []}}
     assert warp_pipe.SaveImageCivitai().save_images(images=[]) == {"ui": {"images": []}}
+
+
+def test_a_typo_suggests_the_right_file(warp_pipe):
+    names = [
+        "krea2/loraholic - fake breast slider - v1 (krea2).safetensors",
+        "sdxl/w4r10ck - detail tweaker (sdxl).safetensors",
+    ]
+
+    with pytest.raises(warp_pipe.LoraTagError) as excinfo:
+        warp_pipe.resolve_lora_name(
+            "loraholic - fake brest slider - v1 (krea2)", names, strict=True
+        )
+    assert "loraholic - fake breast slider - v1 (krea2)" in str(excinfo.value)
+
+    # A typo in a short fragment is matched against the name's parts.
+    with pytest.raises(warp_pipe.LoraTagError) as excinfo:
+        warp_pipe.resolve_lora_name("detial tweaker", names, strict=True)
+    assert "detail tweaker" in str(excinfo.value)
