@@ -49,7 +49,25 @@ addopts = ["--import-mode=importlib"]
 target-version = "py39"
 line-length = 100
 
-# ComfyUI Registry metadata
+[tool.ruff.lint]
+# Rules are selected explicitly so lint results are a property of this repo
+# rather than of whichever ruff release CI happens to install.
+#
+# Deliberately NOT selected:
+#   FA  - would add `from __future__ import annotations`, turning every
+#         annotation into a string at runtime. ComfyUI's V3 schema machinery
+#         cannot be exercised locally, so the rewrite carries risk it does
+#         not repay.
+#   N   - naming rules. ComfyUI dictates both the method names (INPUT_TYPES,
+#         VALIDATE_INPUTS, IS_CHANGED) and the node-pack directory name, so
+#         these findings can never be acted on.
+select = ["E4", "E7", "E9", "F", "I", "RUF", "UP"]
+ignore = [
+    # Node display names intentionally use the spiral emoji and similar
+    # characters; ruff reads them as ambiguous unicode.
+    "RUF001",
+    "RUF003",
+]
 [tool.comfy]
 PublisherId = "gregrichrd"
 DisplayName = "WarpPipe Nodes"

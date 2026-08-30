@@ -5,7 +5,7 @@ import re
 import threading
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar, Optional
 
 logger = logging.getLogger("WarpPipe")
 
@@ -19,7 +19,7 @@ except ModuleNotFoundError as exc:
 
     # Complete-enough fallback for local linting and unit tests outside ComfyUI.
     class _MockKSampler:
-        SAMPLERS = [
+        SAMPLERS: ClassVar[list[str]] = [
             "euler",
             "euler_ancestral",
             "heun",
@@ -32,7 +32,7 @@ except ModuleNotFoundError as exc:
             "dpmpp_sde",
             "dpmpp_2m",
         ]
-        SCHEDULERS = [
+        SCHEDULERS: ClassVar[list[str]] = [
             "normal",
             "karras",
             "exponential",
@@ -43,8 +43,10 @@ except ModuleNotFoundError as exc:
 
     class _MockSamplers:
         KSampler = _MockKSampler
-        SCHEDULER_NAMES = _MockKSampler.SCHEDULERS.copy()
-        SCHEDULER_HANDLERS = {name: object() for name in _MockKSampler.SCHEDULERS}
+        SCHEDULER_NAMES: ClassVar[list[str]] = _MockKSampler.SCHEDULERS.copy()
+        SCHEDULER_HANDLERS: ClassVar[dict[str, object]] = {
+            name: object() for name in _MockKSampler.SCHEDULERS
+        }
 
     class _MockComfy:
         samplers = _MockSamplers
@@ -194,8 +196,8 @@ def coerce_sampler(name: str) -> str:
 
 
 def _validate_linked_input_types(
-    input_types: Optional[Dict[str, Any]],
-    declared_inputs: Dict[str, tuple],
+    input_types: Optional[dict[str, Any]],
+    declared_inputs: dict[str, tuple],
     relaxed_inputs: set[str],
 ):
     """Retain normal socket checks while allowing compatible external enums."""
@@ -222,8 +224,8 @@ def _validate_linked_input_types(
 
 
 # Global storage for warp data; keys are unique per Warp instance
-warp_storage: Dict[str, Dict[str, Any]] = {}
-_storage_timestamps: Dict[str, float] = {}  # Track last-access time per warp ID
+warp_storage: dict[str, dict[str, Any]] = {}
+_storage_timestamps: dict[str, float] = {}  # Track last-access time per warp ID
 _storage_lock = threading.Lock()
 _STORAGE_MAX_AGE_SECONDS = 3600  # Prune entries older than 1 hour
 _STORAGE_MAX_ENTRIES = 256  # Hard cap on stored entries
@@ -261,11 +263,11 @@ def cleanup_warp_storage() -> None:
         _cleanup_warp_storage_locked(now)
 
 
-def _fingerprint_inputs(kwargs: Dict[str, Any]) -> str:
+def _fingerprint_inputs(kwargs: dict[str, Any]) -> str:
     h = hashlib.sha256()
     for key in sorted(kwargs.keys()):
         if kwargs[key] is not None:
-            h.update(f"{key}:{repr(kwargs[key])}".encode("utf-8"))
+            h.update(f"{key}:{kwargs[key]!r}".encode())
     return h.hexdigest()
 
 
@@ -372,7 +374,7 @@ class Warp:
 
     def warp(
         self,
-        warp: Optional[Dict[str, Any]] = None,
+        warp: Optional[dict[str, Any]] = None,
         image: Optional[Any] = None,
         mask: Optional[Any] = None,
         model_1: Optional[Any] = None,
@@ -519,7 +521,7 @@ class Unwarp:
         """Return a tuple of None values for all expected outputs"""
         return (None,) * len(self.RETURN_TYPES)
 
-    def unwarp(self, warp: Optional[Dict[str, Any]] = None) -> tuple:
+    def unwarp(self, warp: Optional[dict[str, Any]] = None) -> tuple:
         # Handle case where no warp is connected - return all None values
         if warp is None:
             return self._return_empty_values()
@@ -928,7 +930,7 @@ if ENABLE_V3_NODES:
             )
 
         @classmethod
-        def execute(cls, warp: Optional[Dict[str, Any]] = None) -> io.NodeOutput:
+        def execute(cls, warp: Optional[dict[str, Any]] = None) -> io.NodeOutput:
             return io.NodeOutput(*Unwarp().unwarp(warp))
 
     class WarpProviderV3(io.ComfyNode):
@@ -1086,6 +1088,6 @@ if not ENABLE_V3_NODES:
 WEB_DIRECTORY = "./web"
 
 if ENABLE_V3_NODES:
-    __all__ = ["comfy_entrypoint", "WEB_DIRECTORY"]
+    __all__ = ["WEB_DIRECTORY", "comfy_entrypoint"]
 else:
     __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]

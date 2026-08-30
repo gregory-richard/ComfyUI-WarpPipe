@@ -28,7 +28,7 @@ jobs:
         # Pinned deliberately: an unpinned tool turns any upstream release into
         # a red build with no code change. Versions must satisfy the oldest
         # entry in the matrix (3.9), not just the newest.
-        run: python -m pip install "build==1.4.4" "pytest==8.4.2" "ruff==0.12.0"
+        run: python -m pip install "build==1.4.4" "pytest==8.4.2" "ruff==0.16.5"
       - name: Lint
         run: python -m ruff check . --exclude .agents --exclude .claude
       - name: Check formatting

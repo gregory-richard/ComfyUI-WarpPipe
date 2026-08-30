@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Improved
+
+- **Reproducible CI toolchain**: Pinned `build`, `pytest`, and `ruff` so lint and test results depend on the repository rather than on when a build happens to run
+- **Explicit lint rule set**: Selected ruff rules in `pyproject.toml`, documenting the rule families that ComfyUI's conventions make unactionable (framework-mandated method names, the node-pack directory name, and emoji in display names)
+- **Modernized annotations**: Internal type hints now use PEP 585 builtins, and the fallback sampler shims are annotated with `ClassVar`
+- **Version-gated publishing**: The registry workflow now publishes only when the version in `pyproject.toml` actually changes, so metadata edits no longer force a version bump
+
 ## [3.3.0] - 2026-08-30
 
 ### Added
