@@ -151,13 +151,15 @@ def test_v3_entrypoint_schemas_and_execution(warp_pipe_loader):
 def test_package_exports_only_one_registration_path(package_loader, enable_v3):
     package = package_loader(enable_v3=enable_v3)
 
+    # __all__ ordering carries no meaning, so compare membership rather than
+    # sequence; the point of this test is which path is exported, not its order.
     if enable_v3:
-        assert package.__all__ == ["comfy_entrypoint", "WEB_DIRECTORY"]
+        assert set(package.__all__) == {"comfy_entrypoint", "WEB_DIRECTORY"}
         assert not hasattr(package, "NODE_CLASS_MAPPINGS")
     else:
         assert set(package.NODE_CLASS_MAPPINGS) == NODE_IDS
-        assert package.__all__ == [
+        assert set(package.__all__) == {
             "NODE_CLASS_MAPPINGS",
             "NODE_DISPLAY_NAME_MAPPINGS",
             "WEB_DIRECTORY",
-        ]
+        }
