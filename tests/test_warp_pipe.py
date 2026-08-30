@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import os
 import pathlib
 import sys
 import time
@@ -657,3 +658,96 @@ def test_slashes_survive_so_subfolders_still_work(warp_pipe):
 def test_characters_illegal_in_a_filename_are_replaced(warp_pipe):
     # A colon is the natural thing to type for a time, and is illegal on Windows.
     assert warp_pipe.expand_filename_prefix("%date:hh:mm%", STAMP) == "17-28"
+
+
+# ---------------------------------------------------------------------------
+# LoRA library index
+# ---------------------------------------------------------------------------
+
+
+def test_filename_parsing_follows_the_collection_convention(warp_pipe):
+    parsed = warp_pipe.parse_lora_filename(r"krea2\alejnd77 - real cum - beta (krea2).safetensors")
+
+    assert parsed["folder"] == "krea2"
+    assert parsed["creator"] == "alejnd77"
+    assert parsed["name"] == "real cum"
+    assert parsed["version"] == "beta"
+    assert parsed["tagged_base"] == "krea2"
+
+
+def test_filename_parsing_without_a_version(warp_pipe):
+    parsed = warp_pipe.parse_lora_filename(r"krea2\aiguild - galaxyace (krea2).safetensors")
+
+    assert parsed["creator"] == "aiguild"
+    assert parsed["name"] == "galaxyace"
+    assert parsed["version"] is None
+
+
+def test_filename_parsing_keeps_extra_middle_parts_in_the_name(warp_pipe):
+    parsed = warp_pipe.parse_lora_filename(
+        r"ill\suteka434 - hentai comic random generator - full color - v2.0 (ill).safetensors"
+    )
+
+    assert parsed["name"] == "hentai comic random generator - full color"
+    assert parsed["version"] == "v2.0"
+
+
+def test_a_filename_with_no_structure_degrades_to_its_stem(warp_pipe):
+    parsed = warp_pipe.parse_lora_filename("oddball.safetensors")
+
+    assert parsed["name"] == "oddball"
+    assert parsed["creator"] is None
+    assert parsed["folder"] == ""
+
+
+def test_preview_is_found_beside_the_model(warp_pipe, tmp_path):
+    model = tmp_path / "thing.safetensors"
+    model.write_bytes(b"w")
+    assert warp_pipe.lora_preview_path(str(model)) is None
+
+    preview = tmp_path / "thing.preview.png"
+    preview.write_bytes(b"not really a png")
+    assert warp_pipe.lora_preview_path(str(model)) == str(preview)
+    assert warp_pipe.lora_preview_path(None) is None
+
+
+def test_index_carries_what_the_browser_needs(warp_pipe, lora_folder):
+    entries = warp_pipe.lora_index()
+
+    assert {e["id"] for e in entries} == {LORA_ON_DISK, OTHER_LORA}
+    detail = next(e for e in entries if e["id"] == LORA_ON_DISK)
+    assert detail["folder"] == "sdxl"
+    assert detail["creator"] == "w4r10ck"
+    assert detail["name"] == "detail tweaker"
+    assert detail["triggers"] == ["detail tweaker", "sharp focus"]
+    assert detail["has_preview"] is False
+
+
+def test_thumbnail_is_cached_and_much_smaller(warp_pipe, tmp_path, monkeypatch):
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    preview = tmp_path / "big.preview.png"
+    Image.new("RGB", (832, 1152), (90, 110, 130)).save(preview)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr(warp_pipe, "_thumbnail_dir", lambda: str(cache))
+
+    first = warp_pipe.thumbnail_for(str(preview))
+    assert first and os.path.isfile(first)
+    assert os.path.getsize(first) < os.path.getsize(preview)
+    with Image.open(first) as thumb:
+        assert max(thumb.size) <= warp_pipe.THUMBNAIL_SIZE
+
+    # Second call reuses the file rather than re-encoding.
+    assert warp_pipe.thumbnail_for(str(preview)) == first
+
+
+def test_a_broken_image_does_not_break_the_listing(warp_pipe, tmp_path, monkeypatch):
+    preview = tmp_path / "broken.preview.png"
+    preview.write_bytes(b"this is not an image")
+    cache = tmp_path / "cache2"
+    cache.mkdir()
+    monkeypatch.setattr(warp_pipe, "_thumbnail_dir", lambda: str(cache))
+
+    assert warp_pipe.thumbnail_for(str(preview)) is None

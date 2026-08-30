@@ -1490,6 +1490,197 @@ def expand_filename_prefix(prefix: str, now: Optional[time.struct_time] = None) 
     return _DATE_TOKEN_RE.sub(lambda m: format_date_pattern(m.group(1), stamp), prefix)
 
 
+# ---------------------------------------------------------------------------
+# LoRA library index and thumbnails
+#
+# Preview images sit next to the model files and are full generations: in the
+# collection this was built against, 624 of them totalling about a gigabyte, a
+# median of 1.27 MB each. A browser cannot load those, so they are cached down
+# to small WebP thumbnails on first request - measured at 20 ms and 8 KB each.
+# ---------------------------------------------------------------------------
+
+THUMBNAIL_SIZE = 320
+THUMBNAIL_QUALITY = 80
+
+PREVIEW_EXTENSIONS = (
+    ".preview.png",
+    ".preview.jpg",
+    ".preview.jpeg",
+    ".preview.webp",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+)
+
+# "creator - name - version (base).safetensors" is the convention this indexes.
+# Anything that does not match keeps its whole stem as the name.
+_BASE_TAIL_RE = re.compile(r"\s*\(([^()]+)\)\s*$")
+_VERSION_RE = re.compile(r"^(v[\d.]+\S*|beta|alpha|final|nano|slim|low|high|full|exp)\b", re.I)
+
+
+def parse_lora_filename(name: str) -> dict[str, Optional[str]]:
+    """Split a LoRA filename into the parts worth showing separately."""
+    folder = ""
+    normalised = name.replace("\\", "/")
+    if "/" in normalised:
+        folder = normalised.rsplit("/", 1)[0].split("/")[0]
+
+    stem = os.path.splitext(os.path.basename(normalised))[0]
+
+    tail = None
+    match = _BASE_TAIL_RE.search(stem)
+    if match:
+        tail = match.group(1).strip()
+        stem = stem[: match.start()].strip()
+
+    parts = [part.strip() for part in stem.split(" - ") if part.strip()]
+    creator = version = None
+    if len(parts) >= 2:
+        creator = parts[0]
+        parts = parts[1:]
+    if len(parts) >= 2 and _VERSION_RE.match(parts[-1]):
+        version = parts[-1]
+        parts = parts[:-1]
+
+    return {
+        "folder": folder,
+        "creator": creator,
+        "name": " - ".join(parts) if parts else stem,
+        "version": version,
+        "tagged_base": tail,
+    }
+
+
+def lora_preview_path(model_path: Optional[str]) -> Optional[str]:
+    """The preview image sitting beside a model file, if there is one."""
+    if not model_path:
+        return None
+    base = os.path.splitext(model_path)[0]
+    for extension in PREVIEW_EXTENSIONS:
+        candidate = base + extension
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _sidecar_base_model(payload: Optional[dict[str, Any]]) -> Optional[str]:
+    if not payload:
+        return None
+    value = payload.get("baseModel")
+    return value if isinstance(value, str) and value else None
+
+
+def _thumbnail_dir() -> Optional[str]:
+    cache = _hash_cache_path()
+    if not cache:
+        return None
+    directory = os.path.join(os.path.dirname(cache), "warppipe_thumbs")
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except OSError:
+        return None
+    return directory
+
+
+def thumbnail_for(preview_path: str) -> Optional[str]:
+    """Path to a cached thumbnail, building it on first request.
+
+    Keyed by path, size and mtime, so replacing a preview refreshes it.
+    """
+    key = _cache_key(preview_path)
+    if key is None:
+        return None
+
+    directory = _thumbnail_dir()
+    if directory is None:
+        return None
+
+    cached = os.path.join(directory, hashlib.sha256(key.encode()).hexdigest()[:32] + ".webp")
+    if os.path.isfile(cached):
+        return cached
+
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+
+    try:
+        with Image.open(preview_path) as image:
+            image.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+            image.convert("RGB").save(cached, "WEBP", quality=THUMBNAIL_QUALITY)
+    except Exception as exc:
+        logger.warning("Could not thumbnail %s: %s", preview_path, exc)
+        return None
+    return cached
+
+
+def lora_index() -> list[dict[str, Any]]:
+    """Everything the browser needs to list the library, without any image data."""
+    entries: list[dict[str, Any]] = []
+    for name in available_loras():
+        path = _resolve_model_path("loras", name)
+        payload = read_civitai_sidecar(path) if path else None
+        parsed = parse_lora_filename(name)
+        entries.append(
+            {
+                # The exact string a tag must contain.
+                "id": name,
+                "folder": parsed["folder"],
+                "creator": parsed["creator"],
+                "name": parsed["name"],
+                "version": parsed["version"],
+                # What the filename claims, and what Civitai recorded.
+                "tagged_base": parsed["tagged_base"],
+                "base_model": _sidecar_base_model(payload),
+                "triggers": civitai_trigger_words(path) if path else [],
+                "has_preview": lora_preview_path(path) is not None,
+            }
+        )
+    return entries
+
+
+def _register_routes() -> None:
+    """Expose the index and thumbnails to the frontend, when running in ComfyUI."""
+    try:
+        from aiohttp import web
+        from server import PromptServer
+    except ImportError:
+        return
+
+    instance = getattr(PromptServer, "instance", None)
+    routes = getattr(instance, "routes", None)
+    if routes is None:
+        return
+
+    @routes.get("/warppipe/loras")
+    async def _loras(request):
+        return web.json_response({"loras": lora_index()})
+
+    @routes.get("/warppipe/lora/thumbnail")
+    async def _thumbnail(request):
+        name = request.query.get("name", "")
+        # Resolving through folder_paths is what keeps this to configured
+        # model folders; an arbitrary path can never be requested.
+        path = _resolve_model_path("loras", name)
+        preview = lora_preview_path(path)
+        if not preview:
+            return web.Response(status=404, text="no preview")
+
+        cached = thumbnail_for(preview)
+        if not cached:
+            return web.Response(status=404, text="no thumbnail")
+        return web.FileResponse(cached, headers={"Cache-Control": "max-age=86400"})
+
+    logger.info("WarpPipe LoRA library routes registered")
+
+
+try:
+    _register_routes()
+except Exception as exc:
+    logger.warning("Could not register WarpPipe library routes: %s", exc)
+
+
 class SaveImageCivitai:
     CATEGORY = "Custom/WarpPipe Nodes"
     FUNCTION = "save_images"
