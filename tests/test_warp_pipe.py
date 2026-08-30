@@ -620,3 +620,40 @@ def test_model_only_leaves_the_clip_untouched(warp_pipe, lora_folder, monkeypatc
     assert seen["strength_clip"] == 0.0
     assert model == "patched-model"
     assert clip is sentinel_clip  # untouched
+
+
+STAMP = time.struct_time((2026, 8, 28, 17, 28, 56, 0, 240, 0))
+
+
+def test_date_pattern_uses_dotnet_field_letters(warp_pipe):
+    # MM is the month, mm the minute - the case is the only thing telling them apart.
+    assert warp_pipe.format_date_pattern("yy-MM-dd hh-mm-ss", STAMP) == "26-08-28 17-28-56"
+    assert warp_pipe.format_date_pattern("yyyy", STAMP) == "2026"
+    assert warp_pipe.format_date_pattern("MM/mm", STAMP) == "08/28"
+
+
+def test_filename_prefix_expands_date_tokens(warp_pipe):
+    assert (
+        warp_pipe.expand_filename_prefix("%date:yy-MM-dd hh-mm-ss%", STAMP) == "26-08-28 17-28-56"
+    )
+    assert warp_pipe.expand_filename_prefix("%date:yyyy%_%date:MM%", STAMP) == "2026_08"
+
+
+def test_a_prefix_without_tokens_is_untouched(warp_pipe):
+    assert warp_pipe.expand_filename_prefix("WarpPipe", STAMP) == "WarpPipe"
+    assert warp_pipe.expand_filename_prefix("", STAMP) == ""
+    # ComfyUI's own tokens are left for it to expand.
+    assert (
+        warp_pipe.expand_filename_prefix("shot_%width%x%height%", STAMP) == "shot_%width%x%height%"
+    )
+
+
+def test_slashes_survive_so_subfolders_still_work(warp_pipe):
+    assert (
+        warp_pipe.expand_filename_prefix("Krea2/%date:yyyy-MM-dd%/x", STAMP) == "Krea2/2026-08-28/x"
+    )
+
+
+def test_characters_illegal_in_a_filename_are_replaced(warp_pipe):
+    # A colon is the natural thing to type for a time, and is illegal on Windows.
+    assert warp_pipe.expand_filename_prefix("%date:hh:mm%", STAMP) == "17-28"

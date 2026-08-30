@@ -44,7 +44,12 @@ used directly instead, since that node knows exactly what it applied.
   upstream branch leaves this node idle rather than failing the prompt with
   a missing connection. With nothing connected it saves nothing and says so
   in the console.
-- **filename_prefix** — Prefix for saved files.
+- **filename_prefix** — Prefix for saved files. Supports `%date:FORMAT%`, using
+  the field letters `yyyy`, `yy`, `MM`, `dd`, `hh`, `mm`, `ss` — note that `MM`
+  is the month and `mm` the minute. `%date:yy-MM-dd hh-mm-ss%` gives
+  `26-08-28 17-28-56_00001_.png`. A slash makes a subfolder, so
+  `shots/%date:yyyy-MM-dd%/img` files output by day. ComfyUI's own `%width%`
+  and `%height%` still work. Characters a filename cannot contain become `-`.
 - **embed_workflow** — Embed the ComfyUI workflow alongside the metadata.
 - **warp** (optional) — Supplies prompt, seed, steps, CFG, sampler, scheduler
   and size. Without it, only what can be read from the graph is written.

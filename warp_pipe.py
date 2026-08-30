@@ -1450,6 +1450,46 @@ class WarpLoraPrompt:
         return (model, clip, prompt, {"id": self._warp_id})
 
 
+# ComfyUI's server expands %year%, %month% and friends, but the %date:FORMAT%
+# form is substituted by its frontend, so it never reaches a prompt sent over the
+# API. Expanding it here means the same prefix behaves the same either way.
+_DATE_TOKEN_RE = re.compile(r"%date:([^%]*)%")
+
+# .NET-style field letters, as used by A1111 and ComfyUI. Case matters: MM is the
+# month, mm the minute.
+_DATE_FIELDS = {
+    "yyyy": lambda t: f"{t.tm_year:04d}",
+    "yy": lambda t: f"{t.tm_year % 100:02d}",
+    "MM": lambda t: f"{t.tm_mon:02d}",
+    "dd": lambda t: f"{t.tm_mday:02d}",
+    "hh": lambda t: f"{t.tm_hour:02d}",
+    "mm": lambda t: f"{t.tm_min:02d}",
+    "ss": lambda t: f"{t.tm_sec:02d}",
+}
+
+# Longest first, so yyyy is not consumed as two yy.
+_DATE_FIELD_RE = re.compile("|".join(sorted(_DATE_FIELDS, key=len, reverse=True)))
+
+# Illegal in a Windows filename. Slashes are left alone: ComfyUI reads them as
+# subfolders, so %date:yyyy/MM% usefully files output by month.
+_ILLEGAL_IN_FILENAME = str.maketrans({c: "-" for c in '<>:"|?*'})
+
+
+def format_date_pattern(pattern: str, now: Optional[time.struct_time] = None) -> str:
+    """Render one %date:...% body, e.g. "yy-MM-dd hh-mm-ss" -> "26-08-28 17-28-56"."""
+    stamp = now or time.localtime()
+    rendered = _DATE_FIELD_RE.sub(lambda m: _DATE_FIELDS[m.group(0)](stamp), pattern)
+    return rendered.translate(_ILLEGAL_IN_FILENAME)
+
+
+def expand_filename_prefix(prefix: str, now: Optional[time.struct_time] = None) -> str:
+    """Expand every %date:FORMAT% in a filename prefix."""
+    if not prefix or "%date:" not in prefix:
+        return prefix
+    stamp = now or time.localtime()
+    return _DATE_TOKEN_RE.sub(lambda m: format_date_pattern(m.group(1), stamp), prefix)
+
+
 class SaveImageCivitai:
     CATEGORY = "Custom/WarpPipe Nodes"
     FUNCTION = "save_images"
@@ -1462,7 +1502,16 @@ class SaveImageCivitai:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "filename_prefix": ("STRING", {"default": "WarpPipe"}),
+                "filename_prefix": (
+                    "STRING",
+                    {
+                        "default": "WarpPipe",
+                        "tooltip": (
+                            "Supports %date:yy-MM-dd hh-mm-ss% and ComfyUI's own "
+                            "%width%/%height%. A slash makes a subfolder."
+                        ),
+                    },
+                ),
                 "embed_workflow": (
                     "BOOLEAN",
                     {
@@ -1587,7 +1636,10 @@ class SaveImageCivitai:
         logger.debug("Civitai parameters: %s", parameters)
 
         full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
-            filename_prefix, folder_paths.get_output_directory(), width, height
+            expand_filename_prefix(filename_prefix),
+            folder_paths.get_output_directory(),
+            width,
+            height,
         )
 
         results = []
