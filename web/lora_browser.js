@@ -68,28 +68,45 @@ const STYLE = `
 .wp-grid {
   grid-area: grid; overflow-y: auto; overflow-x: hidden; padding: 14px;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  /* Explicit row sizing: automatic tracks mis-measure these flex-column cards
+     and collapse to a few pixels, letting every row overlap the one above. */
+  grid-auto-rows: max-content;
   gap: 12px; align-content: start;
 }
+/* Every part of a card has a fixed height. Nothing here can grow with its
+   content, so a long filename cannot push a card over its neighbour. */
 .wp-card {
-  width: 100%; align-self: start;
+  display: flex; flex-direction: column; width: 100%; align-self: start;
   background: var(--wp-panel); border: 1px solid var(--wp-rule); border-radius: 5px;
   overflow: hidden; cursor: pointer; text-align: left; color: inherit;
-  font: inherit; padding: 0; display: block;
+  font: inherit; padding: 0;
 }
 .wp-card:hover { border-color: var(--wp-warp); }
 .wp-card:focus-visible { outline: 2px solid var(--wp-warp); outline-offset: 2px; }
-/* Previews are portrait but not a single ratio (832x1152, 768x1280, 992x1456).
-   A fixed 2:3 box keeps rows aligned for scanning; the crop is slight. */
-.wp-card img { display: block; width: 100%; aspect-ratio: 2 / 3; object-fit: cover; background: #0d0d0d; }
+/* Previews are portrait but not one ratio (832x1152, 768x1280, 992x1456), so a
+   fixed box crops rather than letting each card set its own height. */
+.wp-card img,
+.wp-noimg { display: block; width: 100%; height: 228px; flex: 0 0 228px; background: #0d0d0d; }
+.wp-card img { object-fit: cover; }
 .wp-noimg {
-  display: flex; align-items: center; padding: 14px 10px; aspect-ratio: 2 / 3;
-  font-family: var(--wp-mono); font-size: 10px; line-height: 1.45;
-  opacity: 0.5; word-break: break-word; background: #0d0d0d;
+  display: flex; align-items: center; padding: 12px 10px; overflow: hidden;
+  font-family: var(--wp-mono); font-size: 10px; line-height: 1.4;
+  opacity: 0.5; word-break: break-word;
 }
-.wp-meta { padding: 8px 9px 9px; }
-.wp-creator { font-size: 10px; opacity: 0.55; }
-.wp-name { font-size: 12px; font-weight: 600; line-height: 1.3; margin: 1px 0 4px; }
-.wp-tail { font-family: var(--wp-mono); font-size: 10px; opacity: 0.72; }
+.wp-meta { padding: 8px 9px 9px; overflow: hidden; }
+.wp-creator {
+  font-size: 10px; opacity: 0.55;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wp-name {
+  font-size: 12px; font-weight: 600; line-height: 1.3; margin: 1px 0 4px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; max-height: 2.6em;
+}
+.wp-tail {
+  font-family: var(--wp-mono); font-size: 10px; opacity: 0.72;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .wp-tail b { color: var(--wp-warp); font-weight: 400; }
 .wp-trig { margin-top: 5px; font-size: 10px; opacity: 0.6; }
 
@@ -221,9 +238,10 @@ function openBrowser(node) {
     }
 
     for (const entry of visible.slice(0, 400)) {
-      const card = document.createElement("button");
+      const card = document.createElement("div");
       card.className = "wp-card";
-      card.type = "button";
+      card.setAttribute("role", "button");
+      card.tabIndex = 0;
 
       if (entry.has_preview) {
         const img = document.createElement("img");
@@ -266,9 +284,16 @@ function openBrowser(node) {
       }
 
       card.appendChild(meta);
-      card.addEventListener("click", () => {
+      const choose = () => {
         insertTag(node, entry);
         close();
+      };
+      card.addEventListener("click", choose);
+      card.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          choose();
+        }
       });
       grid.appendChild(card);
     }
