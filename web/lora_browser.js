@@ -1,0 +1,352 @@
+import { app } from "../../scripts/app.js";
+
+// The library browser for the Prompt + LoRAs node.
+//
+// Clicking a card writes the LoRA's bare filename into the prompt as a tag.
+// That form resolves uniquely for every file in a 761-LoRA collection, and it
+// reads far better in a prompt than a full path.
+
+const NODE_ID = "Warp Lora Prompt";
+const TEXT_WIDGET = "text";
+const INDEX_URL = "/warppipe/loras";
+
+const STYLE = `
+.wp-backdrop {
+  position: fixed; inset: 0; z-index: 1400;
+  background: rgba(0, 0, 0, 0.62);
+  display: flex; align-items: center; justify-content: center;
+}
+.wp-modal {
+  --wp-warp: #4ec8e8;
+  --wp-ground: var(--comfy-menu-bg, #202020);
+  --wp-panel: var(--comfy-input-bg, #171717);
+  --wp-ink: var(--input-text, #dcdcdc);
+  --wp-rule: var(--border-color, #3a3a3a);
+  --wp-mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+
+  width: min(1180px, 94vw); height: min(780px, 88vh);
+  display: grid; grid-template-columns: 190px 1fr; grid-template-rows: auto 1fr auto;
+  grid-template-areas: "head head" "rail grid" "rail foot";
+  background: var(--wp-ground); color: var(--wp-ink);
+  border: 1px solid var(--wp-rule); border-radius: 6px;
+  overflow: hidden; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+}
+.wp-head {
+  grid-area: head; display: flex; align-items: center; gap: 14px;
+  padding: 12px 14px; border-bottom: 1px solid var(--wp-rule);
+}
+.wp-title { font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
+.wp-title span { color: var(--wp-warp); }
+.wp-search {
+  flex: 1; background: var(--wp-panel); color: var(--wp-ink);
+  border: 1px solid var(--wp-rule); border-radius: 4px;
+  padding: 6px 10px; font: inherit; font-size: 12px;
+}
+.wp-search:focus-visible { outline: 2px solid var(--wp-warp); outline-offset: 1px; }
+.wp-close {
+  background: none; border: 1px solid var(--wp-rule); color: var(--wp-ink);
+  border-radius: 4px; width: 26px; height: 26px; cursor: pointer; font-size: 14px;
+}
+.wp-close:hover { border-color: var(--wp-warp); color: var(--wp-warp); }
+
+.wp-rail {
+  grid-area: rail; overflow-y: auto; padding: 10px 0;
+  border-right: 1px solid var(--wp-rule); background: var(--wp-panel);
+}
+.wp-rail-row {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  padding: 6px 14px; background: none; border: 0; cursor: pointer;
+  color: var(--wp-ink); font: inherit; font-size: 12px; text-align: left;
+}
+.wp-rail-row:hover { background: rgba(255, 255, 255, 0.05); }
+.wp-rail-row[aria-pressed="true"] { color: var(--wp-warp); box-shadow: inset 2px 0 0 var(--wp-warp); }
+.wp-rail-row.is-dim { opacity: 0.45; }
+.wp-rail-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wp-rail-count { font-family: var(--wp-mono); font-size: 11px; opacity: 0.7; }
+.wp-rail-row .wp-pin { color: var(--wp-warp); font-size: 9px; }
+
+.wp-grid {
+  grid-area: grid; overflow-y: auto; overflow-x: hidden; padding: 14px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 12px; align-content: start;
+}
+.wp-card {
+  width: 100%; align-self: start;
+  background: var(--wp-panel); border: 1px solid var(--wp-rule); border-radius: 5px;
+  overflow: hidden; cursor: pointer; text-align: left; color: inherit;
+  font: inherit; padding: 0; display: block;
+}
+.wp-card:hover { border-color: var(--wp-warp); }
+.wp-card:focus-visible { outline: 2px solid var(--wp-warp); outline-offset: 2px; }
+/* Previews are portrait but not a single ratio (832x1152, 768x1280, 992x1456).
+   A fixed 2:3 box keeps rows aligned for scanning; the crop is slight. */
+.wp-card img { display: block; width: 100%; aspect-ratio: 2 / 3; object-fit: cover; background: #0d0d0d; }
+.wp-noimg {
+  display: flex; align-items: center; padding: 14px 10px; aspect-ratio: 2 / 3;
+  font-family: var(--wp-mono); font-size: 10px; line-height: 1.45;
+  opacity: 0.5; word-break: break-word; background: #0d0d0d;
+}
+.wp-meta { padding: 8px 9px 9px; }
+.wp-creator { font-size: 10px; opacity: 0.55; }
+.wp-name { font-size: 12px; font-weight: 600; line-height: 1.3; margin: 1px 0 4px; }
+.wp-tail { font-family: var(--wp-mono); font-size: 10px; opacity: 0.72; }
+.wp-tail b { color: var(--wp-warp); font-weight: 400; }
+.wp-trig { margin-top: 5px; font-size: 10px; opacity: 0.6; }
+
+.wp-foot {
+  grid-area: foot; padding: 8px 14px; border-top: 1px solid var(--wp-rule);
+  font-size: 11px; opacity: 0.72; display: flex; gap: 14px;
+}
+.wp-foot .wp-hint { margin-left: auto; font-family: var(--wp-mono); }
+.wp-empty { padding: 40px 14px; opacity: 0.6; font-size: 12px; }
+@media (prefers-reduced-motion: reduce) { .wp-card, .wp-rail-row { transition: none; } }
+`;
+
+let indexCache = null;
+
+async function loadIndex() {
+  if (indexCache) return indexCache;
+  const res = await fetch(INDEX_URL);
+  if (!res.ok) throw new Error(`library unavailable (${res.status})`);
+  indexCache = (await res.json()).loras || [];
+  return indexCache;
+}
+
+// Walk back from the node to whichever loader fed it, and read the folder its
+// model file sits in. Folders are how these collections separate architectures,
+// so this is what decides which LoRAs can actually apply.
+function connectedModelFolder(node) {
+  const seen = new Set();
+  const walk = (current, depth) => {
+    if (!current || depth > 12 || seen.has(current.id)) return null;
+    seen.add(current.id);
+    for (const widget of current.widgets || []) {
+      const isModel = /^(unet_name|ckpt_name|model_name)$/.test(widget.name || "");
+      if (isModel && typeof widget.value === "string" && widget.value) {
+        const parts = widget.value.replace(/\\/g, "/").split("/");
+        return parts.length > 1 ? parts[0] : "";
+      }
+    }
+    for (let slot = 0; slot < (current.inputs || []).length; slot++) {
+      const found = walk(current.getInputNode?.(slot), depth + 1);
+      if (found !== null) return found;
+    }
+    return null;
+  };
+  return walk(node, 0);
+}
+
+function insertTag(node, entry) {
+  const widget = (node.widgets || []).find((w) => w.name === TEXT_WIDGET);
+  if (!widget) return;
+
+  // The bare filename resolves uniquely and keeps the prompt readable.
+  const stem = entry.id.replace(/\\/g, "/").split("/").pop().replace(/\.[^.]+$/, "");
+  const tag = `<lora:${stem}:1.0>`;
+
+  const el = widget.inputEl;
+  const current = widget.value || "";
+  if (el && typeof el.selectionStart === "number") {
+    const at = el.selectionStart;
+    const next = `${current.slice(0, at)}${tag}${current.slice(el.selectionEnd)}`;
+    widget.value = next;
+    el.value = next;
+    const caret = at + tag.length;
+    el.setSelectionRange(caret, caret);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  } else {
+    widget.value = current ? `${current} ${tag}` : tag;
+  }
+  node.setDirtyCanvas?.(true, true);
+}
+
+function openBrowser(node) {
+  const backdrop = document.createElement("div");
+  backdrop.className = "wp-backdrop";
+  backdrop.innerHTML = `
+    <div class="wp-modal" role="dialog" aria-modal="true" aria-label="LoRA library">
+      <div class="wp-head">
+        <div class="wp-title"><span>&#x1F300;</span> LoRA library</div>
+        <input class="wp-search" type="search" placeholder="Search name, creator or version" />
+        <button class="wp-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="wp-rail"></div>
+      <div class="wp-grid"><div class="wp-empty">Loading library&hellip;</div></div>
+      <div class="wp-foot"><span class="wp-count"></span><span class="wp-hint">click to insert &middot; esc to close</span></div>
+    </div>`;
+
+  const modal = backdrop.querySelector(".wp-modal");
+  const rail = backdrop.querySelector(".wp-rail");
+  const grid = backdrop.querySelector(".wp-grid");
+  const search = backdrop.querySelector(".wp-search");
+  const count = backdrop.querySelector(".wp-count");
+
+  const close = () => {
+    document.removeEventListener("keydown", onKey);
+    backdrop.remove();
+  };
+  const onKey = (e) => {
+    if (e.key === "Escape") close();
+  };
+  document.addEventListener("keydown", onKey);
+  backdrop.addEventListener("mousedown", (e) => {
+    if (e.target === backdrop) close();
+  });
+  backdrop.querySelector(".wp-close").addEventListener("click", close);
+  modal.addEventListener("mousedown", (e) => e.stopPropagation());
+
+  document.body.appendChild(backdrop);
+  search.focus();
+
+  const connected = connectedModelFolder(node);
+  let entries = [];
+  let folder = connected || null;
+
+  function render() {
+    const query = search.value.trim().toLowerCase();
+    const terms = query ? query.split(/\s+/) : [];
+    const visible = entries.filter((e) => {
+      if (folder && e.folder !== folder) return false;
+      if (!terms.length) return true;
+      const hay = `${e.creator || ""} ${e.name} ${e.version || ""} ${e.folder}`.toLowerCase();
+      return terms.every((t) => hay.includes(t));
+    });
+
+    grid.replaceChildren();
+    if (!visible.length) {
+      const empty = document.createElement("div");
+      empty.className = "wp-empty";
+      empty.textContent = "Nothing matches. Clear the search, or pick another family.";
+      grid.appendChild(empty);
+    }
+
+    for (const entry of visible.slice(0, 400)) {
+      const card = document.createElement("button");
+      card.className = "wp-card";
+      card.type = "button";
+
+      if (entry.has_preview) {
+        const img = document.createElement("img");
+        img.loading = "lazy";
+        img.alt = "";
+        // Native lazy loading defers anything offscreen; no observer needed.
+        img.src = entry.thumbnail;
+        card.appendChild(img);
+      } else {
+        const blank = document.createElement("div");
+        blank.className = "wp-noimg";
+        blank.textContent = entry.id.replace(/\\/g, "/").split("/").pop();
+        card.appendChild(blank);
+      }
+
+      const meta = document.createElement("div");
+      meta.className = "wp-meta";
+      if (entry.creator) {
+        const who = document.createElement("div");
+        who.className = "wp-creator";
+        who.textContent = entry.creator;
+        meta.appendChild(who);
+      }
+      const name = document.createElement("div");
+      name.className = "wp-name";
+      name.textContent = entry.name;
+      meta.appendChild(name);
+
+      const tail = document.createElement("div");
+      tail.className = "wp-tail";
+      const version = entry.version ? `${entry.version} · ` : "";
+      tail.innerHTML = `${version}<b>${entry.folder || "—"}</b>`;
+      meta.appendChild(tail);
+
+      if (entry.triggers?.length) {
+        const trig = document.createElement("div");
+        trig.className = "wp-trig";
+        trig.textContent = `⊕ ${entry.triggers.length} trigger word${entry.triggers.length > 1 ? "s" : ""}`;
+        meta.appendChild(trig);
+      }
+
+      card.appendChild(meta);
+      card.addEventListener("click", () => {
+        insertTag(node, entry);
+        close();
+      });
+      grid.appendChild(card);
+    }
+
+    const shown = Math.min(visible.length, 400);
+    const capped = visible.length > 400 ? ` (showing ${shown})` : "";
+    const why = connected ? ` · ${connected} connected` : "";
+    count.textContent = `${visible.length} of ${entries.length}${capped}${why}`;
+  }
+
+  function renderRail() {
+    const counts = new Map();
+    for (const e of entries) counts.set(e.folder, (counts.get(e.folder) || 0) + 1);
+    const folders = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+
+    rail.replaceChildren();
+    const all = document.createElement("button");
+    all.className = "wp-rail-row";
+    all.type = "button";
+    all.setAttribute("aria-pressed", String(folder === null));
+    all.innerHTML = `<span class="wp-rail-name">All families</span><span class="wp-rail-count">${entries.length}</span>`;
+    all.addEventListener("click", () => {
+      folder = null;
+      renderRail();
+      render();
+    });
+    rail.appendChild(all);
+
+    for (const [name, n] of folders) {
+      const row = document.createElement("button");
+      row.className = "wp-rail-row";
+      row.type = "button";
+      row.setAttribute("aria-pressed", String(folder === name));
+      // Families that cannot apply to the connected model stay visible but quiet.
+      if (connected && name !== connected) row.classList.add("is-dim");
+      const pin = connected && name === connected ? '<span class="wp-pin">●</span>' : "";
+      row.innerHTML = `${pin}<span class="wp-rail-name">${name || "(root)"}</span><span class="wp-rail-count">${n}</span>`;
+      row.addEventListener("click", () => {
+        folder = folder === name ? null : name;
+        renderRail();
+        render();
+      });
+      rail.appendChild(row);
+    }
+  }
+
+  search.addEventListener("input", render);
+
+  loadIndex()
+    .then((data) => {
+      entries = data;
+      if (folder && !entries.some((e) => e.folder === folder)) folder = null;
+      renderRail();
+      render();
+    })
+    .catch((err) => {
+      grid.replaceChildren();
+      const fail = document.createElement("div");
+      fail.className = "wp-empty";
+      fail.textContent = `Could not load the library: ${err.message}. Is WarpPipe's server route running?`;
+      grid.appendChild(fail);
+    });
+}
+
+app.registerExtension({
+  name: "warppipe.loraBrowser",
+  async setup() {
+    const style = document.createElement("style");
+    style.textContent = STYLE;
+    document.head.appendChild(style);
+  },
+  async beforeRegisterNodeDef(nodeType, nodeData) {
+    if (nodeData?.name !== NODE_ID) return;
+    const created = nodeType.prototype.onNodeCreated;
+    nodeType.prototype.onNodeCreated = function () {
+      const result = created?.apply(this, arguments);
+      this.addWidget("button", "Browse LoRAs", null, () => openBrowser(this));
+      return result;
+    };
+  },
+});

@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import time
+import urllib.parse
 import uuid
 from typing import Any, ClassVar, Optional
 
@@ -1622,6 +1623,7 @@ def lora_index() -> list[dict[str, Any]]:
         path = _resolve_model_path("loras", name)
         payload = read_civitai_sidecar(path) if path else None
         parsed = parse_lora_filename(name)
+        has_preview = lora_preview_path(path) is not None
         entries.append(
             {
                 # The exact string a tag must contain.
@@ -1634,7 +1636,13 @@ def lora_index() -> list[dict[str, Any]]:
                 "tagged_base": parsed["tagged_base"],
                 "base_model": _sidecar_base_model(payload),
                 "triggers": civitai_trigger_words(path) if path else [],
-                "has_preview": lora_preview_path(path) is not None,
+                "has_preview": has_preview,
+                # The server owns URL construction; the client just uses it.
+                "thumbnail": (
+                    "/warppipe/lora/thumbnail?name=" + urllib.parse.quote(name)
+                    if has_preview
+                    else None
+                ),
             }
         )
     return entries
