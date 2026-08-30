@@ -1317,6 +1317,16 @@ class WarpLoraPrompt:
                         "label_off": "prompt as written",
                     },
                 ),
+                # Many architectures ship model-only LoRAs, where patching CLIP
+                # does nothing; SDXL-era ones usually carry text-encoder weights.
+                "apply_to_clip": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "label_on": "model + CLIP",
+                        "label_off": "model only",
+                    },
+                ),
             },
             "optional": {
                 "model": ("MODEL", {}),
@@ -1370,6 +1380,7 @@ class WarpLoraPrompt:
         self,
         text: str = "",
         insert_trigger_words: bool = False,
+        apply_to_clip: bool = True,
         model: Optional[Any] = None,
         clip: Optional[Any] = None,
         warp: Optional[dict[str, Any]] = None,
@@ -1396,9 +1407,19 @@ class WarpLoraPrompt:
                 lora, metadata = comfy.utils.load_torch_file(
                     entry["path"], safe_load=True, return_metadata=True
                 )
-                model, clip = comfy.sd.load_lora_for_models(
-                    model, clip, lora, entry["weight"], entry["weight"], lora_metadata=metadata
+                # Passing clip=None patches the model alone and returns None for
+                # the clip, so the untouched one is kept.
+                patched_model, patched_clip = comfy.sd.load_lora_for_models(
+                    model,
+                    clip if apply_to_clip else None,
+                    lora,
+                    entry["weight"],
+                    entry["weight"] if apply_to_clip else 0.0,
+                    lora_metadata=metadata,
                 )
+                model = patched_model
+                if patched_clip is not None:
+                    clip = patched_clip
             except Exception as exc:
                 logger.warning("Could not apply LoRA %s: %s", entry["name"], exc)
 

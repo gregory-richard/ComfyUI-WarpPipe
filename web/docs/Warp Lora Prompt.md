@@ -47,10 +47,31 @@ one, there are no trigger words to add and the prompt is left as written.
 
 The words are added to the **prompt** output, not shown on the node.
 
+## Model only, or model and CLIP
+
+A LoRA can carry weights for the diffusion model, the text encoder, or both.
+**apply_to_clip** controls whether the text encoder is patched as well.
+
+Whether it matters depends entirely on the LoRA. Surveying a real collection of
+761 files: every Krea2, Flux2, Wan, Qwen, ZIT and LTX LoRA in it was model-only,
+so patching CLIP changed nothing at all. Among SDXL LoRAs, 76% did carry
+text-encoder weights, where turning this off would discard half of what the
+LoRA does.
+
+Leave it on unless you have a reason. On a model-only LoRA it costs nothing.
+
+## Conditioning order
+
+Encode the prompt **after** the LoRAs are applied — take this node's **clip**
+output into your text encoder, not the CLIP straight from the loader. For a
+model-only LoRA the two are identical, but for one carrying text-encoder
+weights, encoding first would silently drop them.
+
 ## Inputs
 
 - **text** — The prompt, with any `<lora:name:weight>` tags inline.
 - **insert_trigger_words** — Append trigger words from each LoRA's sidecar.
+- **apply_to_clip** — Patch the text encoder as well as the model.
 - **model** (optional) — The model the LoRAs are applied to.
 - **clip** (optional) — The CLIP the LoRAs are applied to.
 - **warp** (optional) — An existing warp to copy from and extend.

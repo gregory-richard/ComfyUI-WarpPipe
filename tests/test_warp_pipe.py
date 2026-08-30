@@ -577,3 +577,46 @@ def test_a_typo_suggests_the_right_file(warp_pipe):
     with pytest.raises(warp_pipe.LoraTagError) as excinfo:
         warp_pipe.resolve_lora_name("detial tweaker", names, strict=True)
     assert "detail tweaker" in str(excinfo.value)
+
+
+def test_apply_to_clip_is_exposed_and_defaults_on(warp_pipe):
+    spec = warp_pipe.WarpLoraPrompt.INPUT_TYPES()["required"]["apply_to_clip"]
+
+    assert spec[0] == "BOOLEAN"
+    assert spec[1]["default"] is True
+    assert spec[1]["label_off"] == "model only"
+
+
+def test_model_only_leaves_the_clip_untouched(warp_pipe, lora_folder, monkeypatch):
+    seen = {}
+    sentinel_clip = object()
+
+    def fake_load(model, clip, lora, s_model, s_clip, lora_metadata=None):
+        seen["clip_arg"] = clip
+        seen["strength_clip"] = s_clip
+        return "patched-model", None if clip is None else "patched-clip"
+
+    comfy_sd = types.ModuleType("comfy.sd")
+    comfy_sd.load_lora_for_models = fake_load
+    comfy_utils = types.ModuleType("comfy.utils")
+    comfy_utils.load_torch_file = lambda p, safe_load=True, return_metadata=True: ({}, None)
+    # "import comfy.sd" resolves through the parent package, so it needs one.
+    comfy_pkg = types.ModuleType("comfy")
+    comfy_pkg.__path__ = []
+    comfy_pkg.sd = comfy_sd
+    comfy_pkg.utils = comfy_utils
+    monkeypatch.setitem(sys.modules, "comfy", comfy_pkg)
+    monkeypatch.setitem(sys.modules, "comfy.sd", comfy_sd)
+    monkeypatch.setitem(sys.modules, "comfy.utils", comfy_utils)
+
+    model, clip, _, _ = warp_pipe.WarpLoraPrompt().apply(
+        text="x <lora:detail tweaker:0.8>",
+        apply_to_clip=False,
+        model="a-model",
+        clip=sentinel_clip,
+    )
+
+    assert seen["clip_arg"] is None
+    assert seen["strength_clip"] == 0.0
+    assert model == "patched-model"
+    assert clip is sentinel_clip  # untouched
