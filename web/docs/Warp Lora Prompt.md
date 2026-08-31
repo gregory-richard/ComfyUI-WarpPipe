@@ -74,17 +74,20 @@ what the rows are showing you.
 
 ## Adding a LoRA without typing its name
 
-Press **/** anywhere in the prompt for a picker of LoRAs and embeddings, with
-previews. Type to filter, arrow keys to move, Enter or click to insert. A LoRA
-joins the list below the prompt; an embedding is written into the prompt as
-`embedding:name`.
+Type **/** in the prompt followed by a few letters. The best match appears in
+grey at the end of that line - press **Tab** to take it, or **arrow up/down** to
+walk the other matches. **Escape**, or clicking elsewhere, drops the suggestion.
+A LoRA joins the list below the prompt; an embedding is written into the prompt
+as `embedding:name`.
 
-The picker opens just under the prompt panel, at the caret's column, and above
-the panel when there is more room there. It never covers the prompt, and it
-stays put as you type rather than hopping a line at a time.
+The grey text is only drawn, never typed. Until you press Tab the prompt holds
+exactly what you typed, so a suggestion can never be typed over, never lands in
+the undo history, and never marks the workflow changed just because you were
+looking. Slashes in ordinary text - `1/2`, `and/or` - suggest nothing, because a
+bare slash is a slash until you type something after it.
 
-The **Browse LoRAs** button opens the full library instead, with a rail of model
-families.
+The **Browse LoRAs** button opens the full library instead, with previews and a
+rail of model families.
 
 ## The rows under the prompt
 

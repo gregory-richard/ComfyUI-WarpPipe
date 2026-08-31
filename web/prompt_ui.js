@@ -40,31 +40,11 @@ const STYLE = `
 .wpe-note { color: #7b7f86; font-style: italic; }
 .wpe-trigger { color: #9ad9a4; }
 
-.wpe-menu {
-  position: fixed; z-index: 1600; width: 330px; max-height: 340px; overflow-y: auto;
-  background: var(--comfy-menu-bg, #1e1e1e); color: var(--input-text, #dcdcdc);
-  border: 1px solid var(--border-color, #3a3a3a); border-radius: 6px;
-  box-shadow: 0 14px 40px rgba(0,0,0,0.55); padding: 4px; font-size: 12px;
-}
-.wpe-item {
-  display: flex; align-items: center; gap: 9px; width: 100%;
-  padding: 5px 6px; background: none; border: 0; border-radius: 4px;
-  color: inherit; font: inherit; text-align: left; cursor: pointer;
-}
-.wpe-item.is-active { background: rgba(78,200,232,0.18); }
-.wpe-item img {
-  width: 30px; height: 40px; flex: 0 0 30px; object-fit: cover;
-  border-radius: 3px; background: #0d0d0d;
-}
-.wpe-item .wpe-blank { width: 30px; height: 40px; flex: 0 0 30px; border-radius: 3px; background: #0d0d0d; }
-.wpe-item .wpe-txt { min-width: 0; flex: 1; }
-.wpe-item .wpe-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wpe-item .wpe-sub {
-  font-size: 10px; opacity: 0.55;
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.wpe-hint { padding: 5px 7px; font-size: 10px; opacity: 0.5; }
+/* The suggestion is real text in the textarea, so it is always exactly where
+   the next characters would be. Only its colour says it is provisional. */
+.wpe-ghost { color: #767e8b; }
+.wpe-ghost-key { color: #9aa3b0; }
+
 
 /* One field, two panels. ComfyUI's wrapper is already positioned, so the
    divider and the list can be placed inside it without a second box: the
@@ -254,23 +234,49 @@ function tokenise(text, known, triggers) {
   return spans.sort((a, b) => a.start - b.start);
 }
 
-function highlight(text, known, triggers) {
+/** Render the text, with the suggestion spliced in as greyed-out extra text.
+ *
+ * The suggestion is drawn here rather than written into the textarea. Putting it
+ * in the real value meant undoing it on every keystroke - which raced with fast
+ * typing and duplicated characters, filled the browser's undo stack with edits
+ * nobody made, and marked the workflow dirty while merely browsing. The layer
+ * is only a picture of the text, so drawing on it costs nothing and cannot be
+ * typed over.
+ */
+function highlight(text, known, triggers, ghost) {
   const spans = tokenise(text, known, triggers);
+  const cut = ghost ? Math.max(0, Math.min(text.length, ghost.at)) : -1;
+  const ghostHTML = ghost
+    ? `<span class="wpe-ghost">${escapeHTML(ghost.text)}` +
+      `<span class="wpe-ghost-key">${escapeHTML(ghost.hint || "")}</span></span>`
+    : "";
+
+  let placed = !ghost;
+  const run = (from, to) => {
+    if (!placed && cut >= from && cut <= to) {
+      placed = true;
+      return escapeHTML(text.slice(from, cut)) + ghostHTML + escapeHTML(text.slice(cut, to));
+    }
+    return escapeHTML(text.slice(from, to));
+  };
+
   let html = "";
   let at = 0;
   for (const span of spans) {
-    html += escapeHTML(text.slice(at, span.start));
+    html += run(at, span.start);
     const title = span.title ? ` title="${span.title}"` : "";
-    html += `<span class="${span.cls}"${title}>${escapeHTML(text.slice(span.start, span.end))}</span>`;
+    // Nested, so a suggestion inside a coloured run still reads as a suggestion.
+    html += `<span class="${span.cls}"${title}>${run(span.start, span.end)}</span>`;
     at = span.end;
   }
-  html += escapeHTML(text.slice(at));
+  html += run(at, text.length);
+  if (!placed) html += ghostHTML;
   // A trailing newline needs something after it or the layer scrolls short.
   return html + "\n";
 }
 
 // Every property that decides where a glyph lands, copied from the textarea
-// onto the layer and onto the mirror used to find the caret.
+// onto the layer, so the two agree character for character.
 const COPIED_STYLES = [
   "fontFamily", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing",
   "textIndent", "textTransform", "paddingTop", "paddingRight", "paddingBottom",
@@ -278,97 +284,142 @@ const COPIED_STYLES = [
   "borderLeftWidth", "boxSizing", "tabSize", "textAlign",
 ];
 
-/** The caret's line on screen: where it starts, and where that line ends.
+/** Inline completion for "/".
  *
- * Measured from a copy of the text before the caret, laid out in a box with the
- * textarea's metrics. Rectangles are compared rather than offsetTop, which is
- * relative to whichever ancestor happens to be positioned.
+ * Typing / starts a suggestion. The best match is drawn in grey after the
+ * caret's line; Tab takes it, the arrows walk the alternatives, Escape or
+ * moving away drops it. Nothing is written until Tab: the textarea holds only
+ * what was typed, so a suggestion cannot be typed over, cannot land in the undo
+ * history, and cannot mark the workflow changed.
+ *
+ * A popover anchored near the caret was the obvious design and kept covering
+ * the text - the caret's position has to be estimated from a mirror of the
+ * text, and any disagreement puts the menu on what is being typed. Grey text
+ * needs no estimating; it is drawn by the same layer that colours everything
+ * else, from the same string.
  */
-function caretLine(textarea) {
-  const cs = getComputedStyle(textarea);
-  const mirror = document.createElement("div");
-  for (const prop of COPIED_STYLES) mirror.style[prop] = cs[prop];
-  Object.assign(mirror.style, {
-    position: "absolute",
-    top: "0",
-    left: "0",
-    visibility: "hidden",
-    pointerEvents: "none",
-    whiteSpace: "pre-wrap",
-    overflowWrap: "break-word",
-    width: `${textarea.clientWidth}px`,
-    height: "auto",
-  });
-  document.body.appendChild(mirror);
+function inlineCompletion(node, textarea, list, commit, lit) {
+  let session = null; // { at, query, matches, index }
+  let run = 0; // so a slow lookup cannot overwrite a newer one
 
-  mirror.textContent = (textarea.value || "").slice(0, textarea.selectionStart);
-  const marker = document.createElement("span");
-  marker.textContent = "\u200b";
-  mirror.appendChild(marker);
-
-  const mirrorBox = mirror.getBoundingClientRect();
-  const markerBox = marker.getBoundingClientRect();
-  const withinX = markerBox.left - mirrorBox.left;
-  const withinY = markerBox.top - mirrorBox.top;
-  const lineHeight = markerBox.height || parseFloat(cs.lineHeight || "16");
-  mirror.remove();
-
-  const box = textarea.getBoundingClientRect();
-  const top = box.top + withinY - textarea.scrollTop;
-  return {
-    left: box.left + withinX - textarea.scrollLeft,
-    top,
-    bottom: top + lineHeight,
-    // The caret can be scrolled out of sight; the menu should still appear
-    // against the box rather than off in the page somewhere.
-    field: box,
+  const drop = () => {
+    if (!session) return;
+    session = null;
+    lit?.setGhost(null);
   };
-}
 
-/** Put the picker under the prompt panel, at the caret's column.
- *
- * Anchoring it to the caret's own line was the obvious thing and went wrong
- * repeatedly: the line has to be computed from a mirror of the text, and every
- * disagreement between that estimate and the real caret put the menu over what
- * was being typed. The panel's edges need no estimating. The caret is always
- * inside the panel, so opening below the panel cannot cover the caret whatever
- * the estimate would have said - and the menu stays put while typing instead
- * of hopping a line at a time.
- *
- * Only the horizontal position still follows the caret, where being a few
- * pixels out costs nothing.
- */
-function placeAtCaret(menu, textarea) {
-  const gap = 6;
-  const viewH = window.innerHeight || document.documentElement.clientHeight || 800;
-  const viewW = window.innerWidth || document.documentElement.clientWidth || 1200;
-  const box = textarea.getBoundingClientRect();
-  const style = getComputedStyle(textarea);
+  /** End of the line the caret is on - the suggestion goes there, so text
+   *  after the caret is never pushed out of step with the real textarea. */
+  const lineEnd = (value, caret) => {
+    const nl = value.indexOf("\n", caret);
+    return nl === -1 ? value.length : nl;
+  };
 
-  // The text stops where the reserved room for the LoRA list begins.
-  const reserved = parseFloat(style.paddingBottom || "0");
-  const panelBottom = Math.min(box.bottom, box.bottom - reserved + gap);
-  const panelTop = box.top;
+  const draw = () => {
+    if (!session || !session.matches.length) {
+      lit?.setGhost(null);
+      return;
+    }
+    const entry = session.matches[session.index];
+    const stem = stemOf(entry.id);
+    const q = session.query;
+    const shown = stem.toLowerCase().startsWith(q.toLowerCase()) ? stem.slice(q.length) : ` ${stem}`;
+    const nth = session.matches.length > 1 ? ` ${session.index + 1}/${session.matches.length} ↑↓` : "";
+    lit?.setGhost({
+      at: lineEnd(textarea.value || "", session.at + 1 + q.length),
+      text: shown,
+      hint: `${nth} ⇥`,
+    });
+  };
 
-  const roomBelow = Math.max(0, viewH - panelBottom - gap * 2);
-  const roomAbove = Math.max(0, panelTop - gap * 2);
-  const below = roomBelow >= roomAbove;
-  const limit = Math.max(90, Math.min(340, below ? roomBelow : roomAbove));
+  const look = async () => {
+    if (!session) return;
+    const mine = ++run;
+    const value = textarea.value || "";
+    if (value[session.at] !== "/") return drop();
 
-  menu.style.maxHeight = `${Math.round(limit)}px`;
-  const height = Math.min(menu.offsetHeight || limit, limit);
-  const top = below ? panelBottom + gap : Math.max(gap, panelTop - gap - height);
+    const entries = await library();
+    if (!session || mine !== run) return; // a newer keystroke owns the session
 
-  let left = box.left;
-  try {
-    left = caretLine(textarea).left;
-  } catch {
-    /* the column is a nicety; the panel edge is the fallback */
-  }
-  const width = menu.offsetWidth || 330;
+    const q = session.query.toLowerCase();
+    const terms = q.split(/\s+/).filter(Boolean);
+    const rank = (e) => (stemOf(e.id).toLowerCase().startsWith(q) ? 0 : e.name.toLowerCase().startsWith(q) ? 1 : 2);
+    session.matches = entries
+      .filter((e) => {
+        if (!terms.length) return false; // bare "/" is a slash, not a request
+        const hay = `${e.creator || ""} ${e.name} ${e.folder} ${stemOf(e.id)}`.toLowerCase();
+        return terms.every((t) => hay.includes(t));
+      })
+      .sort((a, b) => rank(a) - rank(b) || stemOf(a.id).length - stemOf(b.id).length)
+      .slice(0, 40);
+    session.index = 0;
+    draw();
+  };
 
-  menu.style.top = `${Math.round(top)}px`;
-  menu.style.left = `${Math.round(Math.max(gap, Math.min(left, viewW - width - gap)))}px`;
+  const accept = () => {
+    if (!session || !session.matches.length) return false;
+    const entry = session.matches[session.index];
+    const { at, query } = session;
+    const value = textarea.value || "";
+    const stem = stemOf(entry.id);
+
+    // A LoRA joins the list below; an embedding belongs in the prompt itself.
+    const replacement = entry.kind === "embeddings" ? `embedding:${stem}` : "";
+    drop();
+    textarea.value = value.slice(0, at) + replacement + value.slice(at + 1 + query.length);
+    const caret = at + replacement.length;
+    textarea.setSelectionRange(caret, caret);
+    if (entry.kind !== "embeddings") list.add(stem);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    commit();
+    return true;
+  };
+
+  textarea.addEventListener("keydown", (e) => {
+    if (e.key === "/") {
+      // Started once the slash has actually landed.
+      setTimeout(() => {
+        session = { at: Math.max(0, textarea.selectionStart - 1), query: "", matches: [], index: 0 };
+        look();
+      }, 0);
+      return;
+    }
+    if (!session) return;
+
+    const live = session.matches.length > 0;
+    if (live && (e.key === "Tab" || e.key === "Enter")) {
+      e.preventDefault();
+      e.stopPropagation();
+      accept();
+    } else if (live && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      e.preventDefault();
+      e.stopPropagation();
+      const n = session.matches.length;
+      session.index = (session.index + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
+      draw();
+    } else if (e.key === "Escape") {
+      if (live) e.stopPropagation();
+      drop();
+    }
+  });
+
+  textarea.addEventListener("input", () => {
+    if (!session) return;
+    const value = textarea.value || "";
+    const caret = textarea.selectionStart;
+    // The session lasts as long as the caret is still after its own slash.
+    if (value[session.at] !== "/" || caret <= session.at) return drop();
+    session.query = value.slice(session.at + 1, caret);
+    if (/[\n,<>]/.test(session.query)) return drop();
+    look();
+  });
+
+  // Clicking elsewhere in the text is a decision not to complete.
+  const away = () => drop();
+  textarea.addEventListener("blur", away);
+  textarea.addEventListener("pointerdown", away);
+
+  return { active: () => !!session };
 }
 
 /** The textarea being typed into, under either node renderer.
@@ -414,6 +465,7 @@ function light(textarea) {
 
   let known = null;
   let triggers = [];
+  let ghost = null;
 
   const measure = () => {
     const cs = getComputedStyle(textarea);
@@ -453,7 +505,7 @@ function light(textarea) {
   // seen as a flicker, and the timer calls this every second regardless.
   let painted = null;
   const paint = () => {
-    const html = highlight(textarea.value || "", known, triggers);
+    const html = highlight(textarea.value || "", known, triggers, ghost);
     if (html !== painted) {
       painted = html;
       layer.innerHTML = html;
@@ -504,6 +556,11 @@ function light(textarea) {
       triggers = nextTriggers;
       paint();
     },
+    // { at, text, hint } - extra text drawn at an offset, or null for none.
+    setGhost: (next) => {
+      ghost = next;
+      paint();
+    },
     detach: () => {
       clearInterval(ticker);
       layer.remove();
@@ -518,153 +575,6 @@ function light(textarea) {
 }
 
 // --- the picker ------------------------------------------------------------
-
-function openPicker(node, el, list, commit) {
-  if (!el || el._wpeMenu) return;
-
-  const menu = document.createElement("div");
-  menu.className = "wpe-menu";
-  el._wpeMenu = menu;
-  document.body.appendChild(menu);
-  // Placed after it is in the document, so its real height decides whether it
-  // goes below the caret or above it.
-  placeAtCaret(menu, el);
-
-  const slashAt = el.selectionStart - 1;
-  let entries = [];
-  let matches = [];
-  let active = 0;
-
-  const close = () => {
-    menu.remove();
-    delete el._wpeMenu;
-    el.removeEventListener("keydown", onKey, true);
-    el.removeEventListener("input", onInput);
-    document.removeEventListener("mousedown", onOutside, true);
-  };
-
-  const choose = (entry) => {
-    const text = el.value || "";
-    // The slash and whatever was typed after it are removed either way; a LoRA
-    // then joins the list below rather than cluttering the prompt, while an
-    // embedding is part of the prompt and stays in it.
-    const before = text.slice(0, slashAt);
-    const after = text.slice(el.selectionStart);
-    if (entry.kind === "embeddings") {
-      const snippet = `embedding:${stemOf(entry.id)}`;
-      el.value = before + snippet + after;
-      const caret = slashAt + snippet.length;
-      el.setSelectionRange(caret, caret);
-    } else if (list.separate) {
-      el.value = before + after;
-      el.setSelectionRange(slashAt, slashAt);
-      list.add(stemOf(entry.id));
-    } else {
-      const snippet = `<lora:${stemOf(entry.id)}:1.0>`;
-      el.value = before + snippet + after;
-      const caret = slashAt + snippet.length;
-      el.setSelectionRange(caret, caret);
-    }
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.focus();
-    commit();
-    close();
-    node.setDirtyCanvas?.(true, true);
-  };
-
-  const render = () => {
-    const query = (el.value || "").slice(slashAt + 1, el.selectionStart).toLowerCase();
-    const terms = query.split(/\s+/).filter(Boolean);
-    matches = entries
-      .filter((e) => {
-        if (!terms.length) return true;
-        const hay = `${e.creator || ""} ${e.name} ${e.folder} ${e.kind}`.toLowerCase();
-        return terms.every((t) => hay.includes(t));
-      })
-      .slice(0, 60);
-
-    menu.replaceChildren();
-    if (!matches.length) {
-      const none = document.createElement("div");
-      none.className = "wpe-hint";
-      none.textContent = query ? `Nothing matches “${query}”` : "Library is empty";
-      menu.appendChild(none);
-      return;
-    }
-    active = Math.max(0, Math.min(active, matches.length - 1));
-    matches.forEach((entry, i) => {
-      const row = document.createElement("button");
-      row.type = "button";
-      row.className = "wpe-item" + (i === active ? " is-active" : "");
-      if (entry.thumbnail) {
-        const img = document.createElement("img");
-        img.loading = "lazy";
-        img.alt = "";
-        img.src = entry.thumbnail;
-        row.appendChild(img);
-      } else {
-        const blank = document.createElement("span");
-        blank.className = "wpe-blank";
-        row.appendChild(blank);
-      }
-      const txt = document.createElement("span");
-      txt.className = "wpe-txt";
-      const kind = entry.kind === "embeddings" ? "embedding" : entry.folder || "lora";
-      txt.innerHTML =
-        `<span class="wpe-nm">${escapeHTML(entry.name)}</span>` +
-        `<span class="wpe-sub">${escapeHTML([entry.creator, entry.version, kind].filter(Boolean).join(" · "))}</span>`;
-      txt.style.display = "block";
-      row.appendChild(txt);
-      row.addEventListener("mousedown", (e) => {
-        e.preventDefault();
-        choose(entry);
-      });
-      menu.appendChild(row);
-    });
-    menu.querySelector(".is-active")?.scrollIntoView({ block: "nearest" });
-    placeAtCaret(menu, el);
-  };
-
-  const onKey = (e) => {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      close();
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      e.stopPropagation();
-      active += 1;
-      render();
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      e.stopPropagation();
-      active -= 1;
-      render();
-    } else if ((e.key === "Enter" || e.key === "Tab") && matches[active]) {
-      e.preventDefault();
-      e.stopPropagation();
-      choose(matches[active]);
-    }
-  };
-  const onInput = () => {
-    if (el.selectionStart <= slashAt || (el.value || "")[slashAt] !== "/") close();
-    else {
-      active = 0;
-      render();
-    }
-  };
-  const onOutside = (e) => {
-    if (!menu.contains(e.target)) close();
-  };
-
-  el.addEventListener("keydown", onKey, true);
-  el.addEventListener("input", onInput);
-  document.addEventListener("mousedown", onOutside, true);
-
-  library().then((data) => {
-    entries = data;
-    render();
-  });
-}
 
 // --- rows ------------------------------------------------------------------
 
@@ -1120,9 +1030,7 @@ app.registerExtension({
       lit = light(el);
       if (el.parentElement) new ResizeObserver(() => fitPane()).observe(el.parentElement);
       el.addEventListener("input", commit);
-      el.addEventListener("keydown", (e) => {
-        if (e.key === "/") setTimeout(() => openPicker(node, el, list, commit), 0);
-      });
+      inlineCompletion(node, el, list, commit, lit);
       commit();
     };
 
