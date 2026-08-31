@@ -432,8 +432,15 @@ function light(textarea) {
     if (layer.scrollLeft !== textarea.scrollLeft) layer.scrollLeft = textarea.scrollLeft;
   };
 
+  // Rewriting innerHTML with identical markup still costs a reflow and can be
+  // seen as a flicker, and the timer calls this every second regardless.
+  let painted = null;
   const paint = () => {
-    layer.innerHTML = highlight(textarea.value || "", known, triggers);
+    const html = highlight(textarea.value || "", known, triggers);
+    if (html !== painted) {
+      painted = html;
+      layer.innerHTML = html;
+    }
     syncScroll();
   };
 
@@ -1120,26 +1127,33 @@ app.registerExtension({
       const holder = el?.parentElement;
       if (!holder) return;
 
-      const total = holder.clientHeight;
       const rows = host.querySelectorAll(".wpc-row").length;
       const empty = rows === 0;
       host.hidden = empty;
       divider.hidden = empty;
 
-      if (empty || total < 80) {
-        el.style.height = "";
+      if (empty) {
         el.style.paddingBottom = "";
+        host.style.height = "";
+        lit?.measure();
+        lit?.paint();
         return;
       }
 
-      // A share of the field, kept away from either edge so both stay usable.
-      const ratio = Math.max(0.25, Math.min(0.8, node.properties[SPLIT_KEY] ?? 0.55));
-      const promptH = Math.round(total * ratio);
-      el.style.height = `${promptH}px`;
-      el.style.paddingBottom = "";
-      divider.style.top = `${promptH}px`;
-      host.style.top = `${promptH + DIVIDER_H}px`;
-      host.style.height = "auto";
+      // The textarea's own height is left alone. Setting it from the height of
+      // the box it sits in fed back - the box is sized by what is in it - and
+      // the two chased each other a pixel at a time, which showed as the
+      // prompt jumping and the caret blinking in and out of view. Room for the
+      // list is reserved with padding instead, which nothing else reads.
+      const total = holder.clientHeight;
+      if (total < 60) return;
+      const ratio = Math.max(0.2, Math.min(0.75, 1 - (node.properties[SPLIT_KEY] ?? 0.55)));
+      const listH = Math.max(28, Math.round(total * ratio));
+
+      host.style.height = `${listH}px`;
+      divider.style.top = "auto";
+      divider.style.bottom = `${listH}px`;
+      el.style.paddingBottom = `${listH + DIVIDER_H}px`;
       lit?.measure();
       lit?.paint();
     };
@@ -1170,6 +1184,7 @@ app.registerExtension({
         );
         fitPane();
       };
+
       const onUp = (up) => {
         divider.classList.remove("is-drag");
         divider.releasePointerCapture?.(up.pointerId);
