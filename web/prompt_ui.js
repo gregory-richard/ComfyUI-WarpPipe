@@ -52,7 +52,11 @@ const STYLE = `
 .wpe-live { position: relative; z-index: 1; background: transparent !important; }
 .wpe-live.is-lit { color: transparent !important; }
 .wpe-tag { color: #4ec8e8; }
+/* Two different complaints, told apart at a glance: red is a file that is not
+   there, orange is a file that is there and is for another base model. The
+   second still loads, so it is a warning rather than an error. */
 .wpe-tag-unknown { color: #e0705a; text-decoration: underline wavy rgba(224,112,90,0.5); }
+.wpe-tag-other { color: #e59440; text-decoration: underline dotted rgba(229,148,64,0.65); }
 .wpe-embed { color: #e8b34e; }
 .wpe-note { color: #7b7f86; font-style: italic; }
 .wpe-trigger { color: #9ad9a4; }
@@ -88,6 +92,7 @@ const STYLE = `
   flex: 0 2 auto; min-width: 0; opacity: 0.5;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.wps-by.is-other { color: #e59440; opacity: 0.9; }
 /* Everything that can be acted on is the same shape and the same height, so
    the row reads as one line rather than as text with controls dropped in. */
 .wps-chip {
@@ -178,6 +183,8 @@ async function library() {
 const stemOf = (id) => id.replace(/\\/g, "/").split("/").pop().replace(/\.[^.]+$/, "");
 const escapeHTML = (s) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// A reason names real files and real base models, so it can carry a quote.
+const escapeAttr = (s) => escapeHTML(s).replace(/"/g, "&quot;");
 
 // --- the text ---------------------------------------------------------------
 
@@ -265,8 +272,13 @@ function tagInsertion(value, from, to, tag) {
 
 // --- highlighting ----------------------------------------------------------
 
-/** Non-overlapping spans, earliest first: a note swallows anything after it. */
-function tokenise(text, known, triggers) {
+/** Non-overlapping spans, earliest first: a note swallows anything after it.
+ *
+ * `status` answers for one LoRA name: null when there is nothing to say, or the
+ * class and the reason when there is. Deciding that here would mean knowing
+ * both the library and the connected model; this only needs to be told.
+ */
+function tokenise(text, status, triggers) {
   const spans = [];
   const claim = (start, end, cls, title) => {
     if (spans.some((s) => start < s.end && s.start < end)) return;
@@ -280,9 +292,8 @@ function tokenise(text, known, triggers) {
   }
   TAG_RE.lastIndex = 0;
   while ((m = TAG_RE.exec(text)) !== null) {
-    const missing = known && !known.has(m[1].trim().toLowerCase());
-    claim(m.index, m.index + m[0].length, missing ? "wpe-tag-unknown" : "wpe-tag",
-      missing ? "No file matches this name" : undefined);
+    const flag = status?.(m[1].trim()) || null;
+    claim(m.index, m.index + m[0].length, flag?.cls || "wpe-tag", flag?.title);
   }
   EMBED_RE.lastIndex = 0;
   while ((m = EMBED_RE.exec(text)) !== null) {
@@ -308,8 +319,8 @@ function tokenise(text, known, triggers) {
  * is only a picture of the text, so drawing on it costs nothing and cannot be
  * typed over.
  */
-function highlight(text, known, triggers, ghost) {
-  const spans = tokenise(text, known, triggers);
+function highlight(text, status, triggers, ghost) {
+  const spans = tokenise(text, status, triggers);
   const cut = ghost ? Math.max(0, Math.min(text.length, ghost.at)) : -1;
   const ghostHTML = ghost
     ? `<span class="wpe-ghost">${escapeHTML(ghost.text)}` +
@@ -329,7 +340,7 @@ function highlight(text, known, triggers, ghost) {
   let at = 0;
   for (const span of spans) {
     html += run(at, span.start);
-    const title = span.title ? ` title="${span.title}"` : "";
+    const title = span.title ? ` title="${escapeAttr(span.title)}"` : "";
     // Nested, so a suggestion inside a coloured run still reads as a suggestion.
     html += `<span class="${span.cls}"${title}>${run(span.start, span.end)}</span>`;
     at = span.end;
@@ -390,7 +401,7 @@ function light(textarea) {
   textarea.style.caretColor = ink;
   textarea._wpeLayer = layer;
 
-  let known = null;
+  let status = null;
   let triggers = [];
   let ghost = null;
 
@@ -430,7 +441,7 @@ function light(textarea) {
   // seen as a flicker, and the timer calls this every second regardless.
   let painted = null;
   const paint = () => {
-    const html = highlight(textarea.value || "", known, triggers, ghost);
+    const html = highlight(textarea.value || "", status, triggers, ghost);
     if (html !== painted) {
       painted = html;
       layer.innerHTML = html;
@@ -471,8 +482,9 @@ function light(textarea) {
     paint,
     measure,
     syncScroll,
-    setVocabulary: (nextKnown, nextTriggers) => {
-      known = nextKnown;
+    // status(name) -> null, or { cls, title } saying what is wrong with it.
+    setVocabulary: (nextStatus, nextTriggers) => {
+      status = nextStatus;
       triggers = nextTriggers;
       paint();
     },
@@ -931,7 +943,7 @@ function makeStrip(node) {
     el.appendChild(span);
   };
 
-  const show = (tag, entry, insertWords, openFull) => {
+  const show = (tag, entry, insertWords, openFull, fits) => {
     el.replaceChildren();
 
     if (entry?.thumbnail) {
@@ -952,13 +964,21 @@ function makeStrip(node) {
     if (entry) name.addEventListener("click", openFull);
     el.appendChild(name);
 
-    const by = [entry?.creator, entry?.structured ? entry?.version : "", entry?.base_model]
+    const by = [entry?.creator, entry?.structured ? entry?.version : ""]
       .filter(Boolean)
       .join(" · ");
     if (by) {
       const span = document.createElement("span");
       span.className = "wps-by";
       span.textContent = by;
+      el.appendChild(span);
+    }
+    if (entry?.base_model) {
+      // The same thing the orange in the prompt says, in words.
+      const span = document.createElement("span");
+      span.className = "wps-by" + (fits === false ? " is-other" : "");
+      span.textContent = entry.base_model;
+      if (fits === false) span.title = "Made for another base model than the one connected";
       el.appendChild(span);
     }
 
@@ -1106,7 +1126,7 @@ app.registerExtension({
       for (const tag of parseTags(getEl()?.value || "")) {
         for (const w of lookup(tag.name)?.triggers || []) words.add(w);
       }
-      lit?.setVocabulary(new Set(known.keys()), [...words]);
+      lit?.setVocabulary(tagStatus, [...words]);
       await baseOf();
       updateStrip();
     };
@@ -1168,9 +1188,35 @@ app.registerExtension({
         return;
       }
       const entry = lookup(tag.name);
-      strip.show(tag, entry, insertWords, () =>
-        entry && openDetails(entry, el.value || "", insertWords)
+      const fits = entry?.base_model && baseSeen.base ? sameBase(entry.base_model, baseSeen.base) : null;
+      strip.show(
+        tag,
+        entry,
+        insertWords,
+        () => entry && openDetails(entry, el.value || "", insertWords),
+        fits
       );
+    };
+
+    /** What is wrong with this tag, if anything.
+     *
+     * Two complaints, and they are not the same. A name nothing matches will
+     * not load at all, and is red. A name that matches a file made for another
+     * base model loads perfectly well and usually does nothing useful, so it is
+     * a warning in orange rather than an error - the reader may know something
+     * the sidecar does not.
+     */
+    const tagStatus = (name) => {
+      const entry = lookup(name);
+      if (!entry) return { cls: "wpe-tag-unknown", title: "No file matches this name" };
+      const base = baseSeen.base;
+      if (base && entry.base_model && !sameBase(entry.base_model, base)) {
+        return {
+          cls: "wpe-tag-other",
+          title: `Made for ${entry.base_model}, but ${base} is connected`,
+        };
+      }
+      return null;
     };
 
     // Asked again whenever the wired-in model changes, and not otherwise: the

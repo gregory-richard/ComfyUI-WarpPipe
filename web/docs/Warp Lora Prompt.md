@@ -54,11 +54,18 @@ The prompt box colours what it finds, so the text says what it will do:
 
 | | |
 | --- | --- |
-| cyan | a LoRA tag that matches a file |
-| red, underlined | a tag matching nothing — check the spelling |
+| cyan | a LoRA tag that matches a file, for the model you are using |
+| red, wavy underline | a tag matching nothing — check the spelling |
+| orange, dotted underline | a real file, but made for another base model |
 | amber | an embedding |
 | green | a trigger word belonging to one of the LoRAs in use |
 | grey italic | a note, which is not sent |
+
+Red and orange are different complaints. Red will not load at all. Orange loads
+perfectly well and usually does nothing useful, so it is a warning rather than
+an error — you may know something the sidecar does not. Hover either for the
+reason; orange names both base models. With nothing wired into **model**, or for
+a file whose sidecar names no base, nothing can be judged and nothing is orange.
 
 A tag inside a note is coloured as a note, because that is what happens to it:
 it does not load.
