@@ -104,6 +104,12 @@ The title comes from the `.civitai.info` sidecar rather than the filename, so it
 reads correctly whatever the file is called. Without a sidecar the row falls back
 to the filename and has no link.
 
+## The size of the list
+
+The list has its own pane with a set height and scrolls inside it, so adding a
+twentieth LoRA does not make the node twenty rows taller. Drag the handle under
+it to make it taller or shorter; the height is saved with the workflow.
+
 ## Choosing trigger words
 
 **⊕** opens a list of that LoRA's trigger words. Creators sometimes declare a

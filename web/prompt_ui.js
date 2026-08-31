@@ -66,11 +66,28 @@ const STYLE = `
 }
 .wpe-hint { padding: 5px 7px; font-size: 10px; opacity: 0.5; }
 
-.wpc { display: flex; flex-direction: column; gap: 3px; font-size: 11px; overflow-y: auto;
-  color: var(--input-text, #dcdcdc); }
+/* ComfyUI lays each widget out in its own row and puts its own rows back if
+   they are moved, so the list sits in a pane of its own with a set height
+   instead. That is what stops twenty LoRAs making the node twenty rows taller;
+   the pane scrolls and can be dragged taller. */
+.wpe-pane {
+  min-width: 0; display: block; overflow: hidden;
+  border: 1px solid var(--border-color, #3a3a3a); border-radius: 5px;
+  background: var(--comfy-input-bg, #171717);
+}
+.wpe-grow { height: 9px; cursor: row-resize; position: relative; }
+.wpe-grow::after {
+  content: ""; position: absolute; left: 42%; right: 42%; top: 4px; height: 1px;
+  background: var(--border-color, #3a3a3a);
+}
+.wpe-grow:hover::after, .wpe-grow.is-drag::after { background: #4ec8e8; height: 2px; }
+
+/* Smaller than the prompt: a long list has to stay readable at a glance. */
+.wpc { display: flex; flex-direction: column; gap: 2px; font-size: 10px; overflow-y: auto;
+  height: 100%; color: var(--input-text, #dcdcdc); }
 .wpc-empty { opacity: 0.45; padding: 4px 2px; }
 .wpc-row {
-  display: flex; align-items: center; gap: 6px; padding: 3px 5px; border-radius: 4px;
+  display: flex; align-items: center; gap: 5px; padding: 2px 4px; border-radius: 4px;
   background: var(--comfy-input-bg, #171717); border: 1px solid var(--border-color, #3a3a3a);
 }
 .wpc-row.is-missing { border-color: #b4553f; }
@@ -85,15 +102,15 @@ const STYLE = `
 .wpc-row:hover .wpc-grip { opacity: 0.75; }
 .wpc-power { color: #9ad9a4; }
 .wpc-row.is-off .wpc-power { color: inherit; }
-.wpc-thumb { width: 22px; height: 22px; flex: 0 0 22px; border-radius: 3px; object-fit: cover; background: #0d0d0d; }
+.wpc-thumb { width: 20px; height: 20px; flex: 0 0 20px; border-radius: 3px; object-fit: cover; background: #0d0d0d; }
 .wpc-name { flex: 1; min-width: 0; overflow: hidden; }
 .wpc-name b { font-weight: 600; }
 .wpc-name .wpc-line {
   display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.wpc-name .wpc-by { font-size: 10px; opacity: 0.5; }
-.wpc-link { text-decoration: none; }
-.wpc-link:hover { color: #4ec8e8; }
+.wpc-name .wpc-by { font-size: 9px; opacity: 0.5; }
+.wpc-link { text-decoration: none; color: #4ec8e8; opacity: 0.8; font-size: 12px; }
+.wpc-link:hover { opacity: 1; }
 
 .wpt-menu {
   position: fixed; z-index: 1700; width: 300px; max-height: 300px; overflow-y: auto;
@@ -123,14 +140,14 @@ const STYLE = `
 .wpt-item:hover, .wpt-item.is-active { background: rgba(78,200,232,0.16); }
 .wpt-item.is-in { opacity: 0.45; }
 .wpc-weight {
-  width: 44px; text-align: center; padding: 1px 0; border-radius: 3px;
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 11px;
+  width: 40px; text-align: center; padding: 0; border-radius: 3px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 10px;
   background: none; border: 1px solid transparent; color: #4ec8e8; cursor: ew-resize;
 }
 .wpc-weight:hover { border-color: var(--border-color, #3a3a3a); }
 .wpc-weight:focus-visible { outline: 2px solid #4ec8e8; cursor: text; }
-.wpc-btn { background: none; border: 0; color: inherit; opacity: 0.5; cursor: pointer;
-  font-size: 12px; line-height: 1; padding: 2px 3px; border-radius: 3px; }
+.wpc-btn { background: none; border: 0; color: inherit; opacity: 0.62; cursor: pointer;
+  font-size: 11px; line-height: 1; padding: 1px 2px; border-radius: 3px; }
 .wpc-btn:hover { opacity: 1; color: #4ec8e8; }
 .wpc-btn:focus-visible { outline: 2px solid #4ec8e8; opacity: 1; }
 .wpc-btn[disabled] { opacity: 0.15; cursor: default; }
@@ -875,17 +892,11 @@ app.registerExtension({
       list.set(stripped && tags ? `${stripped} ${tags}` : stripped || tags);
     };
 
+    // Not a DOM widget: ComfyUI repositions those into its own rows every
+    // frame, which drags the list back out of the split. This one is placed by
+    // hand inside the split and re-attached if the frontend rebuilds the grid.
     const host = document.createElement("div");
-    host.className = "wpc";
-    const rowsWidget = node.addDOMWidget("warppipe_rows", "div", host, {
-      getValue: () => "",
-      setValue: () => {},
-      serialize: false,
-    });
-    if (rowsWidget) {
-      rowsWidget.label = "";
-      rowsWidget.computeSize = () => [node.size[0], 92];
-    }
+    host.className = "wpc wpe-pane col-span-full";
 
     const refreshVocabulary = async () => {
       const entries = await library();
@@ -961,6 +972,65 @@ app.registerExtension({
       commit();
     };
 
+    /** Give the list its own pane, directly under the prompt.
+     *
+     * Moving ComfyUI's own widget rows does not stick - the frontend puts them
+     * back on the next render - so nothing of ComfyUI's is moved. Only this
+     * pane is inserted, and re-inserted if the grid is rebuilt.
+     */
+    const HEIGHT_KEY = "warppipeListHeight";
+
+    const sizePane = () => {
+      host.style.height = `${node.properties[HEIGHT_KEY] ?? 150}px`;
+    };
+
+    const attachGrow = (grow) => {
+      grow.addEventListener("pointerdown", (down) => {
+        down.preventDefault();
+        grow.classList.add("is-drag");
+        grow.setPointerCapture(down.pointerId);
+        const startY = down.clientY;
+        const startHeight = host.getBoundingClientRect().height;
+        const onMove = (mv) => {
+          node.properties[HEIGHT_KEY] = Math.max(48, startHeight + (mv.clientY - startY));
+          sizePane();
+        };
+        const onUp = (up) => {
+          grow.classList.remove("is-drag");
+          grow.releasePointerCapture?.(up.pointerId);
+          grow.removeEventListener("pointermove", onMove);
+          grow.removeEventListener("pointerup", onUp);
+          node.setDirtyCanvas?.(true, true);
+        };
+        grow.addEventListener("pointermove", onMove);
+        grow.addEventListener("pointerup", onUp);
+      });
+    };
+
+    const applyPane = () => {
+      const root = document.querySelector(`[data-node-id="${node.id}"]`);
+      const grid = root?.querySelector(".lg-node-widgets");
+      if (!grid) return;
+
+      const promptRow = Array.from(grid.children).find((r) => r.querySelector("textarea"));
+      if (!promptRow) return;
+
+      let grow = grid.querySelector(":scope > .wpe-grow");
+      if (!grow) {
+        grow = document.createElement("div");
+        grow.className = "wpe-grow col-span-full";
+        grow.title = "Drag to change the height of the list";
+        attachGrow(grow);
+      }
+
+      // Re-appending the same elements keeps their listeners and scroll offset.
+      if (host.previousElementSibling !== promptRow || !host.isConnected) {
+        grid.insertBefore(host, promptRow.nextSibling);
+        grid.insertBefore(grow, host.nextSibling);
+      }
+      sizePane();
+    };
+
     // Prompt, then what is loaded, then how to add more, then the settings.
     const ORDER = ["text", "warppipe_rows", "Browse LoRAs", "insert_trigger_words", "apply_to_clip"];
     const reorderWidgets = () => {
@@ -975,6 +1045,7 @@ app.registerExtension({
 
     const ensure = () => {
       reorderWidgets();
+      applyPane();
       const el = findTextarea(node);
       if (el && !el._wpeLayer) {
         if (lit && lit.textarea !== el) lit.detach();
