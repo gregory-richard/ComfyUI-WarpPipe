@@ -2,19 +2,30 @@ import { app } from "../../scripts/app.js";
 
 // The prompt box, made legible.
 //
-// Three things share one idea: the text is the only state. A highlight layer
-// sits behind a transparent textarea so tags, notes and trigger words are
-// coloured while you still type into a real textarea (selection, undo, IME all
-// intact). A picker opens at the caret. Rows underneath show what will actually
-// load. Every control rewrites the text; nothing is stored beside it.
+// The text is the only state. A highlight layer sits behind a transparent
+// textarea so tags, notes and trigger words are coloured while you still type
+// into a real textarea (selection, undo, IME all intact). LoRAs are tags in
+// that text, each on a line of its own, and every verb - weight, off, reorder,
+// remove - is an ordinary text edit on that line. One strip under the prompt
+// shows whichever tag the caret is in; nothing else is stored beside the text.
 
 const NODE_ID = "Warp Lora Prompt";
 const TEXT_WIDGET = "text";
 const LIST_WIDGET = "loras";
 
+// The strip is placed by hand rather than added as a widget. A widget of its
+// own takes a slot in widgets_values, and those are restored by position: a
+// workflow saved before it existed then loads every later value one place out,
+// which put the LoRA list into apply_to_clip and lost it. Nothing about the
+// saved node changes this way.
+const STRIP_H = 22;
+
 const TAG_RE = /<lora:([^:>]+):(-?[0-9]*\.?[0-9]+)([^>]*)>/gi;
 const COMMENT_RE = /\/\/[^\n]*/g;
 const EMBED_RE = /\bembedding:([^\s,]+)/gi;
+
+const WEIGHT_STEP = 0.1;
+const WEIGHT_LIMIT = 4;
 
 const FRIENDLY_LABELS = {
   text: "Prompt",
@@ -40,106 +51,51 @@ const STYLE = `
 .wpe-note { color: #7b7f86; font-style: italic; }
 .wpe-trigger { color: #9ad9a4; }
 
-/* The suggestion is real text in the textarea, so it is always exactly where
-   the next characters would be. Only its colour says it is provisional. */
+/* Drawn, never typed: only its colour says it is provisional. */
 .wpe-ghost { color: #767e8b; }
 .wpe-ghost-key { color: #9aa3b0; }
 
-
-/* One field, two panels. ComfyUI's wrapper is already positioned, so the
-   divider and the list can be placed inside it without a second box: the
-   textarea keeps the top, the list takes the bottom, and each scrolls on its
-   own. Nothing of ComfyUI's is moved, only sized. */
-.wpc {
+/* One line along the bottom of the prompt field, for whichever tag the caret
+   is in. It replaced a scrolling list of cards - one per LoRA - which repeated
+   what the text already said and needed a draggable split to hold them all.
+   One line needs no split: it is a fixed strip the prompt reserves room for. */
+.wps {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
-  overflow-y: auto; padding: 3px 5px 5px; box-sizing: border-box;
+  display: flex; align-items: center; gap: 6px; box-sizing: border-box;
+  height: 22px; padding: 0 4px; overflow: hidden;
+  font-size: 10px; color: var(--input-text, #dcdcdc);
   background: var(--comfy-input-bg, #171717);
+  border-top: 1px solid var(--border-color, #3a3a3a);
 }
-.wpc[hidden] { display: none; }
-
-.wpe-divider {
-  position: absolute; left: 0; right: 0; z-index: 3; height: 7px;
-  cursor: row-resize; background: var(--comfy-input-bg, #171717);
+.wps-idle { opacity: 0.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wps-thumb {
+  width: 18px; height: 18px; flex: 0 0 18px; border-radius: 3px;
+  object-fit: cover; background: #0d0d0d;
 }
-.wpe-divider::after {
-  content: ""; position: absolute; left: 0; right: 0; top: 3px; height: 1px;
-  background: var(--border-color, #3a3a3a);
+.wps-name {
+  flex: 0 1 auto; min-width: 0; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.wpe-divider:hover::after, .wpe-divider.is-drag::after {
-  background: #4ec8e8; height: 2px; top: 2px;
+.wps-name.is-missing { color: #e0705a; font-weight: 400; }
+.wps-by { flex: 0 1 auto; min-width: 0; opacity: 0.55; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.wps-weight { color: #4ec8e8; font-family: ui-monospace, Consolas, monospace; }
+/* Trigger words sit at the end, where they can be clipped without hiding the
+   name: they are a convenience, and the same words are one Tab away. */
+.wps-words { display: flex; gap: 3px; margin-left: auto; overflow: hidden; }
+.wps-word {
+  background: none; border: 1px solid var(--border-color, #3a3a3a); color: #9ad9a4;
+  border-radius: 3px; font: inherit; padding: 0 4px; cursor: pointer;
+  white-space: nowrap; max-width: 90px; overflow: hidden; text-overflow: ellipsis;
 }
-.wpe-divider[hidden] { display: none; }
-
-/* Smaller than the prompt: a long list has to stay readable at a glance. */
-.wpc { display: flex; flex-direction: column; gap: 2px; font-size: 10px;
-  color: var(--input-text, #dcdcdc); }
-.wpc-empty { opacity: 0.45; padding: 4px 2px; }
-.wpc-row {
-  display: flex; align-items: center; gap: 5px; padding: 2px 4px; border-radius: 4px;
-  background: var(--comfy-input-bg, #171717); border: 1px solid var(--border-color, #3a3a3a);
+.wps-word:hover { border-color: #9ad9a4; }
+.wps-link { flex: 0 0 auto; text-decoration: none; color: #4ec8e8; opacity: 0.8; font-size: 12px; }
+.wps-link:hover { opacity: 1; }
+.wps-do {
+  background: none; border: 1px solid var(--border-color, #3a3a3a); color: inherit;
+  border-radius: 3px; font: inherit; padding: 0 6px; cursor: pointer;
 }
-.wpc-row.is-missing { border-color: #b4553f; }
-/* A disabled row stays legible - you need to read it to decide to switch it
-   back on - but everything about it is quieter. */
-.wpc-row.is-off { opacity: 0.42; }
-.wpc-row.is-off .wpc-name { text-decoration: line-through; }
-.wpc-row.is-drag { opacity: 0.35; }
-.wpc-row.is-over { box-shadow: 0 -2px 0 #4ec8e8; }
-.wpc-grip { cursor: grab; opacity: 0.35; flex: 0 0 9px; font-size: 11px; line-height: 1; }
-.wpc-grip:active { cursor: grabbing; }
-.wpc-row:hover .wpc-grip { opacity: 0.75; }
-.wpc-power { color: #9ad9a4; }
-.wpc-row.is-off .wpc-power { color: inherit; }
-.wpc-thumb { width: 20px; height: 20px; flex: 0 0 20px; border-radius: 3px; object-fit: cover; background: #0d0d0d; }
-.wpc-name { flex: 1; min-width: 0; overflow: hidden; }
-.wpc-name b { font-weight: 600; }
-.wpc-name .wpc-line {
-  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.wpc-name .wpc-by { font-size: 9px; opacity: 0.5; }
-.wpc-link { text-decoration: none; color: #4ec8e8; opacity: 0.8; font-size: 12px; }
-.wpc-link:hover { opacity: 1; }
-
-.wpt-menu {
-  position: fixed; z-index: 1700; width: 300px; max-height: 300px; overflow-y: auto;
-  background: var(--comfy-menu-bg, #1e1e1e); color: var(--input-text, #dcdcdc);
-  border: 1px solid var(--border-color, #3a3a3a); border-radius: 6px;
-  box-shadow: 0 14px 40px rgba(0,0,0,0.55); padding: 4px; font-size: 12px;
-}
-.wpt-head {
-  padding: 5px 7px; font-size: 10px; opacity: 0.55;
-  display: flex; align-items: center; gap: 8px;
-}
-.wpt-head button {
-  margin-left: auto; background: none; border: 1px solid var(--border-color, #3a3a3a);
-  color: inherit; border-radius: 3px; font: inherit; font-size: 10px;
-  padding: 2px 6px; cursor: pointer;
-}
-.wpt-head button:hover { border-color: #4ec8e8; color: #4ec8e8; }
-.wpt-item {
-  display: block; width: 100%; text-align: left; padding: 5px 7px;
-  background: none; border: 0; border-radius: 3px; color: inherit;
-  font: inherit; cursor: pointer;
-  /* Some creators write paragraphs here, so a long one wraps to a few lines
-     rather than being cut to something unrecognisable. */
-  white-space: normal; overflow-wrap: break-word;
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
-}
-.wpt-item:hover, .wpt-item.is-active { background: rgba(78,200,232,0.16); }
-.wpt-item.is-in { opacity: 0.45; }
-.wpc-weight {
-  width: 40px; text-align: center; padding: 0; border-radius: 3px;
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 10px;
-  background: none; border: 1px solid transparent; color: #4ec8e8; cursor: ew-resize;
-}
-.wpc-weight:hover { border-color: var(--border-color, #3a3a3a); }
-.wpc-weight:focus-visible { outline: 2px solid #4ec8e8; cursor: text; }
-.wpc-btn { background: none; border: 0; color: inherit; opacity: 0.62; cursor: pointer;
-  font-size: 11px; line-height: 1; padding: 1px 2px; border-radius: 3px; }
-.wpc-btn:hover { opacity: 1; color: #4ec8e8; }
-.wpc-btn:focus-visible { outline: 2px solid #4ec8e8; opacity: 1; }
-.wpc-btn[disabled] { opacity: 0.15; cursor: default; }
-.wpc-trig { color: #9ad9a4; opacity: 0.85; }
+.wps-do:hover { border-color: #4ec8e8; color: #4ec8e8; }
 `;
 
 // --- library ---------------------------------------------------------------
@@ -159,33 +115,12 @@ const stemOf = (id) => id.replace(/\\/g, "/").split("/").pop().replace(/\.[^.]+$
 const escapeHTML = (s) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** The LoRA list, one per line. A line commented out is one switched off -
- * which is exactly what the backend already does with a comment: nothing. */
-function parseList(value) {
-  return (value || "")
-    .split("\n")
-    .map((line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return null;
-      const enabled = !trimmed.startsWith("//");
-      const body = enabled ? trimmed : trimmed.replace(/^\/\/\s*/, "");
-      const m = /^<lora:([^:>]+):(-?[0-9]*\.?[0-9]+)[^>]*>$/i.exec(body);
-      return m ? { name: m[1].trim(), weight: parseFloat(m[2]), enabled } : null;
-    })
-    .filter(Boolean);
-}
+// --- the text ---------------------------------------------------------------
 
-function serialiseList(items) {
-  return items
-    .map((i) => `${i.enabled ? "" : "// "}<lora:${i.name}:${i.weight.toFixed(2)}>`)
-    .join("\n");
-}
-
-/** Is this position inside a // note? Parked tags are left where they are. */
+/** Is this position inside a // note? A tag parked there is switched off. */
 function inComment(text, index) {
   const lineStart = text.lastIndexOf("\n", index - 1) + 1;
-  const marker = text.slice(lineStart, index).indexOf("//");
-  return marker !== -1;
+  return text.slice(lineStart, index).includes("//");
 }
 
 function parseTags(text) {
@@ -193,9 +128,75 @@ function parseTags(text) {
   TAG_RE.lastIndex = 0;
   let m;
   while ((m = TAG_RE.exec(text)) !== null) {
-    found.push({ raw: m[0], name: m[1].trim(), weight: parseFloat(m[2]), start: m.index });
+    found.push({
+      raw: m[0],
+      name: m[1].trim(),
+      weight: parseFloat(m[2]),
+      start: m.index,
+      end: m.index + m[0].length,
+    });
   }
   return found;
+}
+
+/** The tag the caret is in or against. Touching either edge counts, so the
+ *  weight keys work with the caret just after the closing bracket. */
+function tagAt(text, index) {
+  return parseTags(text).find((t) => index >= t.start && index <= t.end) || null;
+}
+
+const lineBounds = (text, index) => {
+  const start = text.lastIndexOf("\n", index - 1) + 1;
+  const nl = text.indexOf("\n", index);
+  return { start, end: nl === -1 ? text.length : nl };
+};
+
+/** Replace a range, keeping the browser's own undo history.
+ *
+ * execCommand is the only way to edit a textarea that Ctrl+Z still understands;
+ * assigning to value clears the undo stack, which would make every one of these
+ * verbs a point of no return. The assignment is kept as a fallback for anywhere
+ * the command is refused.
+ */
+function edit(textarea, from, to, text, caret) {
+  textarea.focus();
+  textarea.setSelectionRange(from, to);
+  let ok = false;
+  try {
+    ok = document.execCommand("insertText", false, text);
+  } catch {
+    ok = false;
+  }
+  if (!ok) {
+    const value = textarea.value || "";
+    textarea.value = value.slice(0, from) + text + value.slice(to);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  const at = caret ?? from + text.length;
+  textarea.setSelectionRange(at, at);
+}
+
+/** Put a tag on a line of its own, where the caret is.
+ *
+ * Tags are not gathered at the top or the bottom: one belongs where you were
+ * writing when you reached for it. The line to itself is what lets the
+ * line-based verbs - comment out, move, delete - act on the tag and nothing
+ * else, so no new syntax is needed for any of them.
+ */
+function tagInsertion(value, from, to, tag) {
+  const before = value.slice(0, from).replace(/[ \t]+$/, "");
+  const after = value.slice(to).replace(/^[ \t]+/, "");
+  const openLine = before === "" || before.endsWith("\n");
+  const closeLine = after === "" || after.startsWith("\n");
+  const text = (openLine ? "" : "\n") + tag + (closeLine ? "" : "\n");
+  return {
+    from: before.length,
+    to: value.length - after.length,
+    text,
+    // The caret lands at the end of the tag, so the weight keys and the strip
+    // are both already pointing at what was just added.
+    caret: before.length + (openLine ? 0 : 1) + tag.length,
+  };
 }
 
 // --- highlighting ----------------------------------------------------------
@@ -284,144 +285,6 @@ const COPIED_STYLES = [
   "borderLeftWidth", "boxSizing", "tabSize", "textAlign",
 ];
 
-/** Inline completion for "/".
- *
- * Typing / starts a suggestion. The best match is drawn in grey after the
- * caret's line; Tab takes it, the arrows walk the alternatives, Escape or
- * moving away drops it. Nothing is written until Tab: the textarea holds only
- * what was typed, so a suggestion cannot be typed over, cannot land in the undo
- * history, and cannot mark the workflow changed.
- *
- * A popover anchored near the caret was the obvious design and kept covering
- * the text - the caret's position has to be estimated from a mirror of the
- * text, and any disagreement puts the menu on what is being typed. Grey text
- * needs no estimating; it is drawn by the same layer that colours everything
- * else, from the same string.
- */
-function inlineCompletion(node, textarea, list, commit, lit) {
-  let session = null; // { at, query, matches, index }
-  let run = 0; // so a slow lookup cannot overwrite a newer one
-
-  const drop = () => {
-    if (!session) return;
-    session = null;
-    lit?.setGhost(null);
-  };
-
-  /** End of the line the caret is on - the suggestion goes there, so text
-   *  after the caret is never pushed out of step with the real textarea. */
-  const lineEnd = (value, caret) => {
-    const nl = value.indexOf("\n", caret);
-    return nl === -1 ? value.length : nl;
-  };
-
-  const draw = () => {
-    if (!session || !session.matches.length) {
-      lit?.setGhost(null);
-      return;
-    }
-    const entry = session.matches[session.index];
-    const stem = stemOf(entry.id);
-    const q = session.query;
-    const shown = stem.toLowerCase().startsWith(q.toLowerCase()) ? stem.slice(q.length) : ` ${stem}`;
-    const nth = session.matches.length > 1 ? ` ${session.index + 1}/${session.matches.length} ↑↓` : "";
-    lit?.setGhost({
-      at: lineEnd(textarea.value || "", session.at + 1 + q.length),
-      text: shown,
-      hint: `${nth} ⇥`,
-    });
-  };
-
-  const look = async () => {
-    if (!session) return;
-    const mine = ++run;
-    const value = textarea.value || "";
-    if (value[session.at] !== "/") return drop();
-
-    const entries = await library();
-    if (!session || mine !== run) return; // a newer keystroke owns the session
-
-    const q = session.query.toLowerCase();
-    const terms = q.split(/\s+/).filter(Boolean);
-    const rank = (e) => (stemOf(e.id).toLowerCase().startsWith(q) ? 0 : e.name.toLowerCase().startsWith(q) ? 1 : 2);
-    session.matches = entries
-      .filter((e) => {
-        if (!terms.length) return false; // bare "/" is a slash, not a request
-        const hay = `${e.creator || ""} ${e.name} ${e.folder} ${stemOf(e.id)}`.toLowerCase();
-        return terms.every((t) => hay.includes(t));
-      })
-      .sort((a, b) => rank(a) - rank(b) || stemOf(a.id).length - stemOf(b.id).length)
-      .slice(0, 40);
-    session.index = 0;
-    draw();
-  };
-
-  const accept = () => {
-    if (!session || !session.matches.length) return false;
-    const entry = session.matches[session.index];
-    const { at, query } = session;
-    const value = textarea.value || "";
-    const stem = stemOf(entry.id);
-
-    // A LoRA joins the list below; an embedding belongs in the prompt itself.
-    const replacement = entry.kind === "embeddings" ? `embedding:${stem}` : "";
-    drop();
-    textarea.value = value.slice(0, at) + replacement + value.slice(at + 1 + query.length);
-    const caret = at + replacement.length;
-    textarea.setSelectionRange(caret, caret);
-    if (entry.kind !== "embeddings") list.add(stem);
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    commit();
-    return true;
-  };
-
-  textarea.addEventListener("keydown", (e) => {
-    if (e.key === "/") {
-      // Started once the slash has actually landed.
-      setTimeout(() => {
-        session = { at: Math.max(0, textarea.selectionStart - 1), query: "", matches: [], index: 0 };
-        look();
-      }, 0);
-      return;
-    }
-    if (!session) return;
-
-    const live = session.matches.length > 0;
-    if (live && (e.key === "Tab" || e.key === "Enter")) {
-      e.preventDefault();
-      e.stopPropagation();
-      accept();
-    } else if (live && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
-      e.preventDefault();
-      e.stopPropagation();
-      const n = session.matches.length;
-      session.index = (session.index + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
-      draw();
-    } else if (e.key === "Escape") {
-      if (live) e.stopPropagation();
-      drop();
-    }
-  });
-
-  textarea.addEventListener("input", () => {
-    if (!session) return;
-    const value = textarea.value || "";
-    const caret = textarea.selectionStart;
-    // The session lasts as long as the caret is still after its own slash.
-    if (value[session.at] !== "/" || caret <= session.at) return drop();
-    session.query = value.slice(session.at + 1, caret);
-    if (/[\n,<>]/.test(session.query)) return drop();
-    look();
-  });
-
-  // Clicking elsewhere in the text is a decision not to complete.
-  const away = () => drop();
-  textarea.addEventListener("blur", away);
-  textarea.addEventListener("pointerdown", away);
-
-  return { active: () => !!session };
-}
-
 /** The textarea being typed into, under either node renderer.
  *
  * With Nodes 2.0 the widget is a Vue component rendered under an element
@@ -494,8 +357,6 @@ function light(textarea) {
     layer.style.display = cs.display === "none" ? "none" : "";
   };
 
-  // The browser scrolls a focused textarea to the caret without firing scroll
-  // in every case, so this is called from anything that can move the view.
   const syncScroll = () => {
     if (layer.scrollTop !== textarea.scrollTop) layer.scrollTop = textarea.scrollTop;
     if (layer.scrollLeft !== textarea.scrollLeft) layer.scrollLeft = textarea.scrollLeft;
@@ -513,15 +374,10 @@ function light(textarea) {
     syncScroll();
   };
 
-  // A textarea scrolls itself to follow the caret, and not on any event that
-  // can be listened for: focusing, typing, selecting and IME all do it at
-  // moments of the browser's choosing. Rather than guess at them, the layer is
-  // matched every frame while the box has focus - one comparison per frame,
-  // and only while someone is actually editing.
   // A textarea scrolls itself to follow the caret, at moments no event
   // reliably reports: focus, typing, selection and IME all do it. Rather than
   // guess, the two are compared on a timer as well as on scroll. Two integer
-  // reads ten times a second costs nothing and cannot drift for longer than
+  // reads ten times a second cost nothing and cannot drift for longer than
   // that, whatever the browser does.
   for (const event of ["scroll", "input", "keyup", "click", "select", "focus", "blur"]) {
     textarea.addEventListener(event, syncScroll);
@@ -574,276 +430,364 @@ function light(textarea) {
   return controls;
 }
 
-// --- the picker ------------------------------------------------------------
+// --- editing verbs ---------------------------------------------------------
 
-// --- rows ------------------------------------------------------------------
+const roundWeight = (value) =>
+  Math.max(-WEIGHT_LIMIT, Math.min(WEIGHT_LIMIT, Math.round(value / WEIGHT_STEP) * WEIGHT_STEP));
 
-/** Choose which trigger words to insert.
+/** The four things the rows used to do, as keys on the text.
  *
- * A LoRA can declare one short word or several paragraphs, so inserting the lot
- * is rarely what you want. Words already in the prompt are dimmed.
+ * Each is an ordinary edit to one line, which is why a tag gets a line of its
+ * own: commenting, moving and deleting a line then mean exactly one LoRA.
  */
-function openTriggerPicker(anchor, words, current, insert) {
-  document.querySelector(".wpt-menu")?.remove();
+function editVerbs(textarea, commit) {
+  textarea.addEventListener("keydown", (e) => {
+    const value = textarea.value || "";
+    const caret = textarea.selectionStart;
+    const ctrl = e.ctrlKey || e.metaKey;
 
-  const menu = document.createElement("div");
-  menu.className = "wpt-menu";
-  const box = anchor.getBoundingClientRect();
-  menu.style.left = `${Math.round(Math.min(box.left, window.innerWidth - 312))}px`;
-  menu.style.top = `${Math.round(Math.min(box.bottom + 4, window.innerHeight - 310))}px`;
-
-  const head = document.createElement("div");
-  head.className = "wpt-head";
-  head.append(`${words.length} trigger word${words.length === 1 ? "" : "s"}`);
-  const all = document.createElement("button");
-  all.type = "button";
-  all.textContent = "Insert all";
-  all.addEventListener("click", () => {
-    insert(words.filter((w) => !current.toLowerCase().includes(w.toLowerCase())));
-    menu.remove();
-  });
-  head.appendChild(all);
-  menu.appendChild(head);
-
-  for (const word of words) {
-    const item = document.createElement("button");
-    item.type = "button";
-    const already = current.toLowerCase().includes(word.toLowerCase());
-    item.className = "wpt-item" + (already ? " is-in" : "");
-    item.textContent = word;
-    item.title = already ? "Already in the prompt" : word;
-    item.addEventListener("click", () => {
-      insert([word]);
-      menu.remove();
-    });
-    menu.appendChild(item);
-  }
-
-  const close = (e) => {
-    if (!menu.contains(e.target)) {
-      menu.remove();
-      document.removeEventListener("mousedown", close, true);
-    }
-  };
-  document.addEventListener("mousedown", close, true);
-  document.body.appendChild(menu);
-}
-
-function buildRows(node, list, host, commit, afterRender) {
-  let generation = 0;
-
-  const items = () => list.items();
-  const write = (next) => {
-    list.write(next);
-    commit();
-  };
-
-  const render = async () => {
-    const mine = ++generation;
-    const current = items();
-    host.replaceChildren();
-
-    if (!current.length) {
-      const empty = document.createElement("div");
-      empty.className = "wpc-empty";
-      empty.textContent = "No LoRAs yet — press / in the prompt, or use Browse.";
-      host.appendChild(empty);
-      afterRender?.();
+    // Weight. ComfyUI binds these keys for (word:1.1) emphasis, so outside a
+    // tag its handler is left alone and the key keeps its usual meaning.
+    if (ctrl && !e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      const tag = tagAt(value, caret);
+      if (!tag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const next = roundWeight(tag.weight + (e.key === "ArrowUp" ? WEIGHT_STEP : -WEIGHT_STEP));
+      const written = `<lora:${tag.name}:${next.toFixed(2)}>`;
+      edit(textarea, tag.start, tag.end, written, tag.start + written.length);
+      commit();
       return;
     }
 
-    const entries = await library();
-    if (mine !== generation) return;
-    host.replaceChildren();
-    const byStem = new Map(entries.map((e) => [stemOf(e.id).toLowerCase(), e]));
+    // Off and on. The backend already drops anything behind a //, so this
+    // needs no syntax of its own - and it reads as switched off, not deleted.
+    if (ctrl && e.key === "/") {
+      e.preventDefault();
+      e.stopPropagation();
+      const { start, end } = lineBounds(value, caret);
+      const line = value.slice(start, end);
+      const off = /^(\s*)\/\/ ?/.exec(line);
+      const next = off ? off[1] + line.slice(off[0].length) : line.replace(/^(\s*)/, "$1// ");
+      edit(textarea, start, end, next, Math.max(start, caret + (next.length - line.length)));
+      commit();
+      return;
+    }
 
-    current.forEach((item, index) => {
-      const entry = byStem.get(item.name.toLowerCase());
-      const row = document.createElement("div");
-      row.className =
-        "wpc-row" + (entry ? "" : " is-missing") + (item.enabled ? "" : " is-off");
-      row.draggable = true;
+    // Order matters: LoRAs are applied down the prompt, so a line can be moved.
+    if (e.altKey && !ctrl && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      const up = e.key === "ArrowUp";
+      const here = lineBounds(value, caret);
+      if (up && here.start === 0) return;
+      if (!up && here.end === value.length) return;
+      e.preventDefault();
+      e.stopPropagation();
 
-      const grip = document.createElement("span");
-      grip.className = "wpc-grip";
-      grip.textContent = "⠿";
-      grip.title = "Drag to reorder";
-      row.appendChild(grip);
+      const other = up
+        ? lineBounds(value, here.start - 1)
+        : lineBounds(value, here.end + 1);
+      const from = Math.min(here.start, other.start);
+      const to = Math.max(here.end, other.end);
+      const line = value.slice(here.start, here.end);
+      const swap = value.slice(other.start, other.end);
+      const next = up ? `${line}\n${swap}` : `${swap}\n${line}`;
+      // Keep the caret at the same column of the same line, now moved.
+      const column = caret - here.start;
+      const landing = up ? from : from + swap.length + 1;
+      edit(textarea, from, to, next, landing + Math.min(column, line.length));
+      commit();
+    }
+  });
+}
 
-      row.addEventListener("dragstart", (e) => {
-        e.dataTransfer.effectAllowed = "move";
-        // Dragging out of the node yields the tag, so a row can be dropped
-        // into any other prompt as text.
-        e.dataTransfer.setData("text/plain", `<lora:${item.name}:${item.weight.toFixed(2)}>`);
-        e.dataTransfer.setData("application/x-warppipe-lora", String(index));
-        row.classList.add("is-drag");
-      });
-      row.addEventListener("dragend", () => row.classList.remove("is-drag"));
-      row.addEventListener("dragover", (e) => {
-        if (!e.dataTransfer.types.includes("application/x-warppipe-lora")) return;
-        e.preventDefault();
-        row.classList.add("is-over");
-      });
-      row.addEventListener("dragleave", () => row.classList.remove("is-over"));
-      row.addEventListener("drop", (e) => {
-        e.preventDefault();
-        row.classList.remove("is-over");
-        const from = parseInt(e.dataTransfer.getData("application/x-warppipe-lora"), 10);
-        if (Number.isNaN(from) || from === index) return;
-        const next = items();
-        const [moved] = next.splice(from, 1);
-        next.splice(index, 0, moved);
-        write(next);
-      });
+// --- inline completion -----------------------------------------------------
 
-      if (entry?.thumbnail) {
-        const img = document.createElement("img");
-        img.className = "wpc-thumb";
-        img.loading = "lazy";
-        img.alt = "";
-        img.src = entry.thumbnail;
-        row.appendChild(img);
-      }
+/** Inline completion for "/", and the trigger words that follow it.
+ *
+ * Typing / starts a suggestion. The best match is drawn in grey at the end of
+ * the caret's line; Tab takes it, the arrows walk the alternatives, Escape or
+ * moving away drops it. Nothing is written until Tab: the textarea holds only
+ * what was typed, so a suggestion cannot be typed over, cannot land in the undo
+ * history, and cannot mark the workflow changed.
+ *
+ * Taking a LoRA that declares trigger words offers them straight away as a
+ * second suggestion, so the common pair - add it, then say its word - is Tab
+ * twice and no dialog.
+ *
+ * A popover anchored near the caret was the obvious design and kept covering
+ * the text: the caret's position has to be estimated from a mirror of the text,
+ * and any disagreement puts the menu on what is being typed. Grey text needs no
+ * estimating; the same layer draws it, from the same string.
+ */
+function inlineCompletion(node, textarea, commit, lit) {
+  // { kind: "lora", at, query, matches, index } | { kind: "trigger", at, options, index }
+  let session = null;
+  let run = 0; // so a slow lookup cannot overwrite a newer one
 
-      const name = document.createElement("div");
-      name.className = "wpc-name";
-      name.title = item.name;
-      if (entry) {
-        // Civitai's own title when we have it; the parsed name otherwise.
-        const heading = entry.title || entry.name;
-        const version = entry.structured && entry.version ? entry.version : "";
-        const by = [entry.creator, version].filter(Boolean).join(" · ");
-        name.innerHTML =
-          `<span class="wpc-line"><b>${escapeHTML(heading)}</b></span>` +
-          (by ? `<span class="wpc-line wpc-by">${escapeHTML(by)}</span>` : "");
-      } else {
-        name.textContent = item.name;
-      }
-      row.appendChild(name);
-
-      if (entry?.url) {
-        const link = document.createElement("a");
-        link.className = "wpc-btn wpc-link";
-        link.href = entry.url;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.textContent = "↗";
-        link.title = "Open its page on Civitai";
-        row.appendChild(link);
-      }
-
-      if (entry?.triggers?.length) {
-        const trig = document.createElement("button");
-        trig.type = "button";
-        trig.className = "wpc-btn wpc-trig";
-        trig.textContent = `⊕${entry.triggers.length}`;
-        trig.title = `Insert: ${entry.triggers.join(", ")}`;
-        trig.addEventListener("click", () => {
-          const text = node._warppipeGetText?.() || "";
-          openTriggerPicker(trig, entry.triggers, text, (chosen) => {
-            if (!chosen.length) return;
-            const now = node._warppipeGetText?.() || "";
-            const joined = chosen.join(", ");
-            node._warppipeSetText?.(now.trim() ? `${now.trim()}, ${joined}` : joined);
-          });
-        });
-        row.appendChild(trig);
-      }
-
-      const weight = document.createElement("input");
-      weight.className = "wpc-weight";
-      weight.value = item.weight.toFixed(2);
-      weight.title = "Drag to change, or type a value";
-      const apply = (value) => {
-        const next = items();
-        if (!next[index]) return;
-        next[index].weight = Math.max(-4, Math.min(4, value));
-        write(next);
-      };
-      weight.addEventListener("change", () => apply(parseFloat(weight.value) || 0));
-      // Scrubbing in steps of 0.1, eight pixels apart: fine enough to land on a
-      // value deliberately, coarse enough not to wander. Pointer capture keeps
-      // the drag alive when it leaves the little field.
-      const STEP = 0.1;
-      const PX_PER_STEP = 8;
-      weight.addEventListener("pointerdown", (down) => {
-        if (document.activeElement === weight) return; // typing, not dragging
-        down.preventDefault();
-        const startX = down.clientX;
-        const startValue = item.weight;
-        let moved = false;
-        weight.setPointerCapture(down.pointerId);
-
-        const onMove = (mv) => {
-          const dx = mv.clientX - startX;
-          if (!moved && Math.abs(dx) < 3) return;
-          moved = true;
-          const steps = Math.round(dx / PX_PER_STEP);
-          const next = Math.max(-4, Math.min(4, startValue + steps * STEP));
-          // Snap to the step so the number is always a round one.
-          weight.value = (Math.round(next / STEP) * STEP).toFixed(2);
-        };
-        const onUp = (up) => {
-          weight.releasePointerCapture?.(up.pointerId);
-          weight.removeEventListener("pointermove", onMove);
-          weight.removeEventListener("pointerup", onUp);
-          if (moved) apply(parseFloat(weight.value));
-          else weight.focus();
-        };
-        weight.addEventListener("pointermove", onMove);
-        weight.addEventListener("pointerup", onUp);
-      });
-      row.appendChild(weight);
-
-      const power = document.createElement("button");
-      power.type = "button";
-      power.hidden = !list.separate;
-      power.className = "wpc-btn wpc-power";
-      power.textContent = item.enabled ? "◉" : "○";
-      power.title = item.enabled ? "Switch off (kept, not applied)" : "Switch on";
-      power.addEventListener("click", () => {
-        const next = items();
-        next[index].enabled = !next[index].enabled;
-        write(next);
-      });
-      row.appendChild(power);
-
-      const copy = document.createElement("button");
-      copy.type = "button";
-      copy.className = "wpc-btn";
-      copy.textContent = "⧉";
-      copy.title = "Copy the tag";
-      copy.addEventListener("click", async () => {
-        const tag = `<lora:${item.name}:${item.weight.toFixed(2)}>`;
-        try {
-          await navigator.clipboard.writeText(tag);
-          copy.textContent = "✓";
-          setTimeout(() => (copy.textContent = "⧉"), 900);
-        } catch {
-          copy.title = tag;
-        }
-      });
-      row.appendChild(copy);
-
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "wpc-btn";
-      remove.textContent = "✕";
-      remove.title = "Remove";
-      remove.addEventListener("click", () => {
-        const next = items();
-        next.splice(index, 1);
-        write(next);
-      });
-      row.appendChild(remove);
-
-      host.appendChild(row);
-    });
-
-    afterRender?.();
+  const drop = () => {
+    if (!session) return;
+    session = null;
+    lit?.setGhost(null);
   };
 
-  return render;
+  // The suggestion goes at the end of the caret's line, so text after the
+  // caret is never pushed out of step with the real textarea underneath.
+  const lineEnd = (value, caret) => lineBounds(value, caret).end;
+
+  const draw = () => {
+    if (!session) return lit?.setGhost(null);
+
+    if (session.kind === "trigger") {
+      const { options, index } = session;
+      const nth = options.length > 1 ? ` ${index + 1}/${options.length} ↑↓` : "";
+      lit?.setGhost({ at: session.at, text: ` ${options[index]}`, hint: `${nth} ⇥` });
+      return;
+    }
+
+    if (!session.matches.length) return lit?.setGhost(null);
+    const stem = stemOf(session.matches[session.index].id);
+    const q = session.query;
+    const shown = stem.toLowerCase().startsWith(q.toLowerCase()) ? stem.slice(q.length) : ` ${stem}`;
+    const nth =
+      session.matches.length > 1 ? ` ${session.index + 1}/${session.matches.length} ↑↓` : "";
+    lit?.setGhost({
+      at: lineEnd(textarea.value || "", session.at + 1 + q.length),
+      text: shown,
+      hint: `${nth} ⇥`,
+    });
+  };
+
+  const look = async () => {
+    if (!session || session.kind !== "lora") return;
+    const mine = ++run;
+    if ((textarea.value || "")[session.at] !== "/") return drop();
+
+    const entries = await library();
+    if (!session || session.kind !== "lora" || mine !== run) return;
+
+    const q = session.query.toLowerCase();
+    const terms = q.split(/\s+/).filter(Boolean);
+    const rank = (e) =>
+      stemOf(e.id).toLowerCase().startsWith(q) ? 0 : e.name.toLowerCase().startsWith(q) ? 1 : 2;
+    session.matches = entries
+      .filter((e) => {
+        if (!terms.length) return false; // a bare "/" is a slash, not a request
+        const hay = `${e.creator || ""} ${e.name} ${e.folder} ${stemOf(e.id)}`.toLowerCase();
+        return terms.every((t) => hay.includes(t));
+      })
+      .sort((a, b) => rank(a) - rank(b) || stemOf(a.id).length - stemOf(b.id).length)
+      .slice(0, 40);
+    session.index = 0;
+    draw();
+  };
+
+  /** Offer a LoRA's trigger words, all of them first, then one at a time. */
+  const offerTriggers = (words) => {
+    const clean = (words || []).filter(Boolean);
+    if (!clean.length) return;
+    const value = textarea.value || "";
+    const options = clean.length > 1 ? [clean.join(", "), ...clean] : clean;
+    session = {
+      kind: "trigger",
+      at: lineEnd(value, textarea.selectionStart),
+      options,
+      index: 0,
+    };
+    draw();
+  };
+
+  const accept = () => {
+    if (!session) return false;
+    const value = textarea.value || "";
+
+    if (session.kind === "trigger") {
+      const words = session.options[session.index];
+      const at = session.at;
+      drop();
+      // A line of their own, right under the tag that wants them, so the tag
+      // line stays a tag line and both can be moved or commented separately.
+      edit(textarea, at, at, `\n${words}`);
+      commit();
+      return true;
+    }
+
+    if (!session.matches.length) return false;
+    const entry = session.matches[session.index];
+    const { at, query } = session;
+    const stem = stemOf(entry.id);
+    drop();
+
+    if (entry.kind === "embeddings") {
+      // An embedding is prompt text: it goes exactly where it was typed.
+      edit(textarea, at, at + 1 + query.length, `embedding:${stem}`);
+      commit();
+      return true;
+    }
+
+    const plan = tagInsertion(value, at, at + 1 + query.length, `<lora:${stem}:1.00>`);
+    edit(textarea, plan.from, plan.to, plan.text, plan.caret);
+    commit();
+    if (entry.triggers?.length) offerTriggers(entry.triggers);
+    return true;
+  };
+
+  textarea.addEventListener("keydown", (e) => {
+    // Ctrl+/ switches a line off; only a bare slash starts a suggestion.
+    if (e.key === "/" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      setTimeout(() => {
+        session = {
+          kind: "lora",
+          at: Math.max(0, textarea.selectionStart - 1),
+          query: "",
+          matches: [],
+          index: 0,
+        };
+        look();
+      }, 0);
+      return;
+    }
+    if (!session) return;
+
+    const count = session.kind === "trigger" ? session.options.length : session.matches.length;
+    if (!count) {
+      if (e.key === "Escape") drop();
+      return;
+    }
+
+    if (e.key === "Tab" || e.key === "Enter") {
+      e.preventDefault();
+      e.stopPropagation();
+      accept();
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      e.stopPropagation();
+      session.index = (session.index + (e.key === "ArrowDown" ? 1 : -1) + count) % count;
+      draw();
+    } else if (e.key === "Escape") {
+      e.stopPropagation();
+      drop();
+    } else if (session.kind === "trigger") {
+      // Typing on is a decision to write your own words instead.
+      drop();
+    }
+  });
+
+  textarea.addEventListener("input", () => {
+    if (!session || session.kind !== "lora") return;
+    const value = textarea.value || "";
+    const caret = textarea.selectionStart;
+    // The session lasts as long as the caret is still after its own slash.
+    if (value[session.at] !== "/" || caret <= session.at) return drop();
+    session.query = value.slice(session.at + 1, caret);
+    if (/[\n,<>]/.test(session.query)) return drop();
+    look();
+  });
+
+  // Clicking elsewhere in the text is a decision not to complete.
+  textarea.addEventListener("blur", drop);
+  textarea.addEventListener("pointerdown", drop);
+}
+
+// --- the strip -------------------------------------------------------------
+
+/** One line under the prompt, describing the tag the caret is in.
+ *
+ * This is what the cards became. A card per LoRA repeated what the text already
+ * said, and needed a scrolling panel and a draggable split to hold them all -
+ * which is where the flickering and the caret-hiding came from. Only one LoRA
+ * can be under the caret, so only one line is ever needed.
+ */
+function makeStrip(node) {
+  const el = document.createElement("div");
+  el.className = "wps";
+
+  const idle = (text) => {
+    el.replaceChildren();
+    const span = document.createElement("span");
+    span.className = "wps-idle";
+    span.textContent = text;
+    el.appendChild(span);
+  };
+
+  const show = (tag, entry, insertWords) => {
+    el.replaceChildren();
+
+    if (entry?.thumbnail) {
+      const img = document.createElement("img");
+      img.className = "wps-thumb";
+      img.loading = "lazy";
+      img.alt = "";
+      img.src = entry.thumbnail;
+      el.appendChild(img);
+    }
+
+    const name = document.createElement("span");
+    name.className = "wps-name" + (entry ? "" : " is-missing");
+    name.textContent = entry ? entry.title || entry.name : `${tag.name} — no such file`;
+    name.title = tag.name;
+    el.appendChild(name);
+
+    const by = [entry?.creator, entry?.structured ? entry?.version : "", entry?.base_model]
+      .filter(Boolean)
+      .join(" · ");
+    if (by) {
+      const span = document.createElement("span");
+      span.className = "wps-by";
+      span.textContent = by;
+      el.appendChild(span);
+    }
+
+    const weight = document.createElement("span");
+    weight.className = "wps-weight";
+    weight.textContent = tag.weight.toFixed(2);
+    weight.title = "Ctrl+↑ / Ctrl+↓ to change";
+    el.appendChild(weight);
+
+    if (entry?.triggers?.length) {
+      const words = document.createElement("span");
+      words.className = "wps-words";
+      for (const word of entry.triggers.slice(0, 6)) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "wps-word";
+        button.textContent = word;
+        button.title = `Insert "${word}"`;
+        button.addEventListener("click", () => insertWords(word));
+        words.appendChild(button);
+      }
+      el.appendChild(words);
+    }
+
+    if (entry?.url) {
+      const link = document.createElement("a");
+      link.className = "wps-link";
+      link.href = entry.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "↗";
+      link.title = "Open its page on Civitai";
+      el.appendChild(link);
+    }
+  };
+
+  /** Old workflows kept their LoRAs in a field of their own. The backend still
+   *  reads it, so nothing is broken - but it is the last thing that does, and
+   *  moving it is a single edit the reader should get to approve. */
+  const offerMove = (count, move) => {
+    el.replaceChildren();
+    const span = document.createElement("span");
+    span.className = "wps-idle";
+    span.textContent = `${count} LoRA${count === 1 ? "" : "s"} in the old field`;
+    el.appendChild(span);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "wps-do";
+    button.textContent = "Move into the prompt";
+    button.addEventListener("click", move);
+    el.appendChild(button);
+  };
+
+  return { el, idle, show, offerMove };
 }
 
 app.registerExtension({
@@ -860,272 +804,121 @@ app.registerExtension({
       if (FRIENDLY_LABELS[widget.name]) widget.label = FRIENDLY_LABELS[widget.name];
     }
     if (!(node.widgets || []).some((w) => w.name === TEXT_WIDGET)) return;
-    // Absent on an older backend. Everything still works; the LoRA list just
-    // lives in the prompt text, as it used to.
-    const listWidget = (node.widgets || []).find((w) => w.name === LIST_WIDGET);
 
-    // The list is written by the rows below, so its own field is noise. This
-    // frontend ignores widget.hidden, so the row is hidden in the document
-    // instead; if that ever stops working the field reappears, which is untidy
-    // rather than broken.
-    // The list is written by the rows, so its own field is noise. Neither
-    // renderer honours widget.hidden, so each is hidden its own way: a canvas
-    // widget by giving it no size to draw in, a Vue one by hiding its row.
+    // Kept in the schema so older workflows still load and still run - the
+    // backend reads tags from both - but no longer shown or written to.
+    // Neither renderer honours widget.hidden, so a canvas widget is hidden by
+    // giving it no size to draw in.
+    const listWidget = (node.widgets || []).find((w) => w.name === LIST_WIDGET);
     if (listWidget) {
       listWidget.computeSize = () => [0, -4];
       listWidget.draw = () => {};
     }
 
-    const hideListRow = () => {
-      if (!listWidget) return;
-      const root = document.querySelector(`[data-node-id="${node.id}"]`);
-      if (!root) return;
-      for (const row of root.querySelectorAll("[node-id]")) {
-        if (row.textContent.trim().startsWith("LoRAs")) row.style.display = "none";
-      }
-    };
-
     let lit = null;
     const getEl = () => lit?.textarea ?? findTextarea(node);
+    const strip = makeStrip(node);
 
-    const writeText = (value) => {
+    /** Put the strip along the bottom of the field the prompt already sits in.
+     *
+     * The room it needs is a constant. Sizing a panel from the height of the
+     * box it lives in - which is what the old list did - feeds back, because
+     * the box is sized by its contents: the two then chase each other a pixel
+     * at a time, which showed as the prompt jumping and the caret blinking.
+     */
+    const attachStrip = () => {
       const el = getEl();
-      if (!el) return;
-      el.value = value;
-      // Vue owns this input; an input event is how the widget value follows.
-      el.dispatchEvent(new Event("input", { bubbles: true }));
+      const holder = el?.parentElement;
+      if (!holder) return;
+      if (strip.el.parentElement !== holder) holder.appendChild(strip.el);
+      const want = `${STRIP_H}px`;
+      if (el.style.paddingBottom !== want) {
+        el.style.paddingBottom = want;
+        // The layer copies the textarea's padding, so the text stays aligned.
+        lit?.measure();
+        lit?.paint();
+      }
     };
 
-    const list = listWidget
-      ? {
-          separate: true,
-          get: () => listWidget.value || "",
-          set: (value) => {
-            listWidget.value = value;
-            node.setDirtyCanvas?.(true, true);
-          },
-        }
-      : {
-          separate: false,
-          get: () => getEl()?.value || "",
-          set: writeText,
-        };
-    // One per line: that is what lets a single line be commented out to switch
-    // one LoRA off without touching the others.
-    list.append = (tags) => {
-      const existing = parseList(list.get());
-      const have = new Set(existing.map((i) => i.name.toLowerCase()));
-      let added = false;
-      for (const { name, weight } of tags) {
-        if (have.has(name.toLowerCase())) continue;
-        have.add(name.toLowerCase());
-        existing.push({ name, weight, enabled: true });
-        added = true;
-      }
-      if (added) list.set(serialiseList(existing));
-      return added;
-    };
-    list.add = (stem) => list.append([{ name: stem, weight: 1.0 }]);
-
-    // The rows work on this shape wherever the tags actually live. With no
-    // loras input they live in the prompt, where a line cannot be commented out
-    // without commenting out the prose around it, so switching off is not
-    // offered there.
-    list.items = () =>
-      list.separate
-        ? parseList(list.get())
-        : parseTags(list.get()).map((t) => ({ name: t.name, weight: t.weight, enabled: true }));
-
-    list.write = (items) => {
-      if (list.separate) {
-        list.set(serialiseList(items));
-        return;
-      }
-      // Rewrite the prompt: drop every tag, then put the new set back at the end.
-      const text = list.get();
-      let stripped = text;
-      for (const tag of [...parseTags(text)].reverse()) {
-        stripped = stripped.slice(0, tag.start) + stripped.slice(tag.start + tag.raw.length);
-      }
-      stripped = stripped.replace(/[ \t]{2,}/g, " ").trim();
-      const tags = items
-        .filter((i) => i.enabled)
-        .map((i) => `<lora:${i.name}:${i.weight.toFixed(2)}>`)
-        .join(" ");
-      list.set(stripped && tags ? `${stripped} ${tags}` : stripped || tags);
-    };
-
-    // Not a DOM widget: ComfyUI repositions those into its own rows every
-    // frame, which drags the list back out of the split. This one is placed by
-    // hand inside the split and re-attached if the frontend rebuilds the grid.
-    const host = document.createElement("div");
-    host.className = "wpc wpe-pane col-span-full";
-
+    /** Everything the tags need to know about themselves. */
+    let byStem = new Map();
     const refreshVocabulary = async () => {
       const entries = await library();
-      const byStem = new Map(entries.map((e) => [stemOf(e.id).toLowerCase(), e]));
+      byStem = new Map(entries.map((e) => [stemOf(e.id).toLowerCase(), e]));
       const words = new Set();
-      // Trigger words come from the list as well as anything typed inline.
-      for (const tag of [...parseTags(list.get()), ...parseTags(getEl()?.value || "")]) {
+      for (const tag of parseTags(getEl()?.value || "")) {
         for (const w of byStem.get(tag.name.toLowerCase())?.triggers || []) words.add(w);
       }
       lit?.setVocabulary(new Set(byStem.keys()), [...words]);
+      updateStrip();
     };
 
-    /** Move any tag out of the prompt and into the list.
-     *
-     * Typing one by hand, pasting one from somewhere else, or opening a
-     * workflow that kept its tags inline all end in the same place: a row. A
-     * tag inside a // note is left alone, since parking one there is
-     * deliberate.
-     */
-    const migrateInlineTags = () => {
-      if (!list.separate) return false;
+    const insertWords = (word) => {
       const el = getEl();
-      if (!el) return false;
-      const text = el.value || "";
-      const found = parseTags(text).filter((tag) => !inComment(text, tag.start));
-      if (!found.length) return false;
-
-      let next = text;
-      // Last first, so earlier offsets stay valid.
-      for (const tag of [...found].reverse()) {
-        next = next.slice(0, tag.start) + next.slice(tag.start + tag.raw.length);
-      }
-      // Removing tags never removes newlines, so the lines still correspond
-      // and one left blank by a removal can be dropped without touching a
-      // line the writer left blank on purpose.
-      const was = text.split("\n");
-      next = next
-        .split("\n")
-        .map((line, i) => [line.replace(/[ \t]+$/, ""), i])
-        .filter(([line, i]) => line !== "" || (was[i] || "").trim() === "")
-        .map(([line]) => line)
-        .join("\n")
-        .replace(/[ \t]{2,}/g, " ")
-        .replace(/[ \t]+([,.;:!?])/g, "$1")
-        .replace(/(,\s*){2,}/g, ", ");
-      const caret = el.selectionStart;
-      el.value = next;
-      const shift = text.length - next.length;
-      const at = Math.max(0, Math.min(next.length, caret - shift));
-      el.setSelectionRange(at, at);
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      list.append(found.map((t) => ({ name: t.name, weight: t.weight })));
-      return true;
-    };
-
-    let renderRows = async () => {};
-    const commit = () => {
-      migrateInlineTags();
-      lit?.paint();
-      renderRows();
-      refreshVocabulary();
-      hideListRow();
-      node.setDirtyCanvas?.(true, true);
-    };
-    renderRows = buildRows(node, list, host, commit, () => fitPane());
-
-    const wire = (el) => {
-      lit = light(el);
-      if (el.parentElement) new ResizeObserver(() => fitPane()).observe(el.parentElement);
-      el.addEventListener("input", commit);
-      inlineCompletion(node, el, list, commit, lit);
+      if (!el) return;
+      const value = el.value || "";
+      const at = lineBounds(value, el.selectionStart).end;
+      edit(el, at, at, `\n${word}`);
       commit();
     };
 
-    /** Two panels in one field, with a divider between them.
-     *
-     * ComfyUI puts its own widget rows back where it wants them, so nothing is
-     * moved: the textarea keeps the top of the wrapper it already sits in, and
-     * the divider and list are placed into that same wrapper beneath it.
-     */
-    const SPLIT_KEY = "warppipePromptSplit";
-    const DIVIDER_H = 7;
-
-    const divider = document.createElement("div");
-    divider.className = "wpe-divider";
-    divider.title = "Drag to resize the prompt and the list";
-
-    const fitPane = () => {
+    const moveOldList = () => {
       const el = getEl();
-      const holder = el?.parentElement;
-      if (!holder) return;
+      if (!el || !listWidget) return;
+      // The old field is already one tag per line, // and all - which is the
+      // shape the prompt wants, so it is appended as it stands.
+      const lines = (listWidget.value || "").split("\n").map((l) => l.trim()).filter(Boolean);
+      if (!lines.length) return;
+      const value = el.value || "";
+      const joined = lines.join("\n");
+      const text = value && !value.endsWith("\n") ? `\n${joined}` : joined;
+      edit(el, value.length, value.length, text);
+      listWidget.value = "";
+      commit();
+    };
 
-      const rows = host.querySelectorAll(".wpc-row").length;
-      const empty = rows === 0;
-      host.hidden = empty;
-      divider.hidden = empty;
-
-      if (empty) {
-        el.style.paddingBottom = "";
-        host.style.height = "";
-        lit?.measure();
-        lit?.paint();
+    const updateStrip = () => {
+      const el = getEl();
+      if (!el) return;
+      if (listWidget?.value?.trim()) {
+        const count = parseTags(listWidget.value).length;
+        if (count) return strip.offerMove(count, moveOldList);
+      }
+      const value = el.value || "";
+      const tag = tagAt(value, el.selectionStart);
+      if (!tag) {
+        const total = parseTags(value).filter((t) => !inComment(value, t.start)).length;
+        strip.idle(
+          total
+            ? `${total} LoRA${total === 1 ? "" : "s"} · / to add · caret in a tag to see it`
+            : "Press / to add a LoRA or embedding"
+        );
         return;
       }
+      strip.show(tag, byStem.get(tag.name.toLowerCase()), insertWords);
+    };
 
-      // The textarea's own height is left alone. Setting it from the height of
-      // the box it sits in fed back - the box is sized by what is in it - and
-      // the two chased each other a pixel at a time, which showed as the
-      // prompt jumping and the caret blinking in and out of view. Room for the
-      // list is reserved with padding instead, which nothing else reads.
-      const total = holder.clientHeight;
-      if (total < 60) return;
-      const ratio = Math.max(0.2, Math.min(0.75, 1 - (node.properties[SPLIT_KEY] ?? 0.55)));
-      const listH = Math.max(28, Math.round(total * ratio));
-
-      host.style.height = `${listH}px`;
-      divider.style.top = "auto";
-      divider.style.bottom = `${listH}px`;
-      el.style.paddingBottom = `${listH + DIVIDER_H}px`;
-      lit?.measure();
+    const commit = () => {
       lit?.paint();
+      refreshVocabulary();
+      node.setDirtyCanvas?.(true, true);
     };
 
-    const applyPane = () => {
-      const el = getEl();
-      const holder = el?.parentElement;
-      if (!holder) return;
-      // Re-appending the same elements keeps listeners and scroll offsets.
-      if (host.parentElement !== holder) holder.appendChild(host);
-      if (divider.parentElement !== holder) holder.appendChild(divider);
-      fitPane();
+    const wire = (el) => {
+      lit = light(el);
+      el.addEventListener("input", commit);
+      // The strip follows the caret, which moves for reasons other than typing.
+      for (const event of ["keyup", "click", "select", "focus"]) {
+        el.addEventListener(event, updateStrip);
+      }
+      editVerbs(el, commit);
+      inlineCompletion(node, el, commit, lit);
+      attachStrip();
+      commit();
     };
 
-    divider.addEventListener("pointerdown", (down) => {
-      const el = getEl();
-      const holder = el?.parentElement;
-      if (!holder) return;
-      down.preventDefault();
-      divider.classList.add("is-drag");
-      divider.setPointerCapture(down.pointerId);
-      const box = holder.getBoundingClientRect();
-
-      const onMove = (mv) => {
-        node.properties[SPLIT_KEY] = Math.max(
-          0.25,
-          Math.min(0.8, (mv.clientY - box.top) / box.height)
-        );
-        fitPane();
-      };
-
-      const onUp = (up) => {
-        divider.classList.remove("is-drag");
-        divider.releasePointerCapture?.(up.pointerId);
-        divider.removeEventListener("pointermove", onMove);
-        divider.removeEventListener("pointerup", onUp);
-        node.setDirtyCanvas?.(true, true);
-      };
-      divider.addEventListener("pointermove", onMove);
-      divider.addEventListener("pointerup", onUp);
-    });
-
-    // The field is resized by the node, and the split follows it.
-    new ResizeObserver(() => fitPane()).observe(host);
-
-    // Prompt, then what is loaded, then how to add more, then the settings.
-    const ORDER = ["text", "warppipe_rows", "Browse LoRAs", "insert_trigger_words", "apply_to_clip"];
+    // Prompt, then what the caret is on, then how to add more, then settings.
+    const ORDER = [TEXT_WIDGET, "Browse LoRAs", "insert_trigger_words", "apply_to_clip"];
     const reorderWidgets = () => {
       const widgets = node.widgets || [];
       const rank = (w) => {
@@ -1136,26 +929,22 @@ app.registerExtension({
       if (sorted.some((w, i) => w !== widgets[i])) node.widgets = sorted;
     };
 
-    // ensure() writes into the very subtree the observer watches - it sets the
-    // textarea's height and repaints the layer - so without this guard each
-    // pass triggers the next. The visible symptom is the prompt flickering,
-    // worst with the caret at the bottom, where every height change makes the
-    // browser scroll to the caret again.
+    // ensure() writes into the very subtree the observer watches, so without
+    // this guard each pass triggers the next.
     let settling = false;
     const ensure = () => {
       if (settling) return !!getEl();
       settling = true;
       try {
         reorderWidgets();
-        applyPane();
         const el = findTextarea(node);
         if (el && !el._wpeLayer) {
           if (lit && lit.textarea !== el) lit.detach();
           wire(el);
         } else if (el && lit) {
           lit.measure();
+          attachStrip();
         }
-        hideListRow();
         return !!el;
       } finally {
         // Released after the observer has delivered this pass's own records,
@@ -1171,9 +960,8 @@ app.registerExtension({
       records.every((r) => {
         const t = r.target;
         return (
-          host.contains(t) ||
-          t === host ||
-          t === divider ||
+          strip.el.contains(t) ||
+          t === strip.el ||
           (lit?.layer && (lit.layer.contains(t) || t === lit.layer)) ||
           t === lit?.textarea
         );
@@ -1209,8 +997,14 @@ app.registerExtension({
       el.dispatchEvent(new Event("input", { bubbles: true }));
       commit();
     };
+    // The browser hands over a stem; it lands like anything typed would.
     node._warppipeAddLora = (stem) => {
-      list.add(stem);
+      const el = getEl();
+      if (!el) return;
+      const value = el.value || "";
+      const caret = el.selectionStart ?? value.length;
+      const plan = tagInsertion(value, caret, caret, `<lora:${stem}:1.00>`);
+      edit(el, plan.from, plan.to, plan.text, plan.caret);
       commit();
     };
     node._warppipeRefresh = commit;

@@ -65,20 +65,32 @@ it does not load.
 
 ## Where the LoRAs live
 
-Picking a LoRA adds it to the list under the prompt, not into the prompt text.
-The prompt stays prose; the list is what the rows show and what gets applied.
+In the prompt, as text, each tag on a line of its own:
 
-Tags typed straight into the prompt still work and are applied too, so an older
-workflow keeps running. If both name the same LoRA, the list wins, since that is
-what the rows are showing you.
+    a photo in a sunlit kitchen,
+    <lora:bolero537 - boxer panties - v1.0 (anima):0.80>
+    boxer panties
+    warm light
+
+They are not gathered at the top or the bottom - a tag belongs where you were
+writing when you reached for it. The line to itself is what makes the rest work:
+every LoRA verb below is an ordinary edit to one line, so commenting, moving or
+deleting that line means exactly one LoRA and nothing else.
+
+There is no separate list any more. Older workflows that kept one still run -
+the backend reads both - and the strip under the prompt offers to move them in.
 
 ## Adding a LoRA without typing its name
 
 Type **/** in the prompt followed by a few letters. The best match appears in
 grey at the end of that line - press **Tab** to take it, or **arrow up/down** to
 walk the other matches. **Escape**, or clicking elsewhere, drops the suggestion.
-A LoRA joins the list below the prompt; an embedding is written into the prompt
-as `embedding:name`.
+An embedding is written where you typed it, as `embedding:name`.
+
+If the LoRA declares trigger words, they are offered straight away as a second
+suggestion: **Tab** again puts them on the line under the tag, and the arrows
+choose between all of them and one at a time. Adding a LoRA and saying its word
+is Tab twice.
 
 The grey text is only drawn, never typed. Until you press Tab the prompt holds
 exactly what you typed, so a suggestion can never be typed over, never lands in
@@ -89,28 +101,41 @@ bare slash is a slash until you type something after it.
 The **Browse LoRAs** button opens the full library instead, with previews and a
 rail of model families.
 
-## The rows under the prompt
+## Changing a LoRA once it is there
 
-A LoRA is never text in the prompt. Type a tag, paste one, or open a workflow
-that kept its tags inline, and it moves out of the prompt into a row — the
-prompt stays prose. A tag inside a `//` note is left where it is, since parking
-one there is deliberate.
+With the caret in a tag:
 
-Each row carries:
+| | |
+| --- | --- |
+| **Ctrl+↑ / Ctrl+↓** | weight, in steps of 0.1 |
+| **Ctrl+/** | switch it off and on |
+| **Alt+↑ / Alt+↓** | move the line - LoRAs apply down the prompt |
+| select the line, delete | remove it |
 
-- **⠿** drag to reorder, or drag out of the node to copy the tag as text
-- the preview, the model's title, and its creator and version underneath
-- **⊕** choose trigger words to insert — see below
-- **↗** open its page on Civitai
-- the weight — drag in steps of 0.1, or click and type a value
-- **◉ / ○** switch it off and on. A LoRA switched off is kept, greyed and struck
-  through, and not applied
-- **⧉** copy its tag to the clipboard
-- **✕** remove it
+Ctrl+↑/↓ is the same key ComfyUI uses for `(word:1.1)` emphasis. Outside a LoRA
+tag it still does that; only inside one does it move the weight instead.
 
-The title comes from the `.civitai.info` sidecar rather than the filename, so it
-reads correctly whatever the file is called. Without a sidecar the row falls back
-to the filename and has no link.
+Ctrl+/ comments the line out, and a commented tag is one that does not load -
+the same `//` that hides prose. It stays readable, so you can decide to switch
+it back on.
+
+All of these go through the browser's own editing, so **Ctrl+Z** undoes them
+like any other typing.
+
+## The strip under the prompt
+
+One line, showing whichever tag the caret is in: its preview, the title and
+creator from the `.civitai.info` sidecar, the base model, the weight, its
+trigger words as buttons that insert them, and **↗** to open its Civitai page.
+Without a sidecar it falls back to the filename and has no link. A tag naming a
+file that is not there says so.
+
+With the caret anywhere else it just counts what is loaded.
+
+It replaced a card per LoRA. The cards repeated what the text already said and
+needed a scrolling panel and a draggable split to hold them, which is where the
+flickering came from; only one LoRA can be under the caret, so only one line is
+ever needed.
 
 ## Both node renderers
 
@@ -123,34 +148,18 @@ On a large workflow the canvas renderer is considerably lighter: Nodes 2.0
 creates roughly 84 DOM elements per node, so a 213-node workflow becomes about
 18,000 of them.
 
-## Where the list sits
-
-The field holds two panels: the prompt on top, the LoRAs beneath, with a divider
-between them. Each scrolls on its own, so a long prompt and a long list stay out
-of each other's way and neither makes the node taller.
-
-Drag the divider to give one panel more room than the other. The position is
-saved with the workflow, and stays between a quarter and four fifths so neither
-panel can be squeezed shut.
-
-With nothing in the list the divider and the list both disappear, and the field
-is an ordinary prompt box.
-
 ## Choosing trigger words
 
-**⊕** opens a list of that LoRA's trigger words. Creators sometimes declare a
-single word and sometimes several paragraphs — in one collection of 761 files the
-longest ran to 655 characters — so they are offered one at a time rather than
-inserted wholesale. Words already in the prompt are dimmed, and **Insert all**
-adds whatever is missing.
+Creators sometimes declare a single word and sometimes several paragraphs - in
+one collection of 761 files the longest ran to 655 characters - so they are
+never inserted wholesale. The suggestion after Tab offers all of them first,
+then one at a time; the strip offers the first six as buttons. Either way you
+pick, and they land on a line of their own.
 
-A row outlined in red names a file that does not exist.
+The node's **Trigger words** setting is the other way round: it adds them for
+you at generation time, without touching the prompt you wrote.
 
-Switching off writes the line out as a comment, which is the same rule as `//`
-in the prompt: commented means not applied. Nothing here is a second copy of the
-state — the rows are the list, drawn.
-
-## Notes
+## Notes in the prompt
 
 Anything after `//` to the end of the line is a note for you, not for the model.
 It is removed before the prompt is encoded, so a line can be commented out to
@@ -160,10 +169,6 @@ disable it — including a LoRA tag, which then does not load either.
 a photo in a sunlit kitchen   // try 0.6 next time
 // <lora:detail tweaker:0.8>  <- parked for now
 ```
-
-Removing a tag or a note leaves gaps behind it, so the prompt is tidied
-afterwards: no stranded spaces before commas, no doubled commas, no blank lines
-left where a note used to be.
 
 ## Trigger words
 
