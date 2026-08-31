@@ -376,8 +376,6 @@ function light(textarea) {
     syncScroll();
   };
 
-  textarea.addEventListener("scroll", syncScroll);
-
   // A textarea scrolls itself to follow the caret, and not on any event that
   // can be listened for: focusing, typing, selecting and IME all do it at
   // moments of the browser's choosing. Rather than guess at them, the layer is
@@ -388,11 +386,27 @@ function light(textarea) {
   // guess, the two are compared on a timer as well as on scroll. Two integer
   // reads ten times a second costs nothing and cannot drift for longer than
   // that, whatever the browser does.
-  textarea.addEventListener("scroll", syncScroll);
-  for (const event of ["input", "keyup", "click", "select", "focus", "blur"]) {
+  for (const event of ["scroll", "input", "keyup", "click", "select", "focus", "blur"]) {
     textarea.addEventListener(event, syncScroll);
   }
-  const ticker = setInterval(syncScroll, 100);
+  // One timer does both jobs. ResizeObserver would be the obvious way to catch
+  // a resize, but it only delivers while the page is rendering, so a node
+  // resized in a background tab comes back with the layer still at its old
+  // size. Comparing two integers ten times a second always works.
+  let tick = 0;
+  const ticker = setInterval(() => {
+    syncScroll();
+    const resized =
+      layer.offsetWidth !== textarea.offsetWidth || layer.offsetHeight !== textarea.offsetHeight;
+    // Once a second regardless, so a theme change is picked up too - those
+    // alter the font without altering the size.
+    if (resized || ++tick % 10 === 0) {
+      measure();
+      paint();
+    }
+  }, 100);
+
+  measure();
 
   const controls = {
     layer,
