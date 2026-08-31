@@ -104,11 +104,15 @@ The title comes from the `.civitai.info` sidecar rather than the filename, so it
 reads correctly whatever the file is called. Without a sidecar the row falls back
 to the filename and has no link.
 
-## The size of the list
+## Where the list sits
 
-The list has its own pane with a set height and scrolls inside it, so adding a
-twentieth LoRA does not make the node twenty rows taller. Drag the handle under
-it to make it taller or shorter; the height is saved with the workflow.
+The list is part of the prompt field, along its bottom edge — one box, prose
+above and LoRAs below, rather than two things to look at. The prompt reserves
+exactly as much room as the list needs, so typing never runs underneath it.
+
+With nothing in the list the field is an ordinary prompt box. As LoRAs are added
+the list grows to fit them, up to a share of the field, and scrolls after that —
+so a twentieth LoRA costs no more height than the second.
 
 ## Choosing trigger words
 

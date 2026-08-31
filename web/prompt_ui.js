@@ -66,25 +66,22 @@ const STYLE = `
 }
 .wpe-hint { padding: 5px 7px; font-size: 10px; opacity: 0.5; }
 
-/* ComfyUI lays each widget out in its own row and puts its own rows back if
-   they are moved, so the list sits in a pane of its own with a set height
-   instead. That is what stops twenty LoRAs making the node twenty rows taller;
-   the pane scrolls and can be dragged taller. */
-.wpe-pane {
-  min-width: 0; display: block; overflow: hidden;
-  border: 1px solid var(--border-color, #3a3a3a); border-radius: 5px;
+/* The list lives inside the prompt field, along its bottom edge. ComfyUI's own
+   wrapper is already positioned, so the list can sit over it without a second
+   box around it; the textarea gets bottom padding so typing never runs under
+   the list. */
+.wpc {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+  max-height: 62%; overflow-y: auto;
+  padding: 4px 5px 5px; box-sizing: border-box;
   background: var(--comfy-input-bg, #171717);
+  border-top: 1px solid var(--border-color, #3a3a3a);
 }
-.wpe-grow { height: 9px; cursor: row-resize; position: relative; }
-.wpe-grow::after {
-  content: ""; position: absolute; left: 42%; right: 42%; top: 4px; height: 1px;
-  background: var(--border-color, #3a3a3a);
-}
-.wpe-grow:hover::after, .wpe-grow.is-drag::after { background: #4ec8e8; height: 2px; }
+.wpc[hidden] { display: none; }
 
 /* Smaller than the prompt: a long list has to stay readable at a glance. */
-.wpc { display: flex; flex-direction: column; gap: 2px; font-size: 10px; overflow-y: auto;
-  height: 100%; color: var(--input-text, #dcdcdc); }
+.wpc { display: flex; flex-direction: column; gap: 2px; font-size: 10px;
+  color: var(--input-text, #dcdcdc); }
 .wpc-empty { opacity: 0.45; padding: 4px 2px; }
 .wpc-row {
   display: flex; align-items: center; gap: 5px; padding: 2px 4px; border-radius: 4px;
@@ -577,7 +574,7 @@ function openTriggerPicker(anchor, words, current, insert) {
   document.body.appendChild(menu);
 }
 
-function buildRows(node, list, host, commit) {
+function buildRows(node, list, host, commit, afterRender) {
   let generation = 0;
 
   const items = () => list.items();
@@ -596,6 +593,7 @@ function buildRows(node, list, host, commit) {
       empty.className = "wpc-empty";
       empty.textContent = "No LoRAs yet — press / in the prompt, or use Browse.";
       host.appendChild(empty);
+      afterRender?.();
       return;
     }
 
@@ -786,6 +784,8 @@ function buildRows(node, list, host, commit) {
 
       host.appendChild(row);
     });
+
+    afterRender?.();
   };
 
   return render;
@@ -961,7 +961,7 @@ app.registerExtension({
       hideListRow();
       node.setDirtyCanvas?.(true, true);
     };
-    renderRows = buildRows(node, list, host, commit);
+    renderRows = buildRows(node, list, host, commit, () => fitPane());
 
     const wire = (el) => {
       lit = light(el);
@@ -972,64 +972,36 @@ app.registerExtension({
       commit();
     };
 
-    /** Give the list its own pane, directly under the prompt.
+    /** Keep the list inside the prompt field, pinned to its bottom.
      *
-     * Moving ComfyUI's own widget rows does not stick - the frontend puts them
-     * back on the next render - so nothing of ComfyUI's is moved. Only this
-     * pane is inserted, and re-inserted if the grid is rebuilt.
+     * ComfyUI puts its own widget rows back where it wants them, so nothing of
+     * ComfyUI's is moved: the list is placed inside the wrapper the textarea
+     * already sits in, which is positioned. The textarea gains bottom padding
+     * equal to the list's height so text never runs underneath it.
      */
-    const HEIGHT_KEY = "warppipeListHeight";
-
-    const sizePane = () => {
-      host.style.height = `${node.properties[HEIGHT_KEY] ?? 150}px`;
-    };
-
-    const attachGrow = (grow) => {
-      grow.addEventListener("pointerdown", (down) => {
-        down.preventDefault();
-        grow.classList.add("is-drag");
-        grow.setPointerCapture(down.pointerId);
-        const startY = down.clientY;
-        const startHeight = host.getBoundingClientRect().height;
-        const onMove = (mv) => {
-          node.properties[HEIGHT_KEY] = Math.max(48, startHeight + (mv.clientY - startY));
-          sizePane();
-        };
-        const onUp = (up) => {
-          grow.classList.remove("is-drag");
-          grow.releasePointerCapture?.(up.pointerId);
-          grow.removeEventListener("pointermove", onMove);
-          grow.removeEventListener("pointerup", onUp);
-          node.setDirtyCanvas?.(true, true);
-        };
-        grow.addEventListener("pointermove", onMove);
-        grow.addEventListener("pointerup", onUp);
-      });
+    const fitPane = () => {
+      const el = getEl();
+      if (!el) return;
+      const rows = host.querySelectorAll(".wpc-row").length;
+      host.hidden = rows === 0;
+      const reserve = host.hidden ? 0 : Math.ceil(host.getBoundingClientRect().height);
+      const base = 8;
+      el.style.paddingBottom = `${base + reserve}px`;
+      lit?.measure();
+      lit?.paint();
     };
 
     const applyPane = () => {
-      const root = document.querySelector(`[data-node-id="${node.id}"]`);
-      const grid = root?.querySelector(".lg-node-widgets");
-      if (!grid) return;
-
-      const promptRow = Array.from(grid.children).find((r) => r.querySelector("textarea"));
-      if (!promptRow) return;
-
-      let grow = grid.querySelector(":scope > .wpe-grow");
-      if (!grow) {
-        grow = document.createElement("div");
-        grow.className = "wpe-grow col-span-full";
-        grow.title = "Drag to change the height of the list";
-        attachGrow(grow);
-      }
-
-      // Re-appending the same elements keeps their listeners and scroll offset.
-      if (host.previousElementSibling !== promptRow || !host.isConnected) {
-        grid.insertBefore(host, promptRow.nextSibling);
-        grid.insertBefore(grow, host.nextSibling);
-      }
-      sizePane();
+      const el = getEl();
+      const holder = el?.parentElement;
+      if (!holder) return;
+      // Re-appending the same element keeps its listeners and scroll offset.
+      if (host.parentElement !== holder) holder.appendChild(host);
+      fitPane();
     };
+
+    // The list's height changes with what is in it, and the padding follows.
+    new ResizeObserver(() => fitPane()).observe(host);
 
     // Prompt, then what is loaded, then how to add more, then the settings.
     const ORDER = ["text", "warppipe_rows", "Browse LoRAs", "insert_trigger_words", "apply_to_clip"];
