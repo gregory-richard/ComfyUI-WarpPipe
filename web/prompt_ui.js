@@ -66,18 +66,29 @@ const STYLE = `
 }
 .wpe-hint { padding: 5px 7px; font-size: 10px; opacity: 0.5; }
 
-/* The list lives inside the prompt field, along its bottom edge. ComfyUI's own
-   wrapper is already positioned, so the list can sit over it without a second
-   box around it; the textarea gets bottom padding so typing never runs under
-   the list. */
+/* One field, two panels. ComfyUI's wrapper is already positioned, so the
+   divider and the list can be placed inside it without a second box: the
+   textarea keeps the top, the list takes the bottom, and each scrolls on its
+   own. Nothing of ComfyUI's is moved, only sized. */
 .wpc {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
-  max-height: 62%; overflow-y: auto;
-  padding: 4px 5px 5px; box-sizing: border-box;
+  overflow-y: auto; padding: 3px 5px 5px; box-sizing: border-box;
   background: var(--comfy-input-bg, #171717);
-  border-top: 1px solid var(--border-color, #3a3a3a);
 }
 .wpc[hidden] { display: none; }
+
+.wpe-divider {
+  position: absolute; left: 0; right: 0; z-index: 3; height: 7px;
+  cursor: row-resize; background: var(--comfy-input-bg, #171717);
+}
+.wpe-divider::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 3px; height: 1px;
+  background: var(--border-color, #3a3a3a);
+}
+.wpe-divider:hover::after, .wpe-divider.is-drag::after {
+  background: #4ec8e8; height: 2px; top: 2px;
+}
+.wpe-divider[hidden] { display: none; }
 
 /* Smaller than the prompt: a long list has to stay readable at a glance. */
 .wpc { display: flex; flex-direction: column; gap: 2px; font-size: 10px;
@@ -965,6 +976,7 @@ app.registerExtension({
 
     const wire = (el) => {
       lit = light(el);
+      if (el.parentElement) new ResizeObserver(() => fitPane()).observe(el.parentElement);
       el.addEventListener("input", commit);
       el.addEventListener("keydown", (e) => {
         if (e.key === "/") setTimeout(() => openPicker(node, el, list, commit), 0);
@@ -972,21 +984,44 @@ app.registerExtension({
       commit();
     };
 
-    /** Keep the list inside the prompt field, pinned to its bottom.
+    /** Two panels in one field, with a divider between them.
      *
-     * ComfyUI puts its own widget rows back where it wants them, so nothing of
-     * ComfyUI's is moved: the list is placed inside the wrapper the textarea
-     * already sits in, which is positioned. The textarea gains bottom padding
-     * equal to the list's height so text never runs underneath it.
+     * ComfyUI puts its own widget rows back where it wants them, so nothing is
+     * moved: the textarea keeps the top of the wrapper it already sits in, and
+     * the divider and list are placed into that same wrapper beneath it.
      */
+    const SPLIT_KEY = "warppipePromptSplit";
+    const DIVIDER_H = 7;
+
+    const divider = document.createElement("div");
+    divider.className = "wpe-divider";
+    divider.title = "Drag to resize the prompt and the list";
+
     const fitPane = () => {
       const el = getEl();
-      if (!el) return;
+      const holder = el?.parentElement;
+      if (!holder) return;
+
+      const total = holder.clientHeight;
       const rows = host.querySelectorAll(".wpc-row").length;
-      host.hidden = rows === 0;
-      const reserve = host.hidden ? 0 : Math.ceil(host.getBoundingClientRect().height);
-      const base = 8;
-      el.style.paddingBottom = `${base + reserve}px`;
+      const empty = rows === 0;
+      host.hidden = empty;
+      divider.hidden = empty;
+
+      if (empty || total < 80) {
+        el.style.height = "";
+        el.style.paddingBottom = "";
+        return;
+      }
+
+      // A share of the field, kept away from either edge so both stay usable.
+      const ratio = Math.max(0.25, Math.min(0.8, node.properties[SPLIT_KEY] ?? 0.55));
+      const promptH = Math.round(total * ratio);
+      el.style.height = `${promptH}px`;
+      el.style.paddingBottom = "";
+      divider.style.top = `${promptH}px`;
+      host.style.top = `${promptH + DIVIDER_H}px`;
+      host.style.height = "auto";
       lit?.measure();
       lit?.paint();
     };
@@ -995,12 +1030,40 @@ app.registerExtension({
       const el = getEl();
       const holder = el?.parentElement;
       if (!holder) return;
-      // Re-appending the same element keeps its listeners and scroll offset.
+      // Re-appending the same elements keeps listeners and scroll offsets.
       if (host.parentElement !== holder) holder.appendChild(host);
+      if (divider.parentElement !== holder) holder.appendChild(divider);
       fitPane();
     };
 
-    // The list's height changes with what is in it, and the padding follows.
+    divider.addEventListener("pointerdown", (down) => {
+      const el = getEl();
+      const holder = el?.parentElement;
+      if (!holder) return;
+      down.preventDefault();
+      divider.classList.add("is-drag");
+      divider.setPointerCapture(down.pointerId);
+      const box = holder.getBoundingClientRect();
+
+      const onMove = (mv) => {
+        node.properties[SPLIT_KEY] = Math.max(
+          0.25,
+          Math.min(0.8, (mv.clientY - box.top) / box.height)
+        );
+        fitPane();
+      };
+      const onUp = (up) => {
+        divider.classList.remove("is-drag");
+        divider.releasePointerCapture?.(up.pointerId);
+        divider.removeEventListener("pointermove", onMove);
+        divider.removeEventListener("pointerup", onUp);
+        node.setDirtyCanvas?.(true, true);
+      };
+      divider.addEventListener("pointermove", onMove);
+      divider.addEventListener("pointerup", onUp);
+    });
+
+    // The field is resized by the node, and the split follows it.
     new ResizeObserver(() => fitPane()).observe(host);
 
     // Prompt, then what is loaded, then how to add more, then the settings.

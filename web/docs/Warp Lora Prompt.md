@@ -106,13 +106,16 @@ to the filename and has no link.
 
 ## Where the list sits
 
-The list is part of the prompt field, along its bottom edge — one box, prose
-above and LoRAs below, rather than two things to look at. The prompt reserves
-exactly as much room as the list needs, so typing never runs underneath it.
+The field holds two panels: the prompt on top, the LoRAs beneath, with a divider
+between them. Each scrolls on its own, so a long prompt and a long list stay out
+of each other's way and neither makes the node taller.
 
-With nothing in the list the field is an ordinary prompt box. As LoRAs are added
-the list grows to fit them, up to a share of the field, and scrolls after that —
-so a twentieth LoRA costs no more height than the second.
+Drag the divider to give one panel more room than the other. The position is
+saved with the workflow, and stays between a quarter and four fifths so neither
+panel can be squeezed shut.
+
+With nothing in the list the divider and the list both disappear, and the field
+is an ordinary prompt box.
 
 ## Choosing trigger words
 
