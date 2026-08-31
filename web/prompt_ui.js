@@ -325,27 +325,33 @@ function caretLine(textarea) {
   };
 }
 
-/** Place a popover on the caret's line without covering it. */
+/** Place a popover beside the caret's line, never on top of it.
+ *
+ * The line the caret is on is the one being read while typing, so the menu
+ * takes whichever side has more room and is shortened to fit it. Clamping a
+ * full-height menu into the space instead is what put it over the text.
+ */
 function placeAtCaret(menu, textarea) {
   const line = caretLine(textarea);
-  const height = menu.offsetHeight || 320;
   const width = menu.offsetWidth || 330;
-  const gap = 4;
+  const gap = 6;
+  const smallest = 120;
 
   // Keep it against the field even when the caret is scrolled out of view.
   const anchorTop = Math.min(Math.max(line.top, line.field.top), line.field.bottom);
   const anchorBottom = Math.min(Math.max(line.bottom, line.field.top), line.field.bottom);
 
-  // Below the caret's line by preference, above it when there is no room -
-  // clamping instead would drop the menu straight over what is being typed.
-  const roomBelow = window.innerHeight - anchorBottom - gap;
-  const top =
-    roomBelow >= height || roomBelow >= anchorTop - gap
-      ? Math.min(anchorBottom + gap, window.innerHeight - height - gap)
-      : Math.max(gap, anchorTop - gap - height);
+  const roomBelow = window.innerHeight - anchorBottom - gap * 2;
+  const roomAbove = anchorTop - gap * 2;
+  const below = roomBelow >= Math.min(roomAbove, 340) || roomBelow >= smallest;
 
+  const room = Math.max(smallest, below ? roomBelow : roomAbove);
+  menu.style.maxHeight = `${Math.round(Math.min(340, room))}px`;
+  const height = Math.min(menu.offsetHeight || 320, room);
+
+  const top = below ? anchorBottom + gap : Math.max(gap, anchorTop - gap - height);
   menu.style.left = `${Math.round(Math.max(gap, Math.min(line.left, window.innerWidth - width - gap)))}px`;
-  menu.style.top = `${Math.round(Math.max(gap, top))}px`;
+  menu.style.top = `${Math.round(top)}px`;
 }
 
 /** The textarea being typed into, under either node renderer.
@@ -1190,19 +1196,48 @@ app.registerExtension({
       if (sorted.some((w, i) => w !== widgets[i])) node.widgets = sorted;
     };
 
+    // ensure() writes into the very subtree the observer watches - it sets the
+    // textarea's height and repaints the layer - so without this guard each
+    // pass triggers the next. The visible symptom is the prompt flickering,
+    // worst with the caret at the bottom, where every height change makes the
+    // browser scroll to the caret again.
+    let settling = false;
     const ensure = () => {
-      reorderWidgets();
-      applyPane();
-      const el = findTextarea(node);
-      if (el && !el._wpeLayer) {
-        if (lit && lit.textarea !== el) lit.detach();
-        wire(el);
-      } else if (el && lit) {
-        lit.measure();
+      if (settling) return !!getEl();
+      settling = true;
+      try {
+        reorderWidgets();
+        applyPane();
+        const el = findTextarea(node);
+        if (el && !el._wpeLayer) {
+          if (lit && lit.textarea !== el) lit.detach();
+          wire(el);
+        } else if (el && lit) {
+          lit.measure();
+        }
+        hideListRow();
+        return !!el;
+      } finally {
+        // Released after the observer has delivered this pass's own records,
+        // so they are dropped rather than starting another.
+        queueMicrotask(() => {
+          settling = false;
+        });
       }
-      hideListRow();
-      return !!el;
     };
+
+    /** Was this batch of mutations entirely our own doing? */
+    const isOurs = (records) =>
+      records.every((r) => {
+        const t = r.target;
+        return (
+          host.contains(t) ||
+          t === host ||
+          t === divider ||
+          (lit?.layer && (lit.layer.contains(t) || t === lit.layer)) ||
+          t === lit?.textarea
+        );
+      });
 
     let tries = 0;
     const timer = setInterval(() => {
@@ -1211,7 +1246,9 @@ app.registerExtension({
 
     const root = document.querySelector(`[data-node-id="${node.id}"]`);
     if (root) {
-      new MutationObserver(() => ensure()).observe(root, { childList: true, subtree: true });
+      new MutationObserver((records) => {
+        if (!isOurs(records)) ensure();
+      }).observe(root, { childList: true, subtree: true });
     } else {
       // No subtree to watch under the canvas renderer: one cheap look every
       // half second is enough to notice the overlay being replaced.
