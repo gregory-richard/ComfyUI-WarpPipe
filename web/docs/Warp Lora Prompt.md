@@ -91,13 +91,26 @@ one there is deliberate.
 Each row carries:
 
 - **⠿** drag to reorder, or drag out of the node to copy the tag as text
-- the preview and name
-- **⊕** insert that LoRA's trigger words into the prompt
-- the weight — drag it, or type one
+- the preview, the model's title, and its creator and version underneath
+- **⊕** choose trigger words to insert — see below
+- **↗** open its page on Civitai
+- the weight — drag in steps of 0.1, or click and type a value
 - **◉ / ○** switch it off and on. A LoRA switched off is kept, greyed and struck
   through, and not applied
 - **⧉** copy its tag to the clipboard
 - **✕** remove it
+
+The title comes from the `.civitai.info` sidecar rather than the filename, so it
+reads correctly whatever the file is called. Without a sidecar the row falls back
+to the filename and has no link.
+
+## Choosing trigger words
+
+**⊕** opens a list of that LoRA's trigger words. Creators sometimes declare a
+single word and sometimes several paragraphs — in one collection of 761 files the
+longest ran to 655 characters — so they are offered one at a time rather than
+inserted wholesale. Words already in the prompt are dimmed, and **Insert all**
+adds whatever is missing.
 
 A row outlined in red names a file that does not exist.
 

@@ -895,3 +895,30 @@ def test_every_line_of_the_list_is_read(warp_pipe, lora_folder):
 
     # The unknown one is skipped with a warning; the known one still applies.
     assert [r["weight"] for r in resolved] == [0.8]
+
+
+def test_index_carries_the_civitai_title_and_link(warp_pipe, monkeypatch, tmp_path):
+    model = tmp_path / "creator - thing - v1 (sdxl).safetensors"
+    model.write_bytes(b"w")
+    (tmp_path / "creator - thing - v1 (sdxl).civitai.info").write_text(
+        json.dumps({"modelId": 2237913, "id": 2951752, "model": {"name": "Proper Title"}}),
+        encoding="utf-8",
+    )
+    module = types.ModuleType("folder_paths")
+    module.get_filename_list = lambda kind: (
+        ["creator - thing - v1 (sdxl).safetensors"] if kind == "loras" else []
+    )
+    module.get_full_path = lambda kind, name: str(model) if kind == "loras" else None
+    monkeypatch.setitem(sys.modules, "folder_paths", module)
+
+    entry = warp_pipe.lora_index()[0]
+
+    assert entry["title"] == "Proper Title"
+    assert entry["url"] == "https://civitai.com/models/2237913?modelVersionId=2951752"
+
+
+def test_a_file_with_no_sidecar_has_no_title_or_link(warp_pipe, lora_folder):
+    other = next(e for e in warp_pipe.lora_index() if e["id"] == OTHER_LORA)
+
+    assert other["title"] is None
+    assert other["url"] is None

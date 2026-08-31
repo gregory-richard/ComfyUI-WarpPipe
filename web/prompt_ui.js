@@ -86,8 +86,42 @@ const STYLE = `
 .wpc-power { color: #9ad9a4; }
 .wpc-row.is-off .wpc-power { color: inherit; }
 .wpc-thumb { width: 22px; height: 22px; flex: 0 0 22px; border-radius: 3px; object-fit: cover; background: #0d0d0d; }
-.wpc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wpc-name small { opacity: 0.5; }
+.wpc-name { flex: 1; min-width: 0; overflow: hidden; }
+.wpc-name b { font-weight: 600; }
+.wpc-name .wpc-line {
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wpc-name .wpc-by { font-size: 10px; opacity: 0.5; }
+.wpc-link { text-decoration: none; }
+.wpc-link:hover { color: #4ec8e8; }
+
+.wpt-menu {
+  position: fixed; z-index: 1700; width: 300px; max-height: 300px; overflow-y: auto;
+  background: var(--comfy-menu-bg, #1e1e1e); color: var(--input-text, #dcdcdc);
+  border: 1px solid var(--border-color, #3a3a3a); border-radius: 6px;
+  box-shadow: 0 14px 40px rgba(0,0,0,0.55); padding: 4px; font-size: 12px;
+}
+.wpt-head {
+  padding: 5px 7px; font-size: 10px; opacity: 0.55;
+  display: flex; align-items: center; gap: 8px;
+}
+.wpt-head button {
+  margin-left: auto; background: none; border: 1px solid var(--border-color, #3a3a3a);
+  color: inherit; border-radius: 3px; font: inherit; font-size: 10px;
+  padding: 2px 6px; cursor: pointer;
+}
+.wpt-head button:hover { border-color: #4ec8e8; color: #4ec8e8; }
+.wpt-item {
+  display: block; width: 100%; text-align: left; padding: 5px 7px;
+  background: none; border: 0; border-radius: 3px; color: inherit;
+  font: inherit; cursor: pointer;
+  /* Some creators write paragraphs here, so a long one wraps to a few lines
+     rather than being cut to something unrecognisable. */
+  white-space: normal; overflow-wrap: break-word;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.wpt-item:hover, .wpt-item.is-active { background: rgba(78,200,232,0.16); }
+.wpt-item.is-in { opacity: 0.45; }
 .wpc-weight {
   width: 44px; text-align: center; padding: 1px 0; border-radius: 3px;
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 11px;
@@ -475,6 +509,57 @@ function openPicker(node, el, list, commit) {
 
 // --- rows ------------------------------------------------------------------
 
+/** Choose which trigger words to insert.
+ *
+ * A LoRA can declare one short word or several paragraphs, so inserting the lot
+ * is rarely what you want. Words already in the prompt are dimmed.
+ */
+function openTriggerPicker(anchor, words, current, insert) {
+  document.querySelector(".wpt-menu")?.remove();
+
+  const menu = document.createElement("div");
+  menu.className = "wpt-menu";
+  const box = anchor.getBoundingClientRect();
+  menu.style.left = `${Math.round(Math.min(box.left, window.innerWidth - 312))}px`;
+  menu.style.top = `${Math.round(Math.min(box.bottom + 4, window.innerHeight - 310))}px`;
+
+  const head = document.createElement("div");
+  head.className = "wpt-head";
+  head.append(`${words.length} trigger word${words.length === 1 ? "" : "s"}`);
+  const all = document.createElement("button");
+  all.type = "button";
+  all.textContent = "Insert all";
+  all.addEventListener("click", () => {
+    insert(words.filter((w) => !current.toLowerCase().includes(w.toLowerCase())));
+    menu.remove();
+  });
+  head.appendChild(all);
+  menu.appendChild(head);
+
+  for (const word of words) {
+    const item = document.createElement("button");
+    item.type = "button";
+    const already = current.toLowerCase().includes(word.toLowerCase());
+    item.className = "wpt-item" + (already ? " is-in" : "");
+    item.textContent = word;
+    item.title = already ? "Already in the prompt" : word;
+    item.addEventListener("click", () => {
+      insert([word]);
+      menu.remove();
+    });
+    menu.appendChild(item);
+  }
+
+  const close = (e) => {
+    if (!menu.contains(e.target)) {
+      menu.remove();
+      document.removeEventListener("mousedown", close, true);
+    }
+  };
+  document.addEventListener("mousedown", close, true);
+  document.body.appendChild(menu);
+}
+
 function buildRows(node, list, host, commit) {
   let generation = 0;
 
@@ -554,12 +639,28 @@ function buildRows(node, list, host, commit) {
       name.className = "wpc-name";
       name.title = item.name;
       if (entry) {
-        const detail = entry.structured && entry.version ? entry.version : "";
-        name.innerHTML = `${escapeHTML(entry.name)} <small>${escapeHTML(detail)}</small>`;
+        // Civitai's own title when we have it; the parsed name otherwise.
+        const heading = entry.title || entry.name;
+        const version = entry.structured && entry.version ? entry.version : "";
+        const by = [entry.creator, version].filter(Boolean).join(" · ");
+        name.innerHTML =
+          `<span class="wpc-line"><b>${escapeHTML(heading)}</b></span>` +
+          (by ? `<span class="wpc-line wpc-by">${escapeHTML(by)}</span>` : "");
       } else {
         name.textContent = item.name;
       }
       row.appendChild(name);
+
+      if (entry?.url) {
+        const link = document.createElement("a");
+        link.className = "wpc-btn wpc-link";
+        link.href = entry.url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = "↗";
+        link.title = "Open its page on Civitai";
+        row.appendChild(link);
+      }
 
       if (entry?.triggers?.length) {
         const trig = document.createElement("button");
@@ -569,12 +670,12 @@ function buildRows(node, list, host, commit) {
         trig.title = `Insert: ${entry.triggers.join(", ")}`;
         trig.addEventListener("click", () => {
           const text = node._warppipeGetText?.() || "";
-          const missing = entry.triggers.filter(
-            (w) => !text.toLowerCase().includes(w.toLowerCase())
-          );
-          if (missing.length) {
-            node._warppipeSetText?.(`${text.trim()}, ${missing.join(", ")}`.replace(/^,\s*/, ""));
-          }
+          openTriggerPicker(trig, entry.triggers, text, (chosen) => {
+            if (!chosen.length) return;
+            const now = node._warppipeGetText?.() || "";
+            const joined = chosen.join(", ");
+            node._warppipeSetText?.(now.trim() ? `${now.trim()}, ${joined}` : joined);
+          });
         });
         row.appendChild(trig);
       }
@@ -590,20 +691,37 @@ function buildRows(node, list, host, commit) {
         write(next);
       };
       weight.addEventListener("change", () => apply(parseFloat(weight.value) || 0));
+      // Scrubbing in steps of 0.1, eight pixels apart: fine enough to land on a
+      // value deliberately, coarse enough not to wander. Pointer capture keeps
+      // the drag alive when it leaves the little field.
+      const STEP = 0.1;
+      const PX_PER_STEP = 8;
       weight.addEventListener("pointerdown", (down) => {
+        if (document.activeElement === weight) return; // typing, not dragging
+        down.preventDefault();
+        const startX = down.clientX;
+        const startValue = item.weight;
         let moved = false;
+        weight.setPointerCapture(down.pointerId);
+
         const onMove = (mv) => {
-          if (Math.abs(mv.clientX - down.clientX) < 3) return;
+          const dx = mv.clientX - startX;
+          if (!moved && Math.abs(dx) < 3) return;
           moved = true;
-          weight.value = (item.weight + (mv.clientX - down.clientX) * 0.01).toFixed(2);
+          const steps = Math.round(dx / PX_PER_STEP);
+          const next = Math.max(-4, Math.min(4, startValue + steps * STEP));
+          // Snap to the step so the number is always a round one.
+          weight.value = (Math.round(next / STEP) * STEP).toFixed(2);
         };
-        const onUp = () => {
-          window.removeEventListener("pointermove", onMove);
-          window.removeEventListener("pointerup", onUp);
+        const onUp = (up) => {
+          weight.releasePointerCapture?.(up.pointerId);
+          weight.removeEventListener("pointermove", onMove);
+          weight.removeEventListener("pointerup", onUp);
           if (moved) apply(parseFloat(weight.value));
+          else weight.focus();
         };
-        window.addEventListener("pointermove", onMove);
-        window.addEventListener("pointerup", onUp);
+        weight.addEventListener("pointermove", onMove);
+        weight.addEventListener("pointerup", onUp);
       });
       row.appendChild(weight);
 
@@ -843,7 +961,20 @@ app.registerExtension({
       commit();
     };
 
+    // Prompt, then what is loaded, then how to add more, then the settings.
+    const ORDER = ["text", "warppipe_rows", "Browse LoRAs", "insert_trigger_words", "apply_to_clip"];
+    const reorderWidgets = () => {
+      const widgets = node.widgets || [];
+      const rank = (w) => {
+        const i = ORDER.indexOf(w.name);
+        return i === -1 ? ORDER.length : i;
+      };
+      const sorted = [...widgets].sort((a, b) => rank(a) - rank(b));
+      if (sorted.some((w, i) => w !== widgets[i])) node.widgets = sorted;
+    };
+
     const ensure = () => {
+      reorderWidgets();
       const el = findTextarea(node);
       if (el && !el._wpeLayer) {
         if (lit && lit.textarea !== el) lit.detach();

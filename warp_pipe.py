@@ -1407,9 +1407,7 @@ class WarpLoraPrompt:
         # is one switched off, and forgetting that in any one call site would
         # quietly load a LoRA the user had disabled.
         # The list the interface maintains, then any tags typed into the prompt.
-        wanted = extract_lora_tags(strip_comments(loras)) + extract_lora_tags(
-            strip_comments(text)
-        )
+        wanted = extract_lora_tags(strip_comments(loras)) + extract_lora_tags(strip_comments(text))
         for query, weight in wanted:
             if query.lower() in seen:
                 continue
@@ -1652,6 +1650,23 @@ def lora_preview_path(model_path: Optional[str]) -> Optional[str]:
     return None
 
 
+def _sidecar_title(payload: Optional[dict[str, Any]]) -> Optional[str]:
+    """The name Civitai gives the model, which beats guessing from a filename."""
+    model = (payload or {}).get("model")
+    name = model.get("name") if isinstance(model, dict) else None
+    return name if isinstance(name, str) and name.strip() else None
+
+
+def _civitai_url(payload: Optional[dict[str, Any]]) -> Optional[str]:
+    """The page this file came from, so a row can link back to it."""
+    model_id = (payload or {}).get("modelId")
+    version_id = (payload or {}).get("id")
+    if not isinstance(model_id, int):
+        return None
+    url = f"https://civitai.com/models/{model_id}"
+    return f"{url}?modelVersionId={version_id}" if isinstance(version_id, int) else url
+
+
 def _sidecar_base_model(payload: Optional[dict[str, Any]]) -> Optional[str]:
     if not payload:
         return None
@@ -1749,6 +1764,10 @@ def model_index(folder_key: str = "loras") -> list[dict[str, Any]]:
                 # whole stem as the name, and callers should not pretend
                 # otherwise.
                 "structured": parsed["creator"] is not None,
+                # What Civitai calls it, when we know. Portable in a way a
+                # filename convention is not.
+                "title": _sidecar_title(payload),
+                "url": _civitai_url(payload),
                 "triggers": civitai_trigger_words(path) if path else [],
                 "has_preview": has_preview,
                 # The server owns URL construction; the client just uses it.
