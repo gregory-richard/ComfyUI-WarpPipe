@@ -74,6 +74,17 @@ const STYLE = `
   background: var(--comfy-input-bg, #171717); border: 1px solid var(--border-color, #3a3a3a);
 }
 .wpc-row.is-missing { border-color: #b4553f; }
+/* A disabled row stays legible - you need to read it to decide to switch it
+   back on - but everything about it is quieter. */
+.wpc-row.is-off { opacity: 0.42; }
+.wpc-row.is-off .wpc-name { text-decoration: line-through; }
+.wpc-row.is-drag { opacity: 0.35; }
+.wpc-row.is-over { box-shadow: 0 -2px 0 #4ec8e8; }
+.wpc-grip { cursor: grab; opacity: 0.35; flex: 0 0 9px; font-size: 11px; line-height: 1; }
+.wpc-grip:active { cursor: grabbing; }
+.wpc-row:hover .wpc-grip { opacity: 0.75; }
+.wpc-power { color: #9ad9a4; }
+.wpc-row.is-off .wpc-power { color: inherit; }
 .wpc-thumb { width: 22px; height: 22px; flex: 0 0 22px; border-radius: 3px; object-fit: cover; background: #0d0d0d; }
 .wpc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wpc-name small { opacity: 0.5; }
@@ -108,6 +119,35 @@ async function library() {
 const stemOf = (id) => id.replace(/\\/g, "/").split("/").pop().replace(/\.[^.]+$/, "");
 const escapeHTML = (s) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** The LoRA list, one per line. A line commented out is one switched off -
+ * which is exactly what the backend already does with a comment: nothing. */
+function parseList(value) {
+  return (value || "")
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return null;
+      const enabled = !trimmed.startsWith("//");
+      const body = enabled ? trimmed : trimmed.replace(/^\/\/\s*/, "");
+      const m = /^<lora:([^:>]+):(-?[0-9]*\.?[0-9]+)[^>]*>$/i.exec(body);
+      return m ? { name: m[1].trim(), weight: parseFloat(m[2]), enabled } : null;
+    })
+    .filter(Boolean);
+}
+
+function serialiseList(items) {
+  return items
+    .map((i) => `${i.enabled ? "" : "// "}<lora:${i.name}:${i.weight.toFixed(2)}>`)
+    .join("\n");
+}
+
+/** Is this position inside a // note? Parked tags are left where they are. */
+function inComment(text, index) {
+  const lineStart = text.lastIndexOf("\n", index - 1) + 1;
+  const marker = text.slice(lineStart, index).indexOf("//");
+  return marker !== -1;
+}
 
 function parseTags(text) {
   const found = [];
@@ -437,14 +477,19 @@ function openPicker(node, el, list, commit) {
 
 function buildRows(node, list, host, commit) {
   let generation = 0;
-  const setText = (value) => list.set(value);
+
+  const items = () => list.items();
+  const write = (next) => {
+    list.write(next);
+    commit();
+  };
 
   const render = async () => {
     const mine = ++generation;
-    const tags = parseTags(list.get());
+    const current = items();
     host.replaceChildren();
 
-    if (!tags.length) {
+    if (!current.length) {
       const empty = document.createElement("div");
       empty.className = "wpc-empty";
       empty.textContent = "No LoRAs yet — press / in the prompt, or use Browse.";
@@ -457,10 +502,44 @@ function buildRows(node, list, host, commit) {
     host.replaceChildren();
     const byStem = new Map(entries.map((e) => [stemOf(e.id).toLowerCase(), e]));
 
-    tags.forEach((tag, index) => {
-      const entry = byStem.get(tag.name.toLowerCase());
+    current.forEach((item, index) => {
+      const entry = byStem.get(item.name.toLowerCase());
       const row = document.createElement("div");
-      row.className = "wpc-row" + (entry ? "" : " is-missing");
+      row.className =
+        "wpc-row" + (entry ? "" : " is-missing") + (item.enabled ? "" : " is-off");
+      row.draggable = true;
+
+      const grip = document.createElement("span");
+      grip.className = "wpc-grip";
+      grip.textContent = "⠿";
+      grip.title = "Drag to reorder";
+      row.appendChild(grip);
+
+      row.addEventListener("dragstart", (e) => {
+        e.dataTransfer.effectAllowed = "move";
+        // Dragging out of the node yields the tag, so a row can be dropped
+        // into any other prompt as text.
+        e.dataTransfer.setData("text/plain", `<lora:${item.name}:${item.weight.toFixed(2)}>`);
+        e.dataTransfer.setData("application/x-warppipe-lora", String(index));
+        row.classList.add("is-drag");
+      });
+      row.addEventListener("dragend", () => row.classList.remove("is-drag"));
+      row.addEventListener("dragover", (e) => {
+        if (!e.dataTransfer.types.includes("application/x-warppipe-lora")) return;
+        e.preventDefault();
+        row.classList.add("is-over");
+      });
+      row.addEventListener("dragleave", () => row.classList.remove("is-over"));
+      row.addEventListener("drop", (e) => {
+        e.preventDefault();
+        row.classList.remove("is-over");
+        const from = parseInt(e.dataTransfer.getData("application/x-warppipe-lora"), 10);
+        if (Number.isNaN(from) || from === index) return;
+        const next = items();
+        const [moved] = next.splice(from, 1);
+        next.splice(index, 0, moved);
+        write(next);
+      });
 
       if (entry?.thumbnail) {
         const img = document.createElement("img");
@@ -473,13 +552,12 @@ function buildRows(node, list, host, commit) {
 
       const name = document.createElement("div");
       name.className = "wpc-name";
-      name.title = tag.name;
+      name.title = item.name;
       if (entry) {
-        // Only claim a version when the filename really carried one.
         const detail = entry.structured && entry.version ? entry.version : "";
         name.innerHTML = `${escapeHTML(entry.name)} <small>${escapeHTML(detail)}</small>`;
       } else {
-        name.textContent = tag.name;
+        name.textContent = item.name;
       }
       row.appendChild(name);
 
@@ -491,31 +569,33 @@ function buildRows(node, list, host, commit) {
         trig.title = `Insert: ${entry.triggers.join(", ")}`;
         trig.addEventListener("click", () => {
           const text = node._warppipeGetText?.() || "";
-          const missing = entry.triggers.filter((w) => !text.toLowerCase().includes(w.toLowerCase()));
-          if (missing.length) setText(`${text.trim()}, ${missing.join(", ")}`);
+          const missing = entry.triggers.filter(
+            (w) => !text.toLowerCase().includes(w.toLowerCase())
+          );
+          if (missing.length) {
+            node._warppipeSetText?.(`${text.trim()}, ${missing.join(", ")}`.replace(/^,\s*/, ""));
+          }
         });
         row.appendChild(trig);
       }
 
-      const rewrite = (i, replacement) => {
-        const current = list.get();
-        const t = parseTags(current)[i];
-        if (!t) return;
-        setText(current.slice(0, t.start) + replacement + current.slice(t.start + t.raw.length));
-      };
-
       const weight = document.createElement("input");
       weight.className = "wpc-weight";
-      weight.value = tag.weight.toFixed(2);
+      weight.value = item.weight.toFixed(2);
       weight.title = "Drag to change, or type a value";
-      const apply = (v) => rewrite(index, `<lora:${tag.name}:${Math.max(-4, Math.min(4, v)).toFixed(2)}>`);
+      const apply = (value) => {
+        const next = items();
+        if (!next[index]) return;
+        next[index].weight = Math.max(-4, Math.min(4, value));
+        write(next);
+      };
       weight.addEventListener("change", () => apply(parseFloat(weight.value) || 0));
       weight.addEventListener("pointerdown", (down) => {
         let moved = false;
         const onMove = (mv) => {
           if (Math.abs(mv.clientX - down.clientX) < 3) return;
           moved = true;
-          weight.value = (tag.weight + (mv.clientX - down.clientX) * 0.01).toFixed(2);
+          weight.value = (item.weight + (mv.clientX - down.clientX) * 0.01).toFixed(2);
         };
         const onUp = () => {
           window.removeEventListener("pointermove", onMove);
@@ -527,38 +607,46 @@ function buildRows(node, list, host, commit) {
       });
       row.appendChild(weight);
 
-      const move = (delta) => {
-        const current = list.get();
-        const tagList = parseTags(current);
-        const other = tagList[index + delta];
-        if (!other) return;
-        const [a, b] = delta > 0 ? [tagList[index], other] : [other, tagList[index]];
-        let next = current;
-        next = next.slice(0, b.start) + a.raw + next.slice(b.start + b.raw.length);
-        next = next.slice(0, a.start) + b.raw + next.slice(a.start + a.raw.length);
-        setText(next);
-      };
+      const power = document.createElement("button");
+      power.type = "button";
+      power.hidden = !list.separate;
+      power.className = "wpc-btn wpc-power";
+      power.textContent = item.enabled ? "◉" : "○";
+      power.title = item.enabled ? "Switch off (kept, not applied)" : "Switch on";
+      power.addEventListener("click", () => {
+        const next = items();
+        next[index].enabled = !next[index].enabled;
+        write(next);
+      });
+      row.appendChild(power);
 
-      for (const [glyph, delta, disabled, label] of [
-        ["↑", -1, index === 0, "Move earlier"],
-        ["↓", 1, index === tags.length - 1, "Move later"],
-      ]) {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "wpc-btn";
-        btn.textContent = glyph;
-        btn.title = label;
-        btn.disabled = disabled;
-        btn.addEventListener("click", () => move(delta));
-        row.appendChild(btn);
-      }
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "wpc-btn";
+      copy.textContent = "⧉";
+      copy.title = "Copy the tag";
+      copy.addEventListener("click", async () => {
+        const tag = `<lora:${item.name}:${item.weight.toFixed(2)}>`;
+        try {
+          await navigator.clipboard.writeText(tag);
+          copy.textContent = "✓";
+          setTimeout(() => (copy.textContent = "⧉"), 900);
+        } catch {
+          copy.title = tag;
+        }
+      });
+      row.appendChild(copy);
 
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "wpc-btn";
       remove.textContent = "✕";
       remove.title = "Remove";
-      remove.addEventListener("click", () => rewrite(index, ""));
+      remove.addEventListener("click", () => {
+        const next = items();
+        next.splice(index, 1);
+        write(next);
+      });
       row.appendChild(remove);
 
       host.appendChild(row);
@@ -624,11 +712,49 @@ app.registerExtension({
           get: () => getEl()?.value || "",
           set: writeText,
         };
-    list.add = (stem) => {
-      const current = list.get().trim();
-      if (current.toLowerCase().includes(`<lora:${stem.toLowerCase()}:`)) return;
-      const tag = `<lora:${stem}:1.0>`;
-      list.set(current ? `${current} ${tag}` : tag);
+    // One per line: that is what lets a single line be commented out to switch
+    // one LoRA off without touching the others.
+    list.append = (tags) => {
+      const existing = parseList(list.get());
+      const have = new Set(existing.map((i) => i.name.toLowerCase()));
+      let added = false;
+      for (const { name, weight } of tags) {
+        if (have.has(name.toLowerCase())) continue;
+        have.add(name.toLowerCase());
+        existing.push({ name, weight, enabled: true });
+        added = true;
+      }
+      if (added) list.set(serialiseList(existing));
+      return added;
+    };
+    list.add = (stem) => list.append([{ name: stem, weight: 1.0 }]);
+
+    // The rows work on this shape wherever the tags actually live. With no
+    // loras input they live in the prompt, where a line cannot be commented out
+    // without commenting out the prose around it, so switching off is not
+    // offered there.
+    list.items = () =>
+      list.separate
+        ? parseList(list.get())
+        : parseTags(list.get()).map((t) => ({ name: t.name, weight: t.weight, enabled: true }));
+
+    list.write = (items) => {
+      if (list.separate) {
+        list.set(serialiseList(items));
+        return;
+      }
+      // Rewrite the prompt: drop every tag, then put the new set back at the end.
+      const text = list.get();
+      let stripped = text;
+      for (const tag of [...parseTags(text)].reverse()) {
+        stripped = stripped.slice(0, tag.start) + stripped.slice(tag.start + tag.raw.length);
+      }
+      stripped = stripped.replace(/[ \t]{2,}/g, " ").trim();
+      const tags = items
+        .filter((i) => i.enabled)
+        .map((i) => `<lora:${i.name}:${i.weight.toFixed(2)}>`)
+        .join(" ");
+      list.set(stripped && tags ? `${stripped} ${tags}` : stripped || tags);
     };
 
     const host = document.createElement("div");
@@ -654,8 +780,52 @@ app.registerExtension({
       lit?.setVocabulary(new Set(byStem.keys()), [...words]);
     };
 
+    /** Move any tag out of the prompt and into the list.
+     *
+     * Typing one by hand, pasting one from somewhere else, or opening a
+     * workflow that kept its tags inline all end in the same place: a row. A
+     * tag inside a // note is left alone, since parking one there is
+     * deliberate.
+     */
+    const migrateInlineTags = () => {
+      if (!list.separate) return false;
+      const el = getEl();
+      if (!el) return false;
+      const text = el.value || "";
+      const found = parseTags(text).filter((tag) => !inComment(text, tag.start));
+      if (!found.length) return false;
+
+      let next = text;
+      // Last first, so earlier offsets stay valid.
+      for (const tag of [...found].reverse()) {
+        next = next.slice(0, tag.start) + next.slice(tag.start + tag.raw.length);
+      }
+      // Removing tags never removes newlines, so the lines still correspond
+      // and one left blank by a removal can be dropped without touching a
+      // line the writer left blank on purpose.
+      const was = text.split("\n");
+      next = next
+        .split("\n")
+        .map((line, i) => [line.replace(/[ \t]+$/, ""), i])
+        .filter(([line, i]) => line !== "" || (was[i] || "").trim() === "")
+        .map(([line]) => line)
+        .join("\n")
+        .replace(/[ \t]{2,}/g, " ")
+        .replace(/[ \t]+([,.;:!?])/g, "$1")
+        .replace(/(,\s*){2,}/g, ", ");
+      const caret = el.selectionStart;
+      el.value = next;
+      const shift = text.length - next.length;
+      const at = Math.max(0, Math.min(next.length, caret - shift));
+      el.setSelectionRange(at, at);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      list.append(found.map((t) => ({ name: t.name, weight: t.weight })));
+      return true;
+    };
+
     let renderRows = async () => {};
     const commit = () => {
+      migrateInlineTags();
       lit?.paint();
       renderRows();
       refreshVocabulary();

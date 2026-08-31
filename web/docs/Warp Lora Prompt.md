@@ -83,16 +83,27 @@ families.
 
 ## The rows under the prompt
 
-Every tag in the prompt appears as a row: its preview, its name, and controls to
+A LoRA is never text in the prompt. Type a tag, paste one, or open a workflow
+that kept its tags inline, and it moves out of the prompt into a row — the
+prompt stays prose. A tag inside a `//` note is left where it is, since parking
+one there is deliberate.
 
-- drag the weight, or type one
-- move it earlier or later
-- insert its trigger words
-- remove it
+Each row carries:
 
-The rows are a view of the text, not a second copy of it. Every control rewrites
-the tag in place, so what you type and what you click can never disagree. A row
-outlined in red names a file that does not exist.
+- **⠿** drag to reorder, or drag out of the node to copy the tag as text
+- the preview and name
+- **⊕** insert that LoRA's trigger words into the prompt
+- the weight — drag it, or type one
+- **◉ / ○** switch it off and on. A LoRA switched off is kept, greyed and struck
+  through, and not applied
+- **⧉** copy its tag to the clipboard
+- **✕** remove it
+
+A row outlined in red names a file that does not exist.
+
+Switching off writes the line out as a comment, which is the same rule as `//`
+in the prompt: commented means not applied. Nothing here is a second copy of the
+state — the rows are the list, drawn.
 
 ## Notes
 

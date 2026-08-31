@@ -875,3 +875,23 @@ def test_a_lora_is_not_applied_twice_if_it_is_in_both(warp_pipe, lora_folder):
     assert len(resolved) == 1
     # The interface's list wins, since that is what the rows show.
     assert resolved[0]["weight"] == 0.8
+
+
+def test_a_switched_off_lora_is_a_commented_line(warp_pipe, lora_folder):
+    # The interface switches a LoRA off by commenting its line out, which the
+    # backend already treats as absent - so there is one rule, not two.
+    listing = "// <lora:detail tweaker:0.8>\n<lora:detail tweaker:0.4>"
+
+    resolved, _ = warp_pipe.WarpLoraPrompt().plan("a portrait", loras=listing)
+
+    assert len(resolved) == 1
+    assert resolved[0]["weight"] == 0.4
+
+
+def test_every_line_of_the_list_is_read(warp_pipe, lora_folder):
+    resolved, _ = warp_pipe.WarpLoraPrompt().plan(
+        "a portrait", loras="<lora:detail tweaker:0.8>\n<lora:ghost:1.0>"
+    )
+
+    # The unknown one is skipped with a warning; the known one still applies.
+    assert [r["weight"] for r in resolved] == [0.8]

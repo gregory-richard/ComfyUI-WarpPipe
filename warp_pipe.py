@@ -1403,8 +1403,13 @@ class WarpLoraPrompt:
         trigger_words: list[str] = []
         seen: set[str] = set()
 
+        # Comments are stripped here rather than by the caller: a commented tag
+        # is one switched off, and forgetting that in any one call site would
+        # quietly load a LoRA the user had disabled.
         # The list the interface maintains, then any tags typed into the prompt.
-        wanted = extract_lora_tags(loras) + extract_lora_tags(text)
+        wanted = extract_lora_tags(strip_comments(loras)) + extract_lora_tags(
+            strip_comments(text)
+        )
         for query, weight in wanted:
             if query.lower() in seen:
                 continue
@@ -1441,9 +1446,7 @@ class WarpLoraPrompt:
     ) -> tuple:
         # A tag that cannot be resolved fails the run: generating without a
         # LoRA the prompt asked for produces a wrong image and wrong metadata.
-        resolved, trigger_words = self.plan(
-            strip_comments(text), strict=True, loras=strip_comments(loras)
-        )
+        resolved, trigger_words = self.plan(text, strict=True, loras=loras)
 
         prompt = clean_prompt(text)
         if insert_trigger_words and trigger_words:
