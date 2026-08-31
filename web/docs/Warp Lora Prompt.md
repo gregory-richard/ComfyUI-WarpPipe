@@ -104,6 +104,17 @@ The title comes from the `.civitai.info` sidecar rather than the filename, so it
 reads correctly whatever the file is called. Without a sidecar the row falls back
 to the filename and has no link.
 
+## Both node renderers
+
+The node works the same whether ComfyUI is drawing nodes on the canvas or with
+Nodes 2.0. The two put the prompt's textarea in different places — Nodes 2.0
+renders it as a component under the node's element, the canvas renderer overlays
+it and hangs it off the widget — so the node looks for both.
+
+On a large workflow the canvas renderer is considerably lighter: Nodes 2.0
+creates roughly 84 DOM elements per node, so a 213-node workflow becomes about
+18,000 of them.
+
 ## Where the list sits
 
 The field holds two panels: the prompt on top, the LoRAs beneath, with a divider

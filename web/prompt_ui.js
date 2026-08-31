@@ -304,11 +304,23 @@ const COPIED_STYLES = [
   "borderLeftWidth", "boxSizing", "tabSize", "textAlign",
 ];
 
-/** ComfyUI renders each widget under an element tagged with the node's id. */
+/** The textarea being typed into, under either node renderer.
+ *
+ * With Nodes 2.0 the widget is a Vue component rendered under an element
+ * tagged with the node's id. With the canvas renderer there is no such
+ * element: ComfyUI overlays a plain textarea and hangs it off the widget as
+ * inputEl. Both are real textareas, which is all anything here needs.
+ */
 function findTextarea(node) {
   const root = document.querySelector(`[data-node-id="${node.id}"]`);
-  return root ? root.querySelector("textarea") : null;
+  const rendered = root?.querySelector("textarea");
+  if (rendered) return rendered;
+
+  const widget = (node.widgets || []).find((w) => w.name === TEXT_WIDGET);
+  const overlaid = widget?.inputEl ?? widget?.element;
+  return overlaid?.tagName === "TEXTAREA" && overlaid.isConnected ? overlaid : null;
 }
+
 
 /** Colour ComfyUI's own textarea by putting a layer behind it.
  *
@@ -872,6 +884,14 @@ app.registerExtension({
     // frontend ignores widget.hidden, so the row is hidden in the document
     // instead; if that ever stops working the field reappears, which is untidy
     // rather than broken.
+    // The list is written by the rows, so its own field is noise. Neither
+    // renderer honours widget.hidden, so each is hidden its own way: a canvas
+    // widget by giving it no size to draw in, a Vue one by hiding its row.
+    if (listWidget) {
+      listWidget.computeSize = () => [0, -4];
+      listWidget.draw = () => {};
+    }
+
     const hideListRow = () => {
       if (!listWidget) return;
       const root = document.querySelector(`[data-node-id="${node.id}"]`);
@@ -1144,8 +1164,21 @@ app.registerExtension({
     const timer = setInterval(() => {
       if (ensure() || ++tries > 150) clearInterval(timer);
     }, 100);
+
     const root = document.querySelector(`[data-node-id="${node.id}"]`);
-    if (root) new MutationObserver(() => ensure()).observe(root, { childList: true, subtree: true });
+    if (root) {
+      new MutationObserver(() => ensure()).observe(root, { childList: true, subtree: true });
+    } else {
+      // No subtree to watch under the canvas renderer: one cheap look every
+      // half second is enough to notice the overlay being replaced.
+      const recheck = setInterval(() => {
+        if (!node.graph) {
+          clearInterval(recheck);
+          return;
+        }
+        ensure();
+      }, 500);
+    }
 
     node._warppipeGetText = () => getEl()?.value || "";
     node._warppipeSetText = (value) => {
