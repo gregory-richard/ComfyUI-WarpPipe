@@ -1,4 +1,5 @@
 import { app } from "../../scripts/app.js";
+import { connectedBase, groupOf } from "./model_base.js";
 
 // The library browser for the Prompt + LoRAs node.
 //
@@ -129,54 +130,6 @@ async function loadIndex() {
   return indexCache;
 }
 
-// Walk back from the node to whichever loader fed it and read the model's file
-// name. What that model *is* comes from its own metadata, not from the name.
-function connectedModelName(node) {
-  const seen = new Set();
-  const walk = (current, depth) => {
-    if (!current || depth > 12 || seen.has(current.id)) return null;
-    seen.add(current.id);
-    for (const widget of current.widgets || []) {
-      const isModel = /^(unet_name|ckpt_name|model_name)$/.test(widget.name || "");
-      if (isModel && typeof widget.value === "string" && widget.value) return widget.value;
-    }
-    for (let slot = 0; slot < (current.inputs || []).length; slot++) {
-      const found = walk(current.getInputNode?.(slot), depth + 1);
-      if (found !== null) return found;
-    }
-    return null;
-  };
-  return walk(node, 0);
-}
-
-/** What a LoRA is filed under: what it says it is, else where it sits.
- *
- * base_model comes from the .civitai.info sidecar and means the same thing in
- * anybody's collection. Folder names only mean something to whoever chose them,
- * so they are the fallback rather than the rule.
- */
-function groupOf(entry) {
-  return entry.base_model || entry.folder || "Unsorted";
-}
-
-/** The base model of the file wired into this node, asked of the server. */
-async function connectedBase(node) {
-  const name = connectedModelName(node);
-  if (!name) return null;
-  try {
-    const info = await fetch(`/warppipe/model/base?name=${encodeURIComponent(name)}`).then((r) =>
-      r.json()
-    );
-    if (info.base_model) return info.base_model;
-  } catch {
-    /* fall through to the folder */
-  }
-  // No sidecar: fall back to the folder, which is right for collections filed
-  // that way and simply matches nothing for the rest.
-  const parts = name.replace(/\\/g, "/").split("/");
-  return parts.length > 1 ? parts[0] : null;
-}
-
 function insertTag(node, entry) {
   const widget = (node.widgets || []).find((w) => w.name === TEXT_WIDGET);
   if (!widget) return;
@@ -185,7 +138,7 @@ function insertTag(node, entry) {
   const stem = entry.id.replace(/\\/g, "/").split("/").pop().replace(/\.[^.]+$/, "");
   const tag = `<lora:${stem}:1.0>`;
 
-  // A LoRA joins the list below the prompt rather than the prompt itself.
+  // The prompt owns it: this lands on a line of its own, like typing would.
   if (typeof node._warppipeAddLora === "function") {
     node._warppipeAddLora(stem);
     node.setDirtyCanvas?.(true, true);

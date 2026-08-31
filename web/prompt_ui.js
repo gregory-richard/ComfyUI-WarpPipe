@@ -1,4 +1,5 @@
 import { app } from "../../scripts/app.js";
+import { connectedBase, connectedModelName, sameBase } from "./model_base.js";
 
 // The prompt box, made legible.
 //
@@ -18,7 +19,7 @@ const LIST_WIDGET = "loras";
 // workflow saved before it existed then loads every later value one place out,
 // which put the LoRA list into apply_to_clip and lost it. Nothing about the
 // saved node changes this way.
-const STRIP_H = 22;
+const STRIP_H = 24;
 
 const TAG_RE = /<lora:([^:>]+):(-?[0-9]*\.?[0-9]+)([^>]*)>/gi;
 const COMMENT_RE = /\/\/[^\n]*/g;
@@ -41,6 +42,11 @@ const STYLE = `
   position: absolute; z-index: 0; pointer-events: none; overflow: hidden;
   color: var(--input-text, #dcdcdc);
   white-space: pre-wrap; overflow-wrap: break-word; word-break: normal;
+  /* The textarea above is transparent so this layer shows through, which left
+     the prompt the colour of the node body rather than of a field. The layer
+     covers exactly the textarea's box, so it is what carries the field's own
+     background now. */
+  background: var(--comfy-input-bg, #222);
 }
 /* The textarea keeps selection, undo and IME. Only its ink is hidden. */
 .wpe-live { position: relative; z-index: 1; background: transparent !important; }
@@ -61,41 +67,50 @@ const STYLE = `
    One line needs no split: it is a fixed strip the prompt reserves room for. */
 .wps {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
-  display: flex; align-items: center; gap: 6px; box-sizing: border-box;
-  height: 22px; padding: 0 4px; overflow: hidden;
-  font-size: 10px; color: var(--input-text, #dcdcdc);
-  background: var(--comfy-input-bg, #171717);
+  display: flex; align-items: center; gap: 7px; box-sizing: border-box;
+  height: 24px; padding: 0 6px; overflow: hidden;
+  font-size: 10px; line-height: 1; color: var(--input-text, #dcdcdc);
+  /* Darker than the field it sits in, so the two read as separate things. */
+  background: var(--comfy-menu-bg, #171718);
   border-top: 1px solid var(--border-color, #3a3a3a);
 }
-.wps-idle { opacity: 0.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wps-idle { opacity: 0.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wps-thumb {
   width: 18px; height: 18px; flex: 0 0 18px; border-radius: 3px;
-  object-fit: cover; background: #0d0d0d;
+  object-fit: cover; background: #0d0d0d; display: block;
 }
 .wps-name {
-  flex: 0 1 auto; min-width: 0; font-weight: 600;
+  flex: 0 1 auto; min-width: 3em; font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .wps-name.is-missing { color: #e0705a; font-weight: 400; }
-.wps-by { flex: 0 1 auto; min-width: 0; opacity: 0.55; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; }
+.wps-by {
+  flex: 0 2 auto; min-width: 0; opacity: 0.5;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Everything that can be acted on is the same shape and the same height, so
+   the row reads as one line rather than as text with controls dropped in. */
+.wps-chip {
+  display: inline-flex; align-items: center; height: 15px; flex: 0 0 auto;
+  padding: 0 5px; border-radius: 3px; box-sizing: border-box;
+  border: 1px solid var(--border-color, #3a3a3a); background: none;
+  font: inherit; line-height: 1; white-space: nowrap; color: inherit;
+}
 .wps-weight { color: #4ec8e8; font-family: ui-monospace, Consolas, monospace; }
-/* Trigger words sit at the end, where they can be clipped without hiding the
-   name: they are a convenience, and the same words are one Tab away. */
-.wps-words { display: flex; gap: 3px; margin-left: auto; overflow: hidden; }
-.wps-word {
-  background: none; border: 1px solid var(--border-color, #3a3a3a); color: #9ad9a4;
-  border-radius: 3px; font: inherit; padding: 0 4px; cursor: pointer;
-  white-space: nowrap; max-width: 90px; overflow: hidden; text-overflow: ellipsis;
-}
+/* The trigger words go last, where clipping them costs the least: they are a
+   convenience, and the same words are one Tab away. */
+.wps-words { display: flex; align-items: center; gap: 4px; margin-left: auto;
+  min-width: 0; overflow: hidden; }
+.wps-word { color: #9ad9a4; cursor: pointer; max-width: 11em;
+  overflow: hidden; text-overflow: ellipsis; display: inline-block; }
 .wps-word:hover { border-color: #9ad9a4; }
-.wps-key { opacity: 0.45; align-self: center; }
-.wps-link { flex: 0 0 auto; text-decoration: none; color: #4ec8e8; opacity: 0.8; font-size: 12px; }
-.wps-link:hover { opacity: 1; }
-.wps-do {
-  background: none; border: 1px solid var(--border-color, #3a3a3a); color: inherit;
-  border-radius: 3px; font: inherit; padding: 0 6px; cursor: pointer;
+.wps-key { flex: 0 0 auto; opacity: 0.4; font-size: 11px; }
+.wps-link {
+  flex: 0 0 auto; text-decoration: none; color: #4ec8e8; opacity: 0.75;
+  font-size: 12px; line-height: 1;
 }
+.wps-link:hover { opacity: 1; }
+.wps-do { cursor: pointer; }
 .wps-do:hover { border-color: #4ec8e8; color: #4ec8e8; }
 .wps-open { cursor: pointer; }
 .wps-open:hover { color: #4ec8e8; }
@@ -568,7 +583,7 @@ function editVerbs(textarea, commit) {
  * and any disagreement puts the menu on what is being typed. Grey text needs no
  * estimating; the same layer draws it, from the same string.
  */
-function inlineCompletion(node, textarea, commit, lit, lookup, say) {
+function inlineCompletion(node, textarea, commit, lit, lookup, say, baseOf) {
   // { kind: "lora", at, query, matches, index } | { kind: "trigger", at, options, index }
   let session = null;
   let run = 0; // so a slow lookup cannot overwrite a newer one
@@ -611,20 +626,36 @@ function inlineCompletion(node, textarea, commit, lit, lookup, say) {
     const mine = ++run;
     if ((textarea.value || "")[session.at] !== "/") return drop();
 
-    const entries = await library();
+    const [entries, base] = await Promise.all([library(), baseOf?.() ?? null]);
     if (!session || session.kind !== "lora" || mine !== run) return;
 
     const q = session.query.toLowerCase();
     const terms = q.split(/\s+/).filter(Boolean);
-    const rank = (e) =>
+    const startsWith = (e) =>
       stemOf(e.id).toLowerCase().startsWith(q) ? 0 : e.name.toLowerCase().startsWith(q) ? 1 : 2;
+
+    // A LoRA for another base model does not work on the model that is wired
+    // in, so suggesting it is a waste of the list. Only what is *known* not to
+    // fit is dropped: a file with no sidecar declares no base model, and
+    // guessing it does not fit would hide a working LoRA - in one real
+    // collection 163 of 761 files say nothing about their base. Those sort
+    // after the ones that match, so the first suggestion is always a fit when
+    // a fit exists.
+    const fit = (e) => (sameBase(e.base_model, base) ? 0 : e.base_model ? 2 : 1);
+
     session.matches = entries
       .filter((e) => {
         if (!terms.length) return false; // a bare "/" is a slash, not a request
+        if (base && e.base_model && !sameBase(e.base_model, base)) return false;
         const hay = `${e.creator || ""} ${e.name} ${e.folder} ${stemOf(e.id)}`.toLowerCase();
         return terms.every((t) => hay.includes(t));
       })
-      .sort((a, b) => rank(a) - rank(b) || stemOf(a.id).length - stemOf(b.id).length)
+      .sort(
+        (a, b) =>
+          fit(a) - fit(b) ||
+          startsWith(a) - startsWith(b) ||
+          stemOf(a.id).length - stemOf(b.id).length
+      )
       .slice(0, 40);
     session.index = 0;
     draw();
@@ -905,7 +936,7 @@ function makeStrip(node) {
 
     if (entry?.thumbnail) {
       const img = document.createElement("img");
-      img.className = "wps-thumb" + (entry ? " wps-open" : "");
+      img.className = "wps-thumb wps-open";
       img.loading = "lazy";
       img.alt = "";
       img.src = entry.thumbnail;
@@ -932,9 +963,9 @@ function makeStrip(node) {
     }
 
     const weight = document.createElement("span");
-    weight.className = "wps-weight";
+    weight.className = "wps-chip wps-weight";
     weight.textContent = tag.weight.toFixed(2);
-    weight.title = "Ctrl+↑ / Ctrl+↓ to change";
+    weight.title = "Ctrl+↑ / Ctrl+↓ to change, in steps of 0.1";
     el.appendChild(weight);
 
     if (entry?.triggers?.length) {
@@ -950,7 +981,7 @@ function makeStrip(node) {
       for (const word of entry.triggers.slice(0, 6)) {
         const button = document.createElement("button");
         button.type = "button";
-        button.className = "wps-word";
+        button.className = "wps-chip wps-word";
         button.textContent = word;
         button.title = `Insert "${word}"`;
         button.addEventListener("click", () => insertWords(word));
@@ -967,6 +998,8 @@ function makeStrip(node) {
       link.rel = "noopener noreferrer";
       link.textContent = "↗";
       link.title = "Open its page on Civitai";
+      // Without trigger words nothing has pushed to the right yet.
+      if (!entry?.triggers?.length) link.style.marginLeft = "auto";
       el.appendChild(link);
     }
   };
@@ -982,7 +1015,7 @@ function makeStrip(node) {
     el.appendChild(span);
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "wps-do";
+    button.className = "wps-chip wps-do";
     button.textContent = "Move into the prompt";
     button.addEventListener("click", move);
     el.appendChild(button);
@@ -1074,6 +1107,7 @@ app.registerExtension({
         for (const w of lookup(tag.name)?.triggers || []) words.add(w);
       }
       lit?.setVocabulary(new Set(known.keys()), [...words]);
+      await baseOf();
       updateStrip();
     };
 
@@ -1123,10 +1157,13 @@ app.registerExtension({
       const tag = tagAt(value, el.selectionStart);
       if (!tag) {
         const total = parseTags(value).filter((t) => !inComment(value, t.start)).length;
+        // Naming the base model here is the only place the reader can find out
+        // that "/" is not offering them the whole library.
+        const fitting = baseSeen.base ? ` · ${baseSeen.base}` : "";
         strip.idle(
           total
-            ? `${total} LoRA${total === 1 ? "" : "s"} · / to add · caret in a tag to see it`
-            : "Press / to add a LoRA or embedding"
+            ? `${total} LoRA${total === 1 ? "" : "s"} · / to add${fitting} · caret in a tag to see it`
+            : `Press / to add a LoRA or embedding${fitting}`
         );
         return;
       }
@@ -1134,6 +1171,17 @@ app.registerExtension({
       strip.show(tag, entry, insertWords, () =>
         entry && openDetails(entry, el.value || "", insertWords)
       );
+    };
+
+    // Asked again whenever the wired-in model changes, and not otherwise: the
+    // answer is a file read on the server and the checkpoint rarely moves.
+    let baseSeen = { name: undefined, base: null };
+    const baseOf = async () => {
+      const name = connectedModelName(node);
+      if (name === baseSeen.name) return baseSeen.base;
+      const base = await connectedBase(node);
+      baseSeen = { name, base };
+      return base;
     };
 
     const commit = () => {
@@ -1150,7 +1198,7 @@ app.registerExtension({
         el.addEventListener(event, updateStrip);
       }
       editVerbs(el, commit);
-      inlineCompletion(node, el, commit, lit, lookup, say);
+      inlineCompletion(node, el, commit, lit, lookup, say, baseOf);
       attachStrip();
       commit();
     };

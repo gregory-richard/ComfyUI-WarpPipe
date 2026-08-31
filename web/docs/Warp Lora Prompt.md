@@ -110,6 +110,19 @@ bare slash is a slash until you type something after it.
 The **Browse LoRAs** button opens the full library instead, with previews and a
 rail of model families.
 
+### It suggests what fits the model you are using
+
+The node follows its **model** input back to whichever loader feeds it, asks the
+server what base model that file is, and drops every LoRA known to be for a
+different one. The strip names the base it is matching, so it is never a mystery
+why the list is short.
+
+Only what is *known* not to fit is dropped. A LoRA with no `.civitai.info`
+sidecar declares no base model, and guessing would hide one that works - 163 of
+761 files in one real collection say nothing about theirs. Those still appear,
+after the ones that match, so the first suggestion is a fit whenever a fit
+exists. With nothing wired into **model**, everything is suggested.
+
 ## Changing a LoRA once it is there
 
 With the caret in a tag:
