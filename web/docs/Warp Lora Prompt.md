@@ -92,6 +92,9 @@ suggestion: **Tab** again puts them on the line under the tag, and the arrows
 choose between all of them and one at a time. Adding a LoRA and saying its word
 is Tab twice.
 
+That offer is not a moment you can miss. Put the caret in any tag and press
+**Tab** and its trigger words are offered again, however long ago it went in.
+
 The grey text is only drawn, never typed. Until you press Tab the prompt holds
 exactly what you typed, so a suggestion can never be typed over, never lands in
 the undo history, and never marks the workflow changed just because you were
@@ -125,10 +128,9 @@ like any other typing.
 ## The strip under the prompt
 
 One line, showing whichever tag the caret is in: its preview, the title and
-creator from the `.civitai.info` sidecar, the base model, the weight, its
-trigger words as buttons that insert them, and **↗** to open its Civitai page.
-Without a sidecar it falls back to the filename and has no link. A tag naming a
-file that is not there says so.
+creator from the `.civitai.info` sidecar, the base model, the weight, its first
+few trigger words as buttons that insert them, and **↗** to open its Civitai
+page. A tag naming a file that is not there says so.
 
 With the caret anywhere else it just counts what is loaded.
 
@@ -137,16 +139,19 @@ needed a scrolling panel and a draggable split to hold them, which is where the
 flickering came from; only one LoRA can be under the caret, so only one line is
 ever needed.
 
-## Both node renderers
+## Looking at one properly
 
-The node works the same whether ComfyUI is drawing nodes on the canvas or with
-Nodes 2.0. The two put the prompt's textarea in different places — Nodes 2.0
-renders it as a component under the node's element, the canvas renderer overlays
-it and hangs it off the widget — so the node looks for both.
+Click the preview or the name in the strip. That opens the LoRA on its own: the
+preview at its full size, the title, creator, base model and file name, **every**
+trigger word as a button that inserts it - dimmed if it is already in your
+prompt - and the link to its Civitai page. Escape or a click outside closes it.
 
-On a large workflow the canvas renderer is considerably lighter: Nodes 2.0
-creates roughly 84 DOM elements per node, so a 213-node workflow becomes about
-18,000 of them.
+A line can only ever show a thumbnail and the first few words, which is what
+this is for. It needs no list of its own to search: it opens on whatever the
+caret is in.
+
+Both the link and the title come from the `.civitai.info` sidecar. Without one
+there is no link, and the name falls back to the filename.
 
 ## Choosing trigger words
 

@@ -1828,6 +1828,12 @@ def _register_routes() -> None:
         if not preview:
             return web.Response(status=404, text="no preview")
 
+        # The thumbnail is capped at 320px, which is a card. Looking properly at
+        # a preview wants the file itself, so one is served on request - still
+        # only ever a preview beside a configured model.
+        if request.query.get("full") == "1":
+            return web.FileResponse(preview, headers={"Cache-Control": "max-age=86400"})
+
         cached = thumbnail_for(preview)
         if not cached:
             return web.Response(status=404, text="no thumbnail")

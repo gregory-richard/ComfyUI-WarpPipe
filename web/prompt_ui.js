@@ -96,6 +96,54 @@ const STYLE = `
   border-radius: 3px; font: inherit; padding: 0 6px; cursor: pointer;
 }
 .wps-do:hover { border-color: #4ec8e8; color: #4ec8e8; }
+.wps-open { cursor: pointer; }
+.wps-open:hover { color: #4ec8e8; }
+
+/* The details of one LoRA, at a size where the preview is worth looking at.
+   The strip can only ever be a line; this is where the whole picture, every
+   trigger word and the link live. */
+.wpd-backdrop {
+  position: fixed; inset: 0; z-index: 1500; background: rgba(0,0,0,0.62);
+  display: flex; align-items: center; justify-content: center;
+}
+.wpd-modal {
+  --wpd-warp: #4ec8e8;
+  --wpd-rule: var(--border-color, #3a3a3a);
+  width: min(860px, 92vw); max-height: 88vh;
+  display: grid; grid-template-columns: minmax(0, 1fr) 300px;
+  background: var(--comfy-menu-bg, #202020); color: var(--input-text, #dcdcdc);
+  border: 1px solid var(--wpd-rule); border-radius: 6px; overflow: hidden;
+  box-shadow: 0 24px 70px rgba(0,0,0,0.55); font-size: 12px;
+}
+.wpd-modal.is-bare { grid-template-columns: 1fr; width: min(420px, 92vw); }
+.wpd-shot {
+  display: flex; align-items: center; justify-content: center;
+  background: #0d0d0d; min-height: 240px; overflow: hidden;
+}
+.wpd-shot img { max-width: 100%; max-height: 84vh; display: block; object-fit: contain; }
+.wpd-side { display: flex; flex-direction: column; min-width: 0; overflow-y: auto; padding: 14px; gap: 10px; }
+.wpd-title { font-size: 14px; font-weight: 600; overflow-wrap: break-word; }
+.wpd-meta { opacity: 0.6; overflow-wrap: break-word; }
+.wpd-file {
+  font-family: ui-monospace, Consolas, monospace; font-size: 10px; opacity: 0.45;
+  overflow-wrap: anywhere;
+}
+.wpd-label { font-size: 10px; opacity: 0.5; text-transform: uppercase; letter-spacing: 0.05em; }
+.wpd-words { display: flex; flex-wrap: wrap; gap: 4px; }
+.wpd-word {
+  background: none; border: 1px solid var(--wpd-rule); color: #9ad9a4;
+  border-radius: 3px; font: inherit; padding: 2px 6px; cursor: pointer;
+  text-align: left; overflow-wrap: anywhere;
+}
+.wpd-word:hover { border-color: #9ad9a4; }
+.wpd-word.is-in { opacity: 0.4; }
+.wpd-foot { margin-top: auto; display: flex; gap: 6px; padding-top: 8px; }
+.wpd-btn {
+  background: none; border: 1px solid var(--wpd-rule); color: inherit;
+  border-radius: 4px; font: inherit; padding: 4px 10px; cursor: pointer;
+  text-decoration: none; display: inline-flex; align-items: center;
+}
+.wpd-btn:hover { border-color: var(--wpd-warp); color: var(--wpd-warp); }
 `;
 
 // --- library ---------------------------------------------------------------
@@ -519,7 +567,7 @@ function editVerbs(textarea, commit) {
  * and any disagreement puts the menu on what is being typed. Grey text needs no
  * estimating; the same layer draws it, from the same string.
  */
-function inlineCompletion(node, textarea, commit, lit) {
+function inlineCompletion(node, textarea, commit, lit, lookup) {
   // { kind: "lora", at, query, matches, index } | { kind: "trigger", at, options, index }
   let session = null;
   let run = 0; // so a slow lookup cannot overwrite a newer one
@@ -646,6 +694,20 @@ function inlineCompletion(node, textarea, commit, lit) {
       }, 0);
       return;
     }
+
+    // Tab on a tag offers its trigger words, however long ago it was added.
+    // It is the same key that offered them the moment it went in, so there is
+    // nothing extra to know - put the caret in a tag and ask again.
+    if (!session && e.key === "Tab") {
+      const tag = tagAt(textarea.value || "", textarea.selectionStart);
+      const words = tag && lookup?.(tag.name)?.triggers;
+      if (words?.length) {
+        e.preventDefault();
+        e.stopPropagation();
+        offerTriggers(words);
+      }
+      return;
+    }
     if (!session) return;
 
     const count = session.kind === "trigger" ? session.options.length : session.matches.length;
@@ -688,6 +750,125 @@ function inlineCompletion(node, textarea, commit, lit) {
   textarea.addEventListener("pointerdown", drop);
 }
 
+// --- the details -----------------------------------------------------------
+
+/** Everything about one LoRA, at a size worth looking at.
+ *
+ * The strip is a line, so it can only ever show a thumbnail and the first few
+ * trigger words. This is the rest: the preview at its own size, every trigger
+ * word, and the link. It opens from the strip, on whichever tag the caret is
+ * in, so it needs no list of its own to find things in.
+ */
+function openDetails(entry, promptText, insertWords) {
+  document.querySelector(".wpd-backdrop")?.remove();
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "wpd-backdrop";
+  const modal = document.createElement("div");
+  modal.className = "wpd-modal" + (entry.thumbnail ? "" : " is-bare");
+
+  if (entry.thumbnail) {
+    const shot = document.createElement("div");
+    shot.className = "wpd-shot";
+    const img = document.createElement("img");
+    img.alt = "";
+    // The thumbnail first, then the file itself once it arrives: the cached
+    // 320px copy is already there, so something is on screen immediately.
+    img.src = entry.thumbnail;
+    const full = new Image();
+    full.onload = () => {
+      img.src = full.src;
+    };
+    full.src = `${entry.thumbnail}&full=1`;
+    shot.appendChild(img);
+    modal.appendChild(shot);
+  }
+
+  const side = document.createElement("div");
+  side.className = "wpd-side";
+
+  const title = document.createElement("div");
+  title.className = "wpd-title";
+  title.textContent = entry.title || entry.name;
+  side.appendChild(title);
+
+  const meta = [entry.creator, entry.structured ? entry.version : "", entry.base_model]
+    .filter(Boolean)
+    .join(" · ");
+  if (meta) {
+    const line = document.createElement("div");
+    line.className = "wpd-meta";
+    line.textContent = meta;
+    side.appendChild(line);
+  }
+
+  const file = document.createElement("div");
+  file.className = "wpd-file";
+  file.textContent = entry.id;
+  side.appendChild(file);
+
+  if (entry.triggers?.length) {
+    const label = document.createElement("div");
+    label.className = "wpd-label";
+    label.textContent = `Trigger words (${entry.triggers.length})`;
+    side.appendChild(label);
+
+    const words = document.createElement("div");
+    words.className = "wpd-words";
+    const lower = (promptText || "").toLowerCase();
+    for (const word of entry.triggers) {
+      const button = document.createElement("button");
+      button.type = "button";
+      // Dimmed when already written: the point is to see what is missing.
+      button.className = "wpd-word" + (lower.includes(word.toLowerCase()) ? " is-in" : "");
+      button.textContent = word;
+      button.addEventListener("click", () => {
+        insertWords(word);
+        button.classList.add("is-in");
+      });
+      words.appendChild(button);
+    }
+    side.appendChild(words);
+  }
+
+  const foot = document.createElement("div");
+  foot.className = "wpd-foot";
+  if (entry.url) {
+    const link = document.createElement("a");
+    link.className = "wpd-btn";
+    link.href = entry.url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "Civitai ↗";
+    foot.appendChild(link);
+  }
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "wpd-btn";
+  close.textContent = "Close";
+  foot.appendChild(close);
+  side.appendChild(foot);
+
+  modal.appendChild(side);
+  backdrop.appendChild(modal);
+
+  const shut = () => {
+    backdrop.remove();
+    document.removeEventListener("keydown", onKey, true);
+  };
+  const onKey = (e) => {
+    if (e.key !== "Escape") return;
+    e.stopPropagation();
+    shut();
+  };
+  close.addEventListener("click", shut);
+  backdrop.addEventListener("mousedown", (e) => {
+    if (e.target === backdrop) shut();
+  });
+  document.addEventListener("keydown", onKey, true);
+  document.body.appendChild(backdrop);
+}
+
 // --- the strip -------------------------------------------------------------
 
 /** One line under the prompt, describing the tag the caret is in.
@@ -709,22 +890,25 @@ function makeStrip(node) {
     el.appendChild(span);
   };
 
-  const show = (tag, entry, insertWords) => {
+  const show = (tag, entry, insertWords, openFull) => {
     el.replaceChildren();
 
     if (entry?.thumbnail) {
       const img = document.createElement("img");
-      img.className = "wps-thumb";
+      img.className = "wps-thumb" + (entry ? " wps-open" : "");
       img.loading = "lazy";
       img.alt = "";
       img.src = entry.thumbnail;
+      img.title = "See the preview, the trigger words and the link";
+      img.addEventListener("click", openFull);
       el.appendChild(img);
     }
 
     const name = document.createElement("span");
-    name.className = "wps-name" + (entry ? "" : " is-missing");
+    name.className = "wps-name" + (entry ? " wps-open" : " is-missing");
     name.textContent = entry ? entry.title || entry.name : `${tag.name} — no such file`;
-    name.title = tag.name;
+    name.title = entry ? "See the preview, the trigger words and the link" : tag.name;
+    if (entry) name.addEventListener("click", openFull);
     el.appendChild(name);
 
     const by = [entry?.creator, entry?.structured ? entry?.version : "", entry?.base_model]
@@ -895,7 +1079,10 @@ app.registerExtension({
         );
         return;
       }
-      strip.show(tag, byStem.get(tag.name.toLowerCase()), insertWords);
+      const entry = byStem.get(tag.name.toLowerCase());
+      strip.show(tag, entry, insertWords, () =>
+        entry && openDetails(entry, el.value || "", insertWords)
+      );
     };
 
     const commit = () => {
@@ -912,7 +1099,7 @@ app.registerExtension({
         el.addEventListener(event, updateStrip);
       }
       editVerbs(el, commit);
-      inlineCompletion(node, el, commit, lit);
+      inlineCompletion(node, el, commit, lit, (name) => byStem.get(name.toLowerCase()));
       attachStrip();
       commit();
     };
