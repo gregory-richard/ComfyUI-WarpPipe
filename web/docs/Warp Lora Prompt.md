@@ -76,7 +76,11 @@ what the rows are showing you.
 
 Press **/** anywhere in the prompt for a picker of LoRAs and embeddings, with
 previews. Type to filter, arrow keys to move, Enter or click to insert. A LoRA
-is inserted as `<lora:name:1.0>`, an embedding as `embedding:name`.
+joins the list below the prompt; an embedding is written into the prompt as
+`embedding:name`.
+
+The picker opens on the caret's own line, just under it, and flips above it near
+the bottom of the screen — it never sits over the text being typed.
 
 The **Browse LoRAs** button opens the full library instead, with a rail of model
 families.

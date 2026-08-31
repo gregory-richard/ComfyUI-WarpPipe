@@ -269,17 +269,35 @@ function highlight(text, known, triggers) {
   return html + "\n";
 }
 
-/** Where the caret sits on screen, by measuring a copy of the text before it. */
-function caretPoint(textarea) {
+// Every property that decides where a glyph lands, copied from the textarea
+// onto the layer and onto the mirror used to find the caret.
+const COPIED_STYLES = [
+  "fontFamily", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing",
+  "textIndent", "textTransform", "paddingTop", "paddingRight", "paddingBottom",
+  "paddingLeft", "borderTopWidth", "borderRightWidth", "borderBottomWidth",
+  "borderLeftWidth", "boxSizing", "tabSize", "textAlign",
+];
+
+/** The caret's line on screen: where it starts, and where that line ends.
+ *
+ * Measured from a copy of the text before the caret, laid out in a box with the
+ * textarea's metrics. Rectangles are compared rather than offsetTop, which is
+ * relative to whichever ancestor happens to be positioned.
+ */
+function caretLine(textarea) {
   const cs = getComputedStyle(textarea);
   const mirror = document.createElement("div");
   for (const prop of COPIED_STYLES) mirror.style[prop] = cs[prop];
   Object.assign(mirror.style, {
     position: "absolute",
+    top: "0",
+    left: "0",
     visibility: "hidden",
+    pointerEvents: "none",
     whiteSpace: "pre-wrap",
     overflowWrap: "break-word",
     width: `${textarea.clientWidth}px`,
+    height: "auto",
   });
   document.body.appendChild(mirror);
 
@@ -288,21 +306,47 @@ function caretPoint(textarea) {
   marker.textContent = "\u200b";
   mirror.appendChild(marker);
 
-  const box = textarea.getBoundingClientRect();
-  const point = {
-    left: box.left + marker.offsetLeft - textarea.scrollLeft,
-    top: box.top + marker.offsetTop - textarea.scrollTop + parseFloat(cs.lineHeight || "16"),
-  };
+  const mirrorBox = mirror.getBoundingClientRect();
+  const markerBox = marker.getBoundingClientRect();
+  const withinX = markerBox.left - mirrorBox.left;
+  const withinY = markerBox.top - mirrorBox.top;
+  const lineHeight = markerBox.height || parseFloat(cs.lineHeight || "16");
   mirror.remove();
-  return point;
+
+  const box = textarea.getBoundingClientRect();
+  const top = box.top + withinY - textarea.scrollTop;
+  return {
+    left: box.left + withinX - textarea.scrollLeft,
+    top,
+    bottom: top + lineHeight,
+    // The caret can be scrolled out of sight; the menu should still appear
+    // against the box rather than off in the page somewhere.
+    field: box,
+  };
 }
 
-const COPIED_STYLES = [
-  "fontFamily", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing",
-  "textIndent", "textTransform", "paddingTop", "paddingRight", "paddingBottom",
-  "paddingLeft", "borderTopWidth", "borderRightWidth", "borderBottomWidth",
-  "borderLeftWidth", "boxSizing", "tabSize", "textAlign",
-];
+/** Place a popover on the caret's line without covering it. */
+function placeAtCaret(menu, textarea) {
+  const line = caretLine(textarea);
+  const height = menu.offsetHeight || 320;
+  const width = menu.offsetWidth || 330;
+  const gap = 4;
+
+  // Keep it against the field even when the caret is scrolled out of view.
+  const anchorTop = Math.min(Math.max(line.top, line.field.top), line.field.bottom);
+  const anchorBottom = Math.min(Math.max(line.bottom, line.field.top), line.field.bottom);
+
+  // Below the caret's line by preference, above it when there is no room -
+  // clamping instead would drop the menu straight over what is being typed.
+  const roomBelow = window.innerHeight - anchorBottom - gap;
+  const top =
+    roomBelow >= height || roomBelow >= anchorTop - gap
+      ? Math.min(anchorBottom + gap, window.innerHeight - height - gap)
+      : Math.max(gap, anchorTop - gap - height);
+
+  menu.style.left = `${Math.round(Math.max(gap, Math.min(line.left, window.innerWidth - width - gap)))}px`;
+  menu.style.top = `${Math.round(Math.max(gap, top))}px`;
+}
 
 /** The textarea being typed into, under either node renderer.
  *
@@ -320,7 +364,6 @@ function findTextarea(node) {
   const overlaid = widget?.inputEl ?? widget?.element;
   return overlaid?.tagName === "TEXTAREA" && overlaid.isConnected ? overlaid : null;
 }
-
 
 /** Colour ComfyUI's own textarea by putting a layer behind it.
  *
@@ -452,10 +495,10 @@ function openPicker(node, el, list, commit) {
   const menu = document.createElement("div");
   menu.className = "wpe-menu";
   el._wpeMenu = menu;
-  const point = caretPoint(el);
-  menu.style.left = `${Math.round(Math.min(point.left, window.innerWidth - 344))}px`;
-  menu.style.top = `${Math.round(Math.min(point.top + 4, window.innerHeight - 350))}px`;
   document.body.appendChild(menu);
+  // Placed after it is in the document, so its real height decides whether it
+  // goes below the caret or above it.
+  placeAtCaret(menu, el);
 
   const slashAt = el.selectionStart - 1;
   let entries = [];
@@ -549,6 +592,7 @@ function openPicker(node, el, list, commit) {
       menu.appendChild(row);
     });
     menu.querySelector(".is-active")?.scrollIntoView({ block: "nearest" });
+    placeAtCaret(menu, el);
   };
 
   const onKey = (e) => {
