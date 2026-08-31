@@ -210,12 +210,18 @@ a photo in a sunlit kitchen   // try 0.6 next time
 
 ## Trigger words
 
-With **insert_trigger_words** enabled, the node appends the trigger words each
-LoRA declares in its `.civitai.info` sidecar, skipping any already present in
-your prompt. Those sidecars are written by tools like Civitai Updater; without
-one, there are no trigger words to add and the prompt is left as written.
+The node appends the trigger words each LoRA declares in its `.civitai.info`
+sidecar, skipping any already present in your prompt. There is no setting: a
+LoRA without its trigger words does not do what it was trained to do, so there
+was nothing worth deciding.
 
-The words are added to the **prompt** output, not shown on the node.
+A LoRA switched off with `//` contributes none, since it is not applied either.
+Sidecars are written by tools like Civitai Updater; without one there are no
+words to add.
+
+The words go into the **prompt** output rather than into the text you wrote, so
+what you typed stays what you typed. Inserting one yourself - Tab on a tag, or
+the strip - is for putting a particular word in a particular place.
 
 ## Model only, or model and CLIP
 
@@ -240,38 +246,30 @@ weights, encoding first would silently drop them.
 ## Inputs
 
 - **text** — The prompt, with any `<lora:name:weight>` tags inline.
-- **insert_trigger_words** — Append trigger words from each LoRA's sidecar.
 - **apply_to_clip** — Patch the text encoder as well as the model.
 - **model** (optional) — The model the LoRAs are applied to.
 - **clip** (optional) — The CLIP the LoRAs are applied to.
-- **warp** (optional) — An existing warp to copy from and extend.
 
 ## Outputs
 
 - **model** — The model with every resolved LoRA applied.
 - **clip** — The CLIP with every resolved LoRA applied.
-- **prompt** — The prompt with the tags removed, ready for a text encoder.
-  Trigger words appear here when enabled.
-- **warp** — A warp carrying the prompt and the LoRAs that were applied.
+- **prompt** — The prompt with the tags and notes removed and the trigger words
+  added, ready for a text encoder.
 
 ## Wiring it
 
 Connect **model** and **clip** from your loader, and send the **model**,
 **clip** and **prompt** outputs on to your sampler and text encoder.
 
-Connect **warp** to the Save Image (Civitai) node if you want full metadata in
-the file. The prompt, the seed, the steps, the CFG and the sampler reach that
-node only through a warp. Without one it walks the graph, which finds the
-checkpoint and the LoRAs but nothing else, and the image is saved with:
+This node builds no warp of its own. To record the generation in a saved image,
+send its **prompt**, **model** and **clip** into a **Warp** node along with the
+seed, steps, CFG and sampler, and give that warp to Save Image (Civitai) - one
+node that assembles warps rather than two that disagree about what is in them.
 
-    Size: 1024x1024, Model: some model, Version: ComfyUI-WarpPipe
-
-With the warp connected, the same image is saved with the prompt, the negative
-prompt, `Steps`, `Sampler`, `Schedule type`, `CFG scale`, `Seed` and
-`Lora hashes` - which is what Civitai reads to credit the resources.
-
-Everything else about the node works with **warp** unconnected; only what is
-written into the file changes.
+Without a warp the save node still walks the graph for the checkpoint and the
+LoRAs, but the prompt, the seed, the steps, the CFG and the sampler are only
+ever carried by a warp.
 
 ## Notes
 

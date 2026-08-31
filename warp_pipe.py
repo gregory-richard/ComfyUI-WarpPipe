@@ -1068,9 +1068,13 @@ def collect_graph_resources(
         # Nodes that take LoRAs as <lora:name:weight> in their text - this pack's
         # Prompt + LoRAs node, and power-prompt nodes from other packs - keep the
         # tags in a plain string input, so the graph still records what was used.
+        #
+        # Comments go first, for the same reason they do everywhere else: a tag
+        # behind a // was switched off and never loaded, and crediting it in the
+        # metadata would describe an image that was not made.
         for value in inputs.values():
             if isinstance(value, str) and "<lora:" in value.lower():
-                loras.extend(extract_lora_tags(value))
+                loras.extend(extract_lora_tags(strip_comments(value)))
 
         # Stacked loaders keep one dict per slot, e.g. {"lora": ..., "on": ...}.
         for value in inputs.values():
@@ -1350,14 +1354,6 @@ class WarpLoraPrompt:
                         ),
                     },
                 ),
-                "insert_trigger_words": (
-                    "BOOLEAN",
-                    {
-                        "default": False,
-                        "label_on": "add trigger words",
-                        "label_off": "prompt as written",
-                    },
-                ),
                 # Many architectures ship model-only LoRAs, where patching CLIP
                 # does nothing; SDXL-era ones usually carry text-encoder weights.
                 "apply_to_clip": (
@@ -1376,15 +1372,14 @@ class WarpLoraPrompt:
                 "loras": ("STRING", {"default": "", "multiline": False}),
                 "model": ("MODEL", {}),
                 "clip": ("CLIP", {}),
-                "warp": ("WARPPIPE", {}),
             },
         }
 
-    RETURN_TYPES = ("MODEL", "CLIP", "STRING", "WARPPIPE")
-    RETURN_NAMES = ("model", "clip", "prompt", "warp")
-
-    def __init__(self):
-        self._warp_id = uuid.uuid4().hex
+    # No warp of its own. Assembling one is what the Warp node is for, and it
+    # takes this node's model, clip and prompt like anything else's - one place
+    # that builds warps rather than two that disagree about what is in them.
+    RETURN_TYPES = ("MODEL", "CLIP", "STRING")
+    RETURN_NAMES = ("model", "clip", "prompt")
 
     @classmethod
     def IS_CHANGED(cls, **kwargs) -> str:
@@ -1435,22 +1430,22 @@ class WarpLoraPrompt:
     def apply(
         self,
         text: str = "",
-        insert_trigger_words: bool = False,
         apply_to_clip: bool = True,
         loras: str = "",
         model: Optional[Any] = None,
         clip: Optional[Any] = None,
-        warp: Optional[dict[str, Any]] = None,
     ) -> tuple:
         # A tag that cannot be resolved fails the run: generating without a
         # LoRA the prompt asked for produces a wrong image and wrong metadata.
         resolved, trigger_words = self.plan(text, strict=True, loras=loras)
 
+        # A LoRA needs its trigger words to do what it was trained to do, so
+        # they always go in - never twice, and never for one switched off with
+        # a //, which plan() has already dropped.
         prompt = clean_prompt(text)
-        if insert_trigger_words and trigger_words:
-            missing = [w for w in trigger_words if w.lower() not in prompt.lower()]
-            if missing:
-                prompt = ", ".join([prompt, *missing]) if prompt else ", ".join(missing)
+        missing = [w for w in trigger_words if w.lower() not in prompt.lower()]
+        if missing:
+            prompt = ", ".join([prompt, *missing]) if prompt else ", ".join(missing)
 
         for entry in resolved:
             if entry["path"] is None:
@@ -1480,31 +1475,7 @@ class WarpLoraPrompt:
             except Exception as exc:
                 logger.warning("Could not apply LoRA %s: %s", entry["name"], exc)
 
-        # Carry the resolved LoRAs in the warp so the save node does not have to
-        # rediscover them from the graph.
-        if isinstance(warp, dict) and "id" in warp:
-            with _storage_lock:
-                data = warp_storage.get(warp["id"], {}).copy()
-        else:
-            data = {}
-
-        data["loras"] = [
-            {"name": entry["display"], "weight": entry["weight"], "hash": entry["hash"]}
-            for entry in resolved
-        ]
-        data["prompt_positive"] = prompt
-        if model is not None:
-            data["model_1"] = model
-        if clip is not None:
-            data["clip"] = clip
-
-        with _storage_lock:
-            now = time.time()
-            warp_storage[self._warp_id] = data
-            _storage_timestamps[self._warp_id] = now
-            _cleanup_warp_storage_locked(now)
-
-        return (model, clip, prompt, {"id": self._warp_id})
+        return (model, clip, prompt)
 
 
 # ComfyUI's server expands %year%, %month% and friends, but the %date:FORMAT%

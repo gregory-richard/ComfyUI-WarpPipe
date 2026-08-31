@@ -448,44 +448,43 @@ def test_plan_resolves_hash_and_trigger_words(warp_pipe, lora_folder):
     assert words == ["detail tweaker", "sharp focus"]
 
 
-def test_trigger_words_are_only_added_when_asked(warp_pipe, lora_folder):
-    node = warp_pipe.WarpLoraPrompt()
-    text = "a portrait <lora:detail tweaker:0.8>"
+def test_trigger_words_are_always_added(warp_pipe, lora_folder):
+    # A LoRA without its trigger words does not do what it was trained to do,
+    # so there is nothing to decide.
+    _, _, prompt = warp_pipe.WarpLoraPrompt().apply(text="a portrait <lora:detail tweaker:0.8>")
 
-    _, _, plain, _ = node.apply(text=text)
-    assert plain == "a portrait"
-
-    _, _, expanded, _ = node.apply(text=text, insert_trigger_words=True)
-    assert expanded == "a portrait, detail tweaker, sharp focus"
+    assert prompt == "a portrait, detail tweaker, sharp focus"
 
 
 def test_trigger_words_are_not_duplicated(warp_pipe, lora_folder):
-    node = warp_pipe.WarpLoraPrompt()
-
-    _, _, prompt, _ = node.apply(
-        text="a portrait, sharp focus <lora:detail tweaker:0.8>", insert_trigger_words=True
+    _, _, prompt = warp_pipe.WarpLoraPrompt().apply(
+        text="a portrait, sharp focus <lora:detail tweaker:0.8>"
     )
 
     assert prompt.lower().count("sharp focus") == 1
 
 
-def test_applied_loras_are_recorded_in_the_warp(warp_pipe, lora_folder):
-    _, _, _, warp = warp_pipe.WarpLoraPrompt().apply(text="x <lora:detail tweaker:0.8>")
+def test_a_switched_off_lora_contributes_no_trigger_words(warp_pipe, lora_folder):
+    _, _, prompt = warp_pipe.WarpLoraPrompt().apply(
+        text="a portrait\n// <lora:detail tweaker:0.8>"
+    )
 
-    stored = warp_pipe.warp_storage[warp["id"]]["loras"]
-    assert stored == [
-        {"name": "w4r10ck - detail tweaker (sdxl)", "weight": 0.8, "hash": "abcdef0123"}
-    ]
+    assert prompt == "a portrait"
 
 
-def test_save_node_prefers_the_warp_over_the_graph(warp_pipe, lora_folder):
-    _, _, _, warp = warp_pipe.WarpLoraPrompt().apply(text="a portrait <lora:detail tweaker:0.8>")
+def test_the_graph_ignores_a_switched_off_tag(warp_pipe, lora_folder):
+    # The graph is the only record once the node carries no warp, so a tag
+    # behind a // must not be credited for an image it did not touch.
+    graph = {
+        "1": {
+            "class_type": "Warp Lora Prompt",
+            "inputs": {"text": "a portrait\n// <lora:detail tweaker:0.8>"},
+        }
+    }
 
-    # A graph naming a different LoRA must not override what was actually applied.
-    text = warp_pipe.SaveImageCivitai().build_metadata(warp=warp, prompt=BRANCHED_GRAPH)
+    _, loras = warp_pipe.collect_graph_resources(graph)
 
-    assert "w4r10ck - detail tweaker (sdxl): abcdef0123" in text
-    assert "detail.safetensors" not in text
+    assert loras == []
 
 
 def test_an_unresolvable_tag_fails_the_run(warp_pipe, lora_folder):
@@ -520,7 +519,7 @@ def test_a_folder_prefix_disambiguates(warp_pipe):
 
 def test_slash_direction_does_not_matter(warp_pipe):
     # Filenames come back with backslashes on Windows; nobody types those.
-    names = ["sdxl\creator - thing (sdxl).safetensors"]
+    names = [r"sdxl\creator - thing (sdxl).safetensors"]
 
     assert warp_pipe.resolve_lora_name("sdxl/creator - thing (sdxl)", names) == names[0]
     assert warp_pipe.resolve_lora_name("SDXL/CREATOR - THING (SDXL)", names) == names[0]
@@ -612,7 +611,7 @@ def test_model_only_leaves_the_clip_untouched(warp_pipe, lora_folder, monkeypatc
     monkeypatch.setitem(sys.modules, "comfy.sd", comfy_sd)
     monkeypatch.setitem(sys.modules, "comfy.utils", comfy_utils)
 
-    model, clip, _, _ = warp_pipe.WarpLoraPrompt().apply(
+    model, clip, _ = warp_pipe.WarpLoraPrompt().apply(
         text="x <lora:detail tweaker:0.8>",
         apply_to_clip=False,
         model="a-model",
@@ -787,11 +786,12 @@ def test_a_tag_inside_a_note_is_not_loaded(warp_pipe, lora_folder):
 
 
 def test_the_node_sends_the_cleaned_prompt(warp_pipe, lora_folder):
-    _, _, prompt, _ = warp_pipe.WarpLoraPrompt().apply(
+    _, _, prompt = warp_pipe.WarpLoraPrompt().apply(
         text="a portrait <lora:detail tweaker:0.8>, lit // remember to try 0.6"
     )
 
-    assert prompt == "a portrait, lit"
+    # The tag and the note are gone; the LoRA's own words are added.
+    assert prompt == "a portrait, lit, detail tweaker, sharp focus"
 
 
 def test_embeddings_are_indexed_like_loras(warp_pipe, monkeypatch, tmp_path):
@@ -859,12 +859,13 @@ def test_loras_input_is_applied_alongside_the_prompt(warp_pipe, lora_folder):
 
 
 def test_the_prompt_is_unchanged_by_the_loras_input(warp_pipe, lora_folder):
-    _, _, prompt, _ = warp_pipe.WarpLoraPrompt().apply(
+    _, _, prompt = warp_pipe.WarpLoraPrompt().apply(
         text="a photo in a kitchen", loras="<lora:detail tweaker:0.8>"
     )
 
-    # The list lives beside the prompt, so the prompt stays prose.
-    assert prompt == "a photo in a kitchen"
+    # A LoRA from the legacy field puts no tag in the prompt, but its trigger
+    # words are added like any other.
+    assert prompt == "a photo in a kitchen, detail tweaker, sharp focus"
 
 
 def test_a_lora_is_not_applied_twice_if_it_is_in_both(warp_pipe, lora_folder):
