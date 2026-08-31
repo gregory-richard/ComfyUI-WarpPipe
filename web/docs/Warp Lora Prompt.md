@@ -94,6 +94,12 @@ is Tab twice.
 
 That offer is not a moment you can miss. Put the caret in any tag and press
 **Tab** and its trigger words are offered again, however long ago it went in.
+The strip shows a small **⇥** beside the words when there are some to offer.
+
+Tab always answers. Not every LoRA declares trigger words - 470 of 1884 files in
+one real collection declare none - so when there are none it says so, rather
+than looking like a key that does not work. A tag naming a file that is not in
+the library says that instead.
 
 The grey text is only drawn, never typed. Until you press Tab the prompt holds
 exactly what you typed, so a suggestion can never be typed over, never lands in
@@ -152,6 +158,13 @@ caret is in.
 
 Both the link and the title come from the `.civitai.info` sidecar. Without one
 there is no link, and the name falls back to the filename.
+
+## How a tag names a file
+
+Either the bare name - `<lora:creator - thing - v1 (base):1.00>` - or the path
+it sits at inside the LoRA folder, `<lora:anima\creator - thing - v1:1.00>`,
+which is the form ComfyUI's own LoRA Loader uses. Both resolve, both colour as
+known, and both find the same previews and trigger words.
 
 ## Choosing trigger words
 

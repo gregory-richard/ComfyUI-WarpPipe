@@ -89,6 +89,7 @@ const STYLE = `
   white-space: nowrap; max-width: 90px; overflow: hidden; text-overflow: ellipsis;
 }
 .wps-word:hover { border-color: #9ad9a4; }
+.wps-key { opacity: 0.45; align-self: center; }
 .wps-link { flex: 0 0 auto; text-decoration: none; color: #4ec8e8; opacity: 0.8; font-size: 12px; }
 .wps-link:hover { opacity: 1; }
 .wps-do {
@@ -567,7 +568,7 @@ function editVerbs(textarea, commit) {
  * and any disagreement puts the menu on what is being typed. Grey text needs no
  * estimating; the same layer draws it, from the same string.
  */
-function inlineCompletion(node, textarea, commit, lit, lookup) {
+function inlineCompletion(node, textarea, commit, lit, lookup, say) {
   // { kind: "lora", at, query, matches, index } | { kind: "trigger", at, options, index }
   let session = null;
   let run = 0; // so a slow lookup cannot overwrite a newer one
@@ -698,13 +699,22 @@ function inlineCompletion(node, textarea, commit, lit, lookup) {
     // Tab on a tag offers its trigger words, however long ago it was added.
     // It is the same key that offered them the moment it went in, so there is
     // nothing extra to know - put the caret in a tag and ask again.
+    //
+    // Every outcome answers. Doing nothing when there are no words to offer is
+    // indistinguishable from the key not working at all, and a quarter of a
+    // real collection - 470 of 1884 files - declares none.
     if (!session && e.key === "Tab") {
       const tag = tagAt(textarea.value || "", textarea.selectionStart);
-      const words = tag && lookup?.(tag.name)?.triggers;
-      if (words?.length) {
-        e.preventDefault();
-        e.stopPropagation();
-        offerTriggers(words);
+      if (!tag) return; // not on a tag: Tab keeps its usual meaning
+      e.preventDefault();
+      e.stopPropagation();
+      const entry = lookup?.(tag.name);
+      if (!entry) {
+        say?.(`${tag.name} — no such file in the library`);
+      } else if (entry.triggers?.length) {
+        offerTriggers(entry.triggers);
+      } else {
+        say?.(`${entry.title || entry.name} declares no trigger words`);
       }
       return;
     }
@@ -930,6 +940,13 @@ function makeStrip(node) {
     if (entry?.triggers?.length) {
       const words = document.createElement("span");
       words.className = "wps-words";
+      // The buttons are the mouse's route to these; this says the keyboard has
+      // one too, which is otherwise nowhere on screen.
+      const key = document.createElement("span");
+      key.className = "wps-key";
+      key.textContent = "⇥";
+      key.title = "Tab inserts a trigger word";
+      words.appendChild(key);
       for (const word of entry.triggers.slice(0, 6)) {
         const button = document.createElement("button");
         button.type = "button";
@@ -1025,15 +1042,38 @@ app.registerExtension({
     };
 
     /** Everything the tags need to know about themselves. */
-    let byStem = new Map();
+    let known = new Map();
+    /** Every name a tag might use for a file, not just its bare stem.
+     *
+     * ComfyUI's own loader names a LoRA by its path inside the folder, so a tag
+     * copied out of one carries a directory the stem does not have. Indexing
+     * only stems left those tags looking unknown - red, and with nothing behind
+     * them - although the backend resolves them perfectly well.
+     */
+    const indexBy = (entries) => {
+      const map = new Map();
+      for (const entry of entries) {
+        const noExt = entry.id.replace(/\.[^.]+$/, "");
+        for (const key of [stemOf(entry.id), noExt, noExt.replace(/\\/g, "/")]) {
+          const at = key.toLowerCase();
+          if (!map.has(at)) map.set(at, entry);
+        }
+      }
+      return map;
+    };
+    const lookup = (name) => {
+      const at = (name || "").trim().toLowerCase();
+      return known.get(at) ?? known.get(stemOf(at)) ?? null;
+    };
+
     const refreshVocabulary = async () => {
       const entries = await library();
-      byStem = new Map(entries.map((e) => [stemOf(e.id).toLowerCase(), e]));
+      known = indexBy(entries);
       const words = new Set();
       for (const tag of parseTags(getEl()?.value || "")) {
-        for (const w of byStem.get(tag.name.toLowerCase())?.triggers || []) words.add(w);
+        for (const w of lookup(tag.name)?.triggers || []) words.add(w);
       }
-      lit?.setVocabulary(new Set(byStem.keys()), [...words]);
+      lit?.setVocabulary(new Set(known.keys()), [...words]);
       updateStrip();
     };
 
@@ -1061,9 +1101,20 @@ app.registerExtension({
       commit();
     };
 
+    // A message worth reading outlives the keyup that follows the key that
+    // caused it - without this the strip would go back to describing the caret
+    // before the answer could be read.
+    let notice = null;
+    const say = (text) => {
+      notice = { text, until: Date.now() + 3000 };
+      strip.idle(text);
+    };
+
     const updateStrip = () => {
       const el = getEl();
       if (!el) return;
+      if (notice && Date.now() < notice.until) return;
+      notice = null;
       if (listWidget?.value?.trim()) {
         const count = parseTags(listWidget.value).length;
         if (count) return strip.offerMove(count, moveOldList);
@@ -1079,7 +1130,7 @@ app.registerExtension({
         );
         return;
       }
-      const entry = byStem.get(tag.name.toLowerCase());
+      const entry = lookup(tag.name);
       strip.show(tag, entry, insertWords, () =>
         entry && openDetails(entry, el.value || "", insertWords)
       );
@@ -1099,7 +1150,7 @@ app.registerExtension({
         el.addEventListener(event, updateStrip);
       }
       editVerbs(el, commit);
-      inlineCompletion(node, el, commit, lit, (name) => byStem.get(name.toLowerCase()));
+      inlineCompletion(node, el, commit, lit, lookup, say);
       attachStrip();
       commit();
     };
