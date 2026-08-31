@@ -79,9 +79,9 @@ previews. Type to filter, arrow keys to move, Enter or click to insert. A LoRA
 joins the list below the prompt; an embedding is written into the prompt as
 `embedding:name`.
 
-The picker opens just under the caret's own line, taking whichever side has
-more room and shortening itself to fit. It never sits over the line being
-typed.
+The picker opens just under the prompt panel, at the caret's column, and above
+the panel when there is more room there. It never covers the prompt, and it
+stays put as you type rather than hopping a line at a time.
 
 The **Browse LoRAs** button opens the full library instead, with a rail of model
 families.

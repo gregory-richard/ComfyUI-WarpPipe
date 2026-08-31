@@ -325,33 +325,50 @@ function caretLine(textarea) {
   };
 }
 
-/** Place a popover beside the caret's line, never on top of it.
+/** Put the picker under the prompt panel, at the caret's column.
  *
- * The line the caret is on is the one being read while typing, so the menu
- * takes whichever side has more room and is shortened to fit it. Clamping a
- * full-height menu into the space instead is what put it over the text.
+ * Anchoring it to the caret's own line was the obvious thing and went wrong
+ * repeatedly: the line has to be computed from a mirror of the text, and every
+ * disagreement between that estimate and the real caret put the menu over what
+ * was being typed. The panel's edges need no estimating. The caret is always
+ * inside the panel, so opening below the panel cannot cover the caret whatever
+ * the estimate would have said - and the menu stays put while typing instead
+ * of hopping a line at a time.
+ *
+ * Only the horizontal position still follows the caret, where being a few
+ * pixels out costs nothing.
  */
 function placeAtCaret(menu, textarea) {
-  const line = caretLine(textarea);
-  const width = menu.offsetWidth || 330;
   const gap = 6;
-  const smallest = 120;
+  const viewH = window.innerHeight || document.documentElement.clientHeight || 800;
+  const viewW = window.innerWidth || document.documentElement.clientWidth || 1200;
+  const box = textarea.getBoundingClientRect();
+  const style = getComputedStyle(textarea);
 
-  // Keep it against the field even when the caret is scrolled out of view.
-  const anchorTop = Math.min(Math.max(line.top, line.field.top), line.field.bottom);
-  const anchorBottom = Math.min(Math.max(line.bottom, line.field.top), line.field.bottom);
+  // The text stops where the reserved room for the LoRA list begins.
+  const reserved = parseFloat(style.paddingBottom || "0");
+  const panelBottom = Math.min(box.bottom, box.bottom - reserved + gap);
+  const panelTop = box.top;
 
-  const roomBelow = window.innerHeight - anchorBottom - gap * 2;
-  const roomAbove = anchorTop - gap * 2;
-  const below = roomBelow >= Math.min(roomAbove, 340) || roomBelow >= smallest;
+  const roomBelow = Math.max(0, viewH - panelBottom - gap * 2);
+  const roomAbove = Math.max(0, panelTop - gap * 2);
+  const below = roomBelow >= roomAbove;
+  const limit = Math.max(90, Math.min(340, below ? roomBelow : roomAbove));
 
-  const room = Math.max(smallest, below ? roomBelow : roomAbove);
-  menu.style.maxHeight = `${Math.round(Math.min(340, room))}px`;
-  const height = Math.min(menu.offsetHeight || 320, room);
+  menu.style.maxHeight = `${Math.round(limit)}px`;
+  const height = Math.min(menu.offsetHeight || limit, limit);
+  const top = below ? panelBottom + gap : Math.max(gap, panelTop - gap - height);
 
-  const top = below ? anchorBottom + gap : Math.max(gap, anchorTop - gap - height);
-  menu.style.left = `${Math.round(Math.max(gap, Math.min(line.left, window.innerWidth - width - gap)))}px`;
+  let left = box.left;
+  try {
+    left = caretLine(textarea).left;
+  } catch {
+    /* the column is a nicety; the panel edge is the fallback */
+  }
+  const width = menu.offsetWidth || 330;
+
   menu.style.top = `${Math.round(top)}px`;
+  menu.style.left = `${Math.round(Math.max(gap, Math.min(left, viewW - width - gap)))}px`;
 }
 
 /** The textarea being typed into, under either node renderer.
