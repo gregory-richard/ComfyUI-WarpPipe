@@ -259,10 +259,19 @@ weights, encoding first would silently drop them.
 Connect **model** and **clip** from your loader, and send the **model**,
 **clip** and **prompt** outputs on to your sampler and text encoder.
 
-The **warp** output is optional. Leaving it unconnected is fine: the Save Image
-(Civitai) node reads the LoRA tags straight out of this node's text when it
-builds its metadata, so resources are still recorded. Connect it only if you
-want the warp assembled here rather than later.
+Connect **warp** to the Save Image (Civitai) node if you want full metadata in
+the file. The prompt, the seed, the steps, the CFG and the sampler reach that
+node only through a warp. Without one it walks the graph, which finds the
+checkpoint and the LoRAs but nothing else, and the image is saved with:
+
+    Size: 1024x1024, Model: some model, Version: ComfyUI-WarpPipe
+
+With the warp connected, the same image is saved with the prompt, the negative
+prompt, `Steps`, `Sampler`, `Schedule type`, `CFG scale`, `Seed` and
+`Lora hashes` - which is what Civitai reads to credit the resources.
+
+Everything else about the node works with **warp** unconnected; only what is
+written into the file changes.
 
 ## Notes
 
