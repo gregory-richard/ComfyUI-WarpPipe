@@ -318,7 +318,10 @@ function findTextarea(node) {
  */
 function light(textarea) {
   const holder = textarea.parentElement;
-  if (!holder || textarea._wpeLayer) return textarea._wpeLayer || null;
+  if (!holder) return null;
+  // Return the controls, not the element: handing back the layer itself left
+  // the caller with something that had no paint() or measure().
+  if (textarea._wpeControls) return textarea._wpeControls;
 
   const layer = document.createElement("div");
   layer.className = "wpe-hl";
@@ -346,42 +349,73 @@ function light(textarea) {
     layer.style.top = `${textarea.offsetTop}px`;
     layer.style.width = `${textarea.offsetWidth}px`;
     layer.style.height = `${textarea.offsetHeight}px`;
+
+    // ComfyUI's textarea reserves room for a scrollbar (scrollbar-gutter:
+    // stable), so its text is laid out in a narrower box than the layer's.
+    // Without matching that, every line wraps in a different place and the
+    // colouring slides off the words. Whatever the gutter costs is added to
+    // the layer's right padding.
+    const borders =
+      parseFloat(cs.borderLeftWidth || "0") + parseFloat(cs.borderRightWidth || "0");
+    const gutter = Math.max(0, textarea.offsetWidth - textarea.clientWidth - borders);
+    layer.style.paddingRight = `${parseFloat(cs.paddingRight || "0") + gutter}px`;
+
     // ComfyUI hides the textarea at low zoom; the layer follows it.
     layer.style.display = cs.display === "none" ? "none" : "";
   };
 
-  const paint = () => {
-    layer.innerHTML = highlight(textarea.value || "", known, triggers);
-    layer.scrollTop = textarea.scrollTop;
-    layer.scrollLeft = textarea.scrollLeft;
+  // The browser scrolls a focused textarea to the caret without firing scroll
+  // in every case, so this is called from anything that can move the view.
+  const syncScroll = () => {
+    if (layer.scrollTop !== textarea.scrollTop) layer.scrollTop = textarea.scrollTop;
+    if (layer.scrollLeft !== textarea.scrollLeft) layer.scrollLeft = textarea.scrollLeft;
   };
 
-  textarea.addEventListener("scroll", () => {
-    layer.scrollTop = textarea.scrollTop;
-    layer.scrollLeft = textarea.scrollLeft;
-  });
-  new ResizeObserver(() => {
-    measure();
-    paint();
-  }).observe(textarea);
-  measure();
+  const paint = () => {
+    layer.innerHTML = highlight(textarea.value || "", known, triggers);
+    syncScroll();
+  };
 
-  return {
+  textarea.addEventListener("scroll", syncScroll);
+
+  // A textarea scrolls itself to follow the caret, and not on any event that
+  // can be listened for: focusing, typing, selecting and IME all do it at
+  // moments of the browser's choosing. Rather than guess at them, the layer is
+  // matched every frame while the box has focus - one comparison per frame,
+  // and only while someone is actually editing.
+  // A textarea scrolls itself to follow the caret, at moments no event
+  // reliably reports: focus, typing, selection and IME all do it. Rather than
+  // guess, the two are compared on a timer as well as on scroll. Two integer
+  // reads ten times a second costs nothing and cannot drift for longer than
+  // that, whatever the browser does.
+  textarea.addEventListener("scroll", syncScroll);
+  for (const event of ["input", "keyup", "click", "select", "focus", "blur"]) {
+    textarea.addEventListener(event, syncScroll);
+  }
+  const ticker = setInterval(syncScroll, 100);
+
+  const controls = {
     layer,
     textarea,
     paint,
     measure,
+    syncScroll,
     setVocabulary: (nextKnown, nextTriggers) => {
       known = nextKnown;
       triggers = nextTriggers;
       paint();
     },
     detach: () => {
+      clearInterval(ticker);
       layer.remove();
       textarea.classList.remove("wpe-live", "is-lit");
       delete textarea._wpeLayer;
+      delete textarea._wpeControls;
     },
   };
+
+  textarea._wpeControls = controls;
+  return controls;
 }
 
 // --- the picker ------------------------------------------------------------
