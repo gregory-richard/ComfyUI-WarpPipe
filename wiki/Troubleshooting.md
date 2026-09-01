@@ -141,6 +141,7 @@ produced:
 
 ```python
 import logging
+
 logging.getLogger("WarpPipe").setLevel(logging.DEBUG)
 ```
 
