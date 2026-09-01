@@ -1,5 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { connectedBase, connectedModelName, sameBase } from "./model_base.js";
+import { keepWidgetValuesByName } from "./widget_values.js";
 
 // The prompt box, made legible.
 //
@@ -1248,36 +1249,10 @@ app.registerExtension({
       commit();
     };
 
-    /** Save and restore widget values by name, not by position.
-     *
-     * ComfyUI writes widgets_values in the order of node.widgets and reads them
-     * back the same way - and this node reorders its widgets so the button sits
-     * under the prompt. The reorder happens after a load and before a save, so
-     * the two orders disagreed and every value after the prompt came back one
-     * place out: apply_to_clip flipped and the LoRA list was overwritten with a
-     * boolean, on every single save and reload.
-     *
-     * Writing them by name as well costs one small object in the workflow and
-     * makes the display order stop mattering. Positional values are still read
-     * for anything saved before this, so nothing stops loading.
-     */
-    const BY_NAME = "warppipeWidgets";
-    const priorSerialize = node.onSerialize;
-    node.onSerialize = function (o) {
-      priorSerialize?.call(this, o);
-      o[BY_NAME] = Object.fromEntries(
-        (node.widgets || []).filter((w) => w.name).map((w) => [w.name, w.value])
-      );
-    };
-    const priorConfigure = node.onConfigure;
-    node.onConfigure = function (o) {
-      priorConfigure?.call(this, o);
-      const saved = o?.[BY_NAME];
-      if (!saved) return;
-      for (const widget of node.widgets || []) {
-        if (widget.name in saved) widget.value = saved[widget.name];
-      }
-    };
+    // Widget values are stored by position, and this node reorders its widgets
+    // so Browse sits under the prompt - which put every value after the prompt
+    // one place out on each save and reload.
+    keepWidgetValuesByName(node);
 
     // Prompt, then what the caret is on, then how to add more, then settings.
     const ORDER = [TEXT_WIDGET, "Browse LoRAs", "apply_to_clip"];

@@ -295,6 +295,79 @@ def test_save_node_contract(warp_pipe):
     assert hidden["extra_pnginfo"] == "EXTRA_PNGINFO"
 
 
+def test_the_two_embeds_are_separate_switches(warp_pipe):
+    # One toggle used to do both. They are wanted apart: the generation info is
+    # what a site reads, while the workflow is the whole pipeline, which you may
+    # not want to hand over with the picture.
+    required = warp_pipe.NODE_CLASS_MAPPINGS["Save Image Civitai"].INPUT_TYPES()["required"]
+
+    assert required["embed_metadata"][0] == "BOOLEAN"
+    assert required["embed_workflow"][0] == "BOOLEAN"
+    assert required["embed_metadata"][1]["default"] is True
+    assert required["embed_workflow"][1]["default"] is True
+
+
+def test_saving_writes_only_what_was_asked_for(warp_pipe, monkeypatch, tmp_path):
+    import numpy as np
+
+    written = []
+
+    class FakePngInfo:
+        def __init__(self):
+            self.keys = []
+
+        def add_text(self, key, value):
+            self.keys.append(key)
+
+    class FakeImage:
+        @staticmethod
+        def fromarray(array):
+            class Saved:
+                def save(self, path, pnginfo=None, compress_level=0):
+                    written.append(sorted(pnginfo.keys))
+
+            return Saved()
+
+    folder_paths = types.ModuleType("folder_paths")
+    folder_paths.get_output_directory = lambda: str(tmp_path)
+    folder_paths.get_save_image_path = lambda prefix, out, w, h: (
+        str(tmp_path), "img", 1, "", prefix
+    )
+    pil = types.ModuleType("PIL")
+    pil_image = types.ModuleType("PIL.Image")
+    pil_image.fromarray = FakeImage.fromarray
+    pil_png = types.ModuleType("PIL.PngImagePlugin")
+    pil_png.PngInfo = FakePngInfo
+    pil.Image = pil_image
+    pil.PngImagePlugin = pil_png
+    for name, module in {
+        "folder_paths": folder_paths,
+        "PIL": pil,
+        "PIL.Image": pil_image,
+        "PIL.PngImagePlugin": pil_png,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+    class FakeTensor:
+        shape = (8, 8, 3)
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return np.zeros((8, 8, 3), dtype=float)
+
+    node = warp_pipe.SaveImageCivitai()
+    graph = {"1": {"class_type": "SaveImageCivitai", "inputs": {}}}
+
+    node.save_images(images=[FakeTensor()], embed_metadata=True, embed_workflow=True, prompt=graph)
+    node.save_images(images=[FakeTensor()], embed_metadata=True, embed_workflow=False, prompt=graph)
+    node.save_images(images=[FakeTensor()], embed_metadata=False, embed_workflow=True, prompt=graph)
+    node.save_images(images=[FakeTensor()], embed_metadata=False, embed_workflow=False, prompt=graph)
+
+    assert written == [["parameters", "prompt"], ["parameters"], ["prompt"], []]
+
+
 def test_build_metadata_combines_warp_values_and_graph(warp_pipe):
     warp = warp_pipe.Warp().warp(
         prompt_positive="a portrait",

@@ -1841,12 +1841,34 @@ class SaveImageCivitai:
                         ),
                     },
                 ),
+                # Two separate things went into one toggle before, and they are
+                # wanted separately: the parameters block is what a site reads
+                # to credit the model and the LoRAs, while the workflow is your
+                # whole pipeline - every node, every path - which you may not
+                # want to publish with the picture.
+                "embed_metadata": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "label_on": "generation info",
+                        "label_off": "no generation info",
+                        "tooltip": (
+                            "The prompt, seed, sampler, model and LoRA hashes, "
+                            "written the way Civitai and A1111 read them."
+                        ),
+                    },
+                ),
                 "embed_workflow": (
                     "BOOLEAN",
                     {
                         "default": True,
-                        "label_on": "workflow embedded",
-                        "label_off": "metadata only",
+                        "label_on": "workflow",
+                        "label_off": "no workflow",
+                        "tooltip": (
+                            "The whole ComfyUI graph, so the image can be dragged "
+                            "back in to rebuild it. Also reveals it to anyone you "
+                            "send the file to."
+                        ),
                     },
                 ),
             },
@@ -1855,8 +1877,19 @@ class SaveImageCivitai:
                 # idle instead of failing the whole prompt with a missing input.
                 "images": ("IMAGE", {}),
                 "warp": ("WARPPIPE", {}),
-                # Detected from the graph; this only overrides that.
-                "model_name_override": ("STRING", {"default": "", "multiline": False}),
+                "model_name_override": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": False,
+                        "placeholder": "detected from the graph",
+                        "tooltip": (
+                            "Leave empty. The checkpoint is found by walking back "
+                            "from this node; name it here only when that finds the "
+                            "wrong one, or nothing."
+                        ),
+                    },
+                ),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -1937,6 +1970,7 @@ class SaveImageCivitai:
         self,
         images=None,
         filename_prefix: str = "WarpPipe",
+        embed_metadata: bool = True,
         embed_workflow: bool = True,
         warp: Optional[dict[str, Any]] = None,
         model_name_override: str = "",
@@ -1954,15 +1988,19 @@ class SaveImageCivitai:
 
         height = int(images[0].shape[0])
         width = int(images[0].shape[1])
-        parameters = self.build_metadata(
-            warp=warp,
-            prompt=prompt,
-            model_name=model_name_override,
-            width=width,
-            height=height,
-            unique_id=unique_id,
-        )
-        logger.debug("Civitai parameters: %s", parameters)
+        # Building it hashes the checkpoint and every LoRA, so it is not built
+        # at all when it is not going to be written.
+        parameters = ""
+        if embed_metadata:
+            parameters = self.build_metadata(
+                warp=warp,
+                prompt=prompt,
+                model_name=model_name_override,
+                width=width,
+                height=height,
+                unique_id=unique_id,
+            )
+            logger.debug("Civitai parameters: %s", parameters)
 
         full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
             expand_filename_prefix(filename_prefix),
@@ -1975,7 +2013,8 @@ class SaveImageCivitai:
         for image in images:
             array = np.clip(255.0 * image.cpu().numpy(), 0, 255).astype(np.uint8)
             png_info = PngImagePlugin.PngInfo()
-            png_info.add_text("parameters", parameters)
+            if embed_metadata:
+                png_info.add_text("parameters", parameters)
             if embed_workflow:
                 if prompt is not None:
                     png_info.add_text("prompt", json.dumps(prompt))

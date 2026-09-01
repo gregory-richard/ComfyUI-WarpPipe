@@ -50,11 +50,45 @@ used directly instead, since that node knows exactly what it applied.
   `26-08-28 17-28-56_00001_.png`. A slash makes a subfolder, so
   `shots/%date:yyyy-MM-dd%/img` files output by day. ComfyUI's own `%width%`
   and `%height%` still work. Characters a filename cannot contain become `-`.
-- **embed_workflow** — Embed the ComfyUI workflow alongside the metadata.
+- **Generation info** (`embed_metadata`) — Write the `parameters` block: the
+  prompt, seed, sampler, size, model and LoRA hashes, in the form Civitai and
+  A1111 read. This is what gets your resources credited when you upload.
+- **Workflow** (`embed_workflow`) — Write the ComfyUI graph, so the image can be
+  dragged back in to rebuild it.
 - **warp** (optional) — Supplies prompt, seed, steps, CFG, sampler, scheduler
   and size. Without it, only what can be read from the graph is written.
-- **model_name_override** (optional) — Use only when detection reports the wrong
-  model. Leave empty otherwise.
+- **Checkpoint** (`model_name_override`, optional) — Leave empty. See below.
+
+## The two switches
+
+They were one toggle, and they are separate things.
+
+The **generation info** is a short text block naming what made the image. It is
+what a site reads to credit the model and the LoRAs.
+
+The **workflow** is your entire graph — every node, every setting, every file
+path on your machine — stored in the file. It is what makes a ComfyUI image
+droppable back into ComfyUI, and it is also handed to everyone you send the
+picture to. Turning it off while leaving the generation info on gives an upload
+that credits its resources without publishing how you work.
+
+Turning the generation info off skips building it, which skips hashing the
+checkpoint and every LoRA.
+
+## Why a Checkpoint field at all
+
+The checkpoint is found by walking back through the graph from this node,
+recognising loaders by the input they carry — `ckpt_name`, `unet_name`,
+`model_name` — so checkpoint, UNet/diffusion and GGUF loaders are all covered
+without naming each pack. The walk only considers nodes upstream of this one, so
+an unrelated branch of a large workflow cannot contribute the wrong model.
+
+That covers the ordinary cases, and the field is the escape hatch for the rest:
+a loader whose input is named something else again, a model assembled by a pack
+that never records a filename, or two loaders where the walk picks the one you
+did not mean. Type the checkpoint's filename there and it is used instead.
+
+Leave it empty unless the saved metadata names the wrong model, or none.
 
 ## Which steps value is used
 
