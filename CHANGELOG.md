@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Even card heights in the LoRA browser**: a card's height came from its content, so a missing creator, a name that wrapped to two lines, or trigger words each added or removed a row and the grid went ragged. Every row now states its height in pixels and the trigger count moved onto the preview as a badge, which costs no height at all
+- **The no-preview placeholder ran 24px tall**: it carried padding without `border-box`, so a card with no preview image pushed its own caption down and clipped the base-model line off the bottom
+
+### Added
+
+- **Open a model's page from the browser**: each card carries a ↗ to its Civitai page, as a control of its own rather than a modifier on the click that inserts the tag. Cards whose sidecar records no source do not show one
+
 ## [4.0.0] - 2026-09-01
 
 ### Added

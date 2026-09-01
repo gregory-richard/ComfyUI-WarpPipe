@@ -75,42 +75,84 @@ const STYLE = `
   grid-auto-rows: max-content;
   gap: 12px; align-content: start;
 }
-/* Every part of a card has a fixed height. Nothing here can grow with its
-   content, so a long filename cannot push a card over its neighbour. */
+/* A card is one size, always. Every row below states its own height in pixels
+   rather than taking one from its text, because the things that vary - a
+   missing creator, a name that wraps to two lines, trigger words or none -
+   otherwise each add or remove a row and the grid goes ragged. Reserving the
+   space costs a few empty pixels on the sparsest card and buys an even grid. */
 .wp-card {
-  display: flex; flex-direction: column; width: 100%; align-self: start;
+  /* border-box so the 308 is the whole card whatever the host sets globally:
+     228 preview + 78 meta + 2 borders, and no slack left over to argue about. */
+  position: relative; box-sizing: border-box; height: 308px; width: 100%; align-self: start;
   background: var(--wp-panel); border: 1px solid var(--wp-rule); border-radius: 5px;
-  overflow: hidden; cursor: pointer; text-align: left; color: inherit;
-  font: inherit; padding: 0;
+  overflow: hidden;
 }
 .wp-card:hover { border-color: var(--wp-warp); }
-.wp-card:focus-visible { outline: 2px solid var(--wp-warp); outline-offset: 2px; }
+/* The face of the card is one button: the whole thing inserts the tag. The
+   link out is a sibling, not a child, so neither swallows the other's clicks
+   and both are reachable by keyboard on their own. */
+.wp-pick {
+  display: flex; flex-direction: column; width: 100%; height: 100%;
+  background: none; border: 0; margin: 0; padding: 0;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.wp-pick:focus-visible { outline: 2px solid var(--wp-warp); outline-offset: -2px; }
 /* Previews are portrait but not one ratio (832x1152, 768x1280, 992x1456), so a
    fixed box crops rather than letting each card set its own height. */
 .wp-card img,
 .wp-noimg { display: block; width: 100%; height: 228px; flex: 0 0 228px; background: #0d0d0d; }
 .wp-card img { object-fit: cover; }
 .wp-noimg {
-  display: flex; align-items: center; padding: 12px 10px; overflow: hidden;
+  /* border-box, or the padding is added to the 228px and this card runs 24px
+     taller than one with a preview - which pushed its meta down and clipped
+     the last row off the bottom. */
+  display: flex; align-items: center; box-sizing: border-box;
+  padding: 12px 10px; overflow: hidden;
   font-family: var(--wp-mono); font-size: 10px; line-height: 1.4;
   opacity: 0.5; word-break: break-word;
 }
-.wp-meta { padding: 8px 9px 9px; overflow: hidden; }
+/* 8 + 13 + 1 + 30 + 4 + 13 + 9 = 78. Stated in pixels, not ems, so a theme
+   changing the font cannot change the card's height. */
+.wp-meta { height: 78px; box-sizing: border-box; padding: 8px 9px 9px; overflow: hidden; }
 .wp-creator {
-  font-size: 10px; opacity: 0.55;
+  height: 13px; line-height: 13px; font-size: 10px; opacity: 0.55;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .wp-name {
-  font-size: 12px; font-weight: 600; line-height: 1.3; margin: 1px 0 4px;
+  height: 30px; line-height: 15px; font-size: 12px; font-weight: 600; margin: 1px 0 4px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden; max-height: 2.6em;
+  overflow: hidden;
 }
 .wp-tail {
+  height: 13px; line-height: 13px;
   font-family: var(--wp-mono); font-size: 10px; opacity: 0.72;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .wp-tail b { color: var(--wp-warp); font-weight: 400; }
-.wp-trig { margin-top: 5px; font-size: 10px; opacity: 0.6; }
+/* Trigger words used to be a row of their own, present on some cards and not
+   others. Over the preview they cost no height at all, and green means the
+   same here as it does in the prompt. */
+.wp-badge {
+  position: absolute; left: 6px; top: 206px; pointer-events: none;
+  display: inline-flex; align-items: center; gap: 3px;
+  height: 16px; padding: 0 5px; border-radius: 3px;
+  background: rgba(8, 10, 9, 0.78); border: 1px solid rgba(154, 217, 164, 0.35);
+  color: #9ad9a4; font-size: 9px; line-height: 1;
+}
+/* Opening the model's page is a second thing you might want from a card, so it
+   is a second control rather than a modifier on the first. */
+.wp-open {
+  position: absolute; top: 6px; right: 6px;
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 3px;
+  background: rgba(8, 10, 12, 0.72); border: 1px solid var(--wp-rule);
+  color: var(--wp-ink); text-decoration: none; font-size: 12px; line-height: 1;
+  opacity: 0.62; transition: opacity 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.wp-card:hover .wp-open { opacity: 0.9; }
+.wp-open:hover, .wp-open:focus-visible { opacity: 1; border-color: var(--wp-warp); color: var(--wp-warp); }
+.wp-open:focus-visible { outline: 2px solid var(--wp-warp); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { .wp-open { transition: none; } }
 
 .wp-foot {
   grid-area: foot; padding: 8px 14px; border-top: 1px solid var(--wp-rule);
@@ -173,7 +215,7 @@ function openBrowser(node) {
       </div>
       <div class="wp-rail"></div>
       <div class="wp-grid"><div class="wp-empty">Loading library&hellip;</div></div>
-      <div class="wp-foot"><span class="wp-count"></span><span class="wp-hint">click to insert &middot; esc to close</span></div>
+      <div class="wp-foot"><span class="wp-count"></span><span class="wp-hint">click to insert &middot; &#x2197; opens Civitai &middot; esc to close</span></div>
     </div>`;
 
   const modal = backdrop.querySelector(".wp-modal");
@@ -224,8 +266,12 @@ function openBrowser(node) {
     for (const entry of visible.slice(0, PAGE)) {
       const card = document.createElement("div");
       card.className = "wp-card";
-      card.setAttribute("role", "button");
-      card.tabIndex = 0;
+
+      // The card face: everything you look at, and one thing it does.
+      const pick = document.createElement("button");
+      pick.type = "button";
+      pick.className = "wp-pick";
+      pick.title = `Insert ${stemOf(entry.id)}`;
 
       if (entry.has_preview) {
         const img = document.createElement("img");
@@ -233,30 +279,31 @@ function openBrowser(node) {
         img.alt = "";
         // Native lazy loading defers anything offscreen; no observer needed.
         img.src = entry.thumbnail;
-        card.appendChild(img);
+        pick.appendChild(img);
       } else {
         const blank = document.createElement("div");
         blank.className = "wp-noimg";
-        blank.textContent = entry.id.replace(/\\/g, "/").split("/").pop();
-        card.appendChild(blank);
+        blank.textContent = stemOf(entry.id);
+        pick.appendChild(blank);
       }
 
       const meta = document.createElement("div");
       meta.className = "wp-meta";
-      if (entry.creator) {
-        const who = document.createElement("div");
-        who.className = "wp-creator";
-        who.textContent = entry.creator;
-        meta.appendChild(who);
-      }
+
+      // Rendered whether or not there is a creator: the row holds the card's
+      // height, so leaving it out would shorten this card and no other.
+      const who = document.createElement("div");
+      who.className = "wp-creator";
+      who.textContent = entry.creator || "";
+      meta.appendChild(who);
+
       const name = document.createElement("div");
       name.className = "wp-name";
-      name.textContent = entry.name;
+      name.textContent = entry.title || entry.name;
       meta.appendChild(name);
 
       const tail = document.createElement("div");
       tail.className = "wp-tail";
-      // Only claim a version when the filename actually carried one.
       // Filenames and sidecars are not ours to trust: a base model called
       // "<img onerror=...>" is a string Civitai served, so it is escaped like
       // any other untrusted text rather than pasted straight into markup.
@@ -264,25 +311,36 @@ function openBrowser(node) {
       tail.innerHTML = `${escapeHTML(version)}<b>${escapeHTML(groupOf(entry))}</b>`;
       meta.appendChild(tail);
 
-      if (entry.triggers?.length) {
-        const trig = document.createElement("div");
-        trig.className = "wp-trig";
-        trig.textContent = `⊕ ${entry.triggers.length} trigger word${entry.triggers.length > 1 ? "s" : ""}`;
-        meta.appendChild(trig);
-      }
-
-      card.appendChild(meta);
-      const choose = () => {
+      pick.appendChild(meta);
+      pick.addEventListener("click", () => {
         insertTag(node, entry);
         close();
-      };
-      card.addEventListener("click", choose);
-      card.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          choose();
-        }
       });
+      card.appendChild(pick);
+
+      const triggers = entry.triggers?.length || 0;
+      if (triggers) {
+        const badge = document.createElement("span");
+        badge.className = "wp-badge";
+        badge.textContent = `⊕ ${triggers}`;
+        badge.title = `${triggers} trigger word${triggers > 1 ? "s" : ""}`;
+        card.appendChild(badge);
+      }
+
+      // Only when the sidecar knew where the file came from. A card without one
+      // has nowhere to send you, and a dead button is worse than no button.
+      if (entry.url) {
+        const open = document.createElement("a");
+        open.className = "wp-open";
+        open.href = entry.url;
+        open.target = "_blank";
+        open.rel = "noopener noreferrer";
+        open.textContent = "↗";
+        open.title = `Open ${entry.title || entry.name} on Civitai`;
+        open.setAttribute("aria-label", `Open ${entry.title || entry.name} on Civitai`);
+        card.appendChild(open);
+      }
+
       grid.appendChild(card);
     }
 
