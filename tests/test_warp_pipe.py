@@ -853,28 +853,30 @@ def test_plan_resolves_hash_and_trigger_words(warp_pipe, lora_folder):
     assert words == ["detail tweaker", "sharp focus"]
 
 
-def test_trigger_words_are_always_added(warp_pipe, lora_folder):
-    # A LoRA without its trigger words does not do what it was trained to do,
-    # so there is nothing to decide.
+def test_the_node_adds_nothing_to_the_prompt(warp_pipe, lora_folder):
+    # The LoRA declares trigger words and they are not appended. Putting them
+    # in is the writer's own move - Tab on a tag, or the strip - so that they
+    # can be read and placed. Some creators write whole sentences there, and
+    # sending one nobody chose is not a small addition.
     _, _, prompt = warp_pipe.WarpLoraPrompt().apply(text="a portrait <lora:detail tweaker:0.8>")
 
-    assert prompt == "a portrait, detail tweaker, sharp focus"
+    assert prompt == "a portrait"
 
 
-def test_trigger_words_are_not_duplicated(warp_pipe, lora_folder):
+def test_trigger_words_already_written_are_left_alone(warp_pipe, lora_folder):
     _, _, prompt = warp_pipe.WarpLoraPrompt().apply(
         text="a portrait, sharp focus <lora:detail tweaker:0.8>"
     )
 
-    assert prompt.lower().count("sharp focus") == 1
+    assert prompt == "a portrait, sharp focus"
 
 
-def test_a_switched_off_lora_contributes_no_trigger_words(warp_pipe, lora_folder):
-    _, _, prompt = warp_pipe.WarpLoraPrompt().apply(
-        text="a portrait\n// <lora:detail tweaker:0.8>"
+def test_a_switched_off_lora_is_not_applied(warp_pipe, lora_folder):
+    resolved, _ = warp_pipe.WarpLoraPrompt().plan(
+        "a portrait\n// <lora:detail tweaker:0.8>"
     )
 
-    assert prompt == "a portrait"
+    assert resolved == []
 
 
 def test_the_graph_ignores_a_switched_off_tag(warp_pipe, lora_folder):
@@ -1219,8 +1221,8 @@ def test_the_node_sends_the_cleaned_prompt(warp_pipe, lora_folder):
         text="a portrait <lora:detail tweaker:0.8>, lit // remember to try 0.6"
     )
 
-    # The tag and the note are gone; the LoRA's own words are added.
-    assert prompt == "a portrait, lit, detail tweaker, sharp focus"
+    # The tag and the note are gone, and nothing has been put in their place.
+    assert prompt == "a portrait, lit"
 
 
 def test_embeddings_are_indexed_like_loras(warp_pipe, monkeypatch, tmp_path):
@@ -1292,9 +1294,8 @@ def test_the_prompt_is_unchanged_by_the_loras_input(warp_pipe, lora_folder):
         text="a photo in a kitchen", loras="<lora:detail tweaker:0.8>"
     )
 
-    # A LoRA from the legacy field puts no tag in the prompt, but its trigger
-    # words are added like any other.
-    assert prompt == "a photo in a kitchen, detail tweaker, sharp focus"
+    # The legacy field applies its LoRA and leaves the prompt alone.
+    assert prompt == "a photo in a kitchen"
 
 
 def test_a_lora_is_not_applied_twice_if_it_is_in_both(warp_pipe, lora_folder):

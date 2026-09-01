@@ -219,18 +219,18 @@ a photo in a sunlit kitchen   // try 0.6 next time
 
 ## Trigger words
 
-The node appends the trigger words each LoRA declares in its `.civitai.info`
-sidecar, skipping any already present in your prompt. There is no setting: a
-LoRA without its trigger words does not do what it was trained to do, so there
-was nothing worth deciding.
+Nothing is added to your prompt. The **prompt** output is what you wrote, with
+the tags and the notes taken out — and nothing else.
 
-A LoRA switched off with `//` contributes none, since it is not applied either.
-Sidecars are written by tools like Civitai Updater; without one there are no
-words to add.
+Trigger words go in by hand, where you can see them: **Tab** on a tag offers the
+LoRA's own words, and the strip under the prompt lists them as buttons. Then
+they are ordinary prompt text — readable, movable, editable, and yours.
 
-The words go into the **prompt** output rather than into the text you wrote, so
-what you typed stays what you typed. Inserting one yourself - Tab on a tag, or
-the strip - is for putting a particular word in a particular place.
+That is the point of choosing them. Appending them silently at generation time
+would send words you never saw, and creators do not always put a keyword in
+`trainedWords` — one LoRA in a real collection declares
+*"Her large breasts strain the fabric of her shirt to the limit."*, and another
+runs to 655 characters. A prompt is worth more than that treatment.
 
 ## Model only, or model and CLIP
 

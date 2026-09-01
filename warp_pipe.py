@@ -1626,15 +1626,14 @@ class WarpLoraPrompt:
     ) -> tuple:
         # A tag that cannot be resolved fails the run: generating without a
         # LoRA the prompt asked for produces a wrong image and wrong metadata.
-        resolved, trigger_words = self.plan(text, strict=True, loras=loras)
+        resolved, _ = self.plan(text, strict=True, loras=loras)
 
-        # A LoRA needs its trigger words to do what it was trained to do, so
-        # they always go in - never twice, and never for one switched off with
-        # a //, which plan() has already dropped.
+        # Nothing is added to the prompt. Trigger words are put in by hand, with
+        # Tab on a tag or from the strip, where they can be read, placed and
+        # edited like the rest of the prompt. Appending them here as well would
+        # send words the writer never saw - and some creators put whole
+        # sentences in trainedWords, so that is not a small addition.
         prompt = clean_prompt(text)
-        missing = [w for w in trigger_words if w.lower() not in prompt.lower()]
-        if missing:
-            prompt = ", ".join([prompt, *missing]) if prompt else ", ".join(missing)
 
         for entry in resolved:
             if entry["path"] is None:
