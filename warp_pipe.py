@@ -2009,8 +2009,21 @@ class SaveImageCivitai:
         unique_id: Optional[str] = None,
     ) -> dict[str, Any]:
         if images is None or len(images) == 0:
-            logger.info("Save Image (Civitai): no images connected, nothing to save.")
-            return {"ui": {"images": []}}
+            # Nothing arrived. This is not an error - a bypassed branch upstream
+            # is a normal reason for it, and failing the whole prompt over one
+            # would be worse than saving nothing. But it looked exactly like a
+            # successful save: no file, no message, a green tick. The run says
+            # so now, and the node's own interface puts it on screen.
+            logger.info("Save Image (Civitai): nothing reached the images input, nothing saved.")
+            return {
+                "ui": {
+                    "images": [],
+                    "warppipe_note": [
+                        "Nothing reached the images input, so no file was written. "
+                        "Check that images is connected and that nothing upstream is bypassed."
+                    ],
+                }
+            }
 
         import folder_paths
         import numpy as np

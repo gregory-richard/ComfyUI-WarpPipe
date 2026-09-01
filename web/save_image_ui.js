@@ -40,5 +40,20 @@ app.registerExtension({
       if (FRIENDLY_LABELS[widget.name]) widget.label = FRIENDLY_LABELS[widget.name];
     }
     keepWidgetValuesByName(node, migrateSingleToggle);
+
+    // A run that saved nothing used to look exactly like one that saved: the
+    // node reports success either way, and the reason only reached the console.
+    const priorExecuted = node.onExecuted;
+    node.onExecuted = function (output) {
+      priorExecuted?.call(this, output);
+      const note = output?.warppipe_note?.[0];
+      if (!note) return;
+      app.extensionManager?.toast?.add({
+        severity: "warn",
+        summary: "Save Image (Civitai)",
+        detail: note,
+        life: 8000,
+      });
+    };
   },
 });

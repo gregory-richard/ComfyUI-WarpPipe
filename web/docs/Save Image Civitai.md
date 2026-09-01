@@ -41,9 +41,9 @@ used directly instead, since that node knows exactly what it applied.
 ## Inputs
 
 - **images** (optional) — The images to save. Optional so that bypassing an
-  upstream branch leaves this node idle rather than failing the prompt with
-  a missing connection. With nothing connected it saves nothing and says so
-  in the console.
+  upstream branch leaves this node idle rather than failing the whole prompt.
+  When nothing reaches it the node saves nothing and says so on screen — a run
+  that wrote no file otherwise looks exactly like one that did.
 - **filename_prefix** — Prefix for saved files. Supports `%date:FORMAT%`, using
   the field letters `yyyy`, `yy`, `MM`, `dd`, `hh`, `mm`, `ss` — note that `MM`
   is the month and `mm` the minute. `%date:yy-MM-dd hh-mm-ss%` gives

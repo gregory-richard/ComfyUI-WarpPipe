@@ -710,8 +710,12 @@ def test_save_node_is_idle_when_nothing_is_connected(warp_pipe):
     assert "images" in node.INPUT_TYPES()["optional"]
     assert "images" not in node.INPUT_TYPES()["required"]
 
-    assert warp_pipe.SaveImageCivitai().save_images(images=None) == {"ui": {"images": []}}
-    assert warp_pipe.SaveImageCivitai().save_images(images=[]) == {"ui": {"images": []}}
+    # Idle rather than failed - a bypassed branch upstream is a normal reason -
+    # but it says so, because a silent success is indistinguishable from a save.
+    for empty in (None, []):
+        result = warp_pipe.SaveImageCivitai().save_images(images=empty)
+        assert result["ui"]["images"] == []
+        assert "no file was written" in result["ui"]["warppipe_note"][0]
 
 
 def test_a_typo_suggests_the_right_file(warp_pipe):
