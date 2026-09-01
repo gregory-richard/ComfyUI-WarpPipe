@@ -999,6 +999,30 @@ MODEL_INPUT_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # or CLIP resolves somewhere else, which is what tells them apart - the name of
 # the input it arrived in does not.
 MODEL_FOLDER_KEYS: tuple[str, ...] = ("checkpoints", "diffusion_models", "unet")
+
+# What a saved file can be. PNG carries text chunks, which is where both the
+# generation info and the workflow go. JPEG has no such thing: the generation
+# info goes in EXIF, which Civitai reads too, and the workflow has nowhere to
+# live at all.
+FILE_FORMATS: dict[str, dict[str, Any]] = {
+    "png": {"suffix": "png", "pillow": "PNG", "carries_workflow": True},
+    "jpeg": {"suffix": "jpg", "pillow": "JPEG", "carries_workflow": False},
+}
+JPEG_QUALITY = 95
+
+
+def exif_with_parameters(parameters: str) -> bytes:
+    """EXIF holding the generation info the way A1111 writes it.
+
+    UserComment is an UNDEFINED field: an eight-byte encoding name, then the
+    text. A1111 uses UNICODE, meaning UTF-16 big-endian, and that is what every
+    reader of these files expects to find - Civitai included.
+    """
+    from PIL import Image
+
+    exif = Image.Exif()
+    exif[0x9286] = b"UNICODE\0" + parameters.encode("utf-16-be")
+    return exif.tobytes()
 MODEL_SUFFIXES: tuple[str, ...] = (
     ".safetensors",
     ".ckpt",
@@ -1203,6 +1227,20 @@ def build_civitai_parameters(
     if hashed:
         pairs = ", ".join(f"{display}: {sha}" for display, sha in hashed)
         fields.append(("Lora hashes", '"' + pairs + '"'))
+
+    # The field Civitai actually links resources from. "Lora hashes" above is
+    # A1111's additional-networks convention, and Civitai's own extension does
+    # not write it - it writes this, keyed "model", "lora:<name>", "embed:<name>".
+    # Writing only the other one is why an upload would name its checkpoint and
+    # credit none of its LoRAs: the checkpoint is read from "Model hash", which
+    # both conventions agree on, and the LoRAs were never anywhere it looked.
+    hashes: dict[str, str] = {}
+    if model_hash:
+        hashes["model"] = model_hash
+    for display, sha in hashed:
+        hashes[f"lora:{display}"] = sha
+    if hashes:
+        fields.append(("Hashes", json.dumps(hashes, separators=(",", ":"))))
 
     fields.append(("Version", "ComfyUI-WarpPipe"))
 
@@ -1913,8 +1951,28 @@ class SaveImageCivitai:
                         "tooltip": (
                             "The whole ComfyUI graph, so the image can be dragged "
                             "back in to rebuild it. Also reveals it to anyone you "
-                            "send the file to."
+                            "send the file to. PNG only - JPEG has nowhere to put it."
                         ),
+                    },
+                ),
+                "file_format": (
+                    list(FILE_FORMATS),
+                    {
+                        "default": "png",
+                        "tooltip": (
+                            "PNG is lossless and holds the workflow. JPEG is much "
+                            "smaller and keeps the generation info in EXIF, which "
+                            "Civitai reads, but cannot carry the workflow."
+                        ),
+                    },
+                ),
+                "preview": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "label_on": "show the images",
+                        "label_off": "save quietly",
+                        "tooltip": "Whether the saved images appear on the node.",
                     },
                 ),
             },
@@ -1974,10 +2032,26 @@ class SaveImageCivitai:
 
             loras = []
             candidates = available_loras()
+            # An empty listing means the library could not be read at all, and
+            # "this file is missing" cannot be told from "I cannot look". Only
+            # when the library did answer is an unresolvable name really absent.
+            library_answered = bool(candidates)
             for name, weight in combined:
                 # A tag may hold a fragment rather than a full filename.
                 resolved = resolve_lora_name(name, candidates) or name
                 path = _resolve_model_path("loras", resolved)
+                if path is None and library_answered:
+                    # A workflow can name a file that is not there - a folder
+                    # renamed, a version replaced - and the loader will not have
+                    # applied it. Recording it anyway credits a resource this
+                    # picture never saw, which is worse than leaving it out.
+                    logger.warning(
+                        "Save Image (Civitai): the workflow names %s, which is not in "
+                        "the LoRA folder, so it was not applied and is left out of the "
+                        "metadata.",
+                        name,
+                    )
+                    continue
                 loras.append((_lora_display_name(resolved), weight, model_autov2(path)))
 
         checkpoint_hash = model_autov2(resolve_model_file(graph_model))
@@ -2003,6 +2077,8 @@ class SaveImageCivitai:
         filename_prefix: str = "WarpPipe",
         embed_metadata: bool = True,
         embed_workflow: bool = True,
+        file_format: str = "png",
+        preview: bool = True,
         warp: Optional[dict[str, Any]] = None,
         prompt: Optional[dict[str, Any]] = None,
         extra_pnginfo: Optional[dict[str, Any]] = None,
@@ -2051,28 +2127,49 @@ class SaveImageCivitai:
             height,
         )
 
+        fmt = FILE_FORMATS.get(file_format) or FILE_FORMATS["png"]
+        notes = []
+        if embed_workflow and not fmt["carries_workflow"]:
+            notes.append(
+                f"{file_format.upper()} has nowhere to keep a ComfyUI workflow, so it "
+                "was not written. The generation info is in EXIF, which Civitai reads."
+            )
+            logger.info("Save Image (Civitai): %s", notes[-1])
+
         results = []
         for image in images:
             array = np.clip(255.0 * image.cpu().numpy(), 0, 255).astype(np.uint8)
-            png_info = PngImagePlugin.PngInfo()
-            if embed_metadata:
-                png_info.add_text("parameters", parameters)
-            if embed_workflow:
-                if prompt is not None:
-                    png_info.add_text("prompt", json.dumps(prompt))
-                for key, value in (extra_pnginfo or {}).items():
-                    png_info.add_text(key, json.dumps(value))
+            file_name = f"{filename}_{counter:05}_.{fmt['suffix']}"
+            path = os.path.join(full_output_folder, file_name)
+            picture = Image.fromarray(array)
 
-            file_name = f"{filename}_{counter:05}_.png"
-            Image.fromarray(array).save(
-                os.path.join(full_output_folder, file_name),
-                pnginfo=png_info,
-                compress_level=4,
-            )
+            if fmt["pillow"] == "PNG":
+                png_info = PngImagePlugin.PngInfo()
+                if embed_metadata:
+                    png_info.add_text("parameters", parameters)
+                if embed_workflow:
+                    if prompt is not None:
+                        png_info.add_text("prompt", json.dumps(prompt))
+                    for key, value in (extra_pnginfo or {}).items():
+                        png_info.add_text(key, json.dumps(value))
+                picture.save(path, pnginfo=png_info, compress_level=4)
+            else:
+                # No text chunks here, so the generation info goes in EXIF - the
+                # same place A1111 puts it for JPEG, and where Civitai looks.
+                extra = {}
+                if embed_metadata:
+                    extra["exif"] = exif_with_parameters(parameters)
+                picture.save(path, fmt["pillow"], quality=JPEG_QUALITY, **extra)
+
             results.append({"filename": file_name, "subfolder": subfolder, "type": "output"})
             counter += 1
 
-        return {"ui": {"images": results}}
+        # An image the node does not show is still saved; the list is only what
+        # the node puts on screen.
+        ui: dict[str, Any] = {"images": results if preview else []}
+        if notes:
+            ui["warppipe_note"] = notes
+        return {"ui": ui}
 
 
 if ENABLE_V3_NODES:

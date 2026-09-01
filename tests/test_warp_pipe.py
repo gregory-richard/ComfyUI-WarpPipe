@@ -323,8 +323,9 @@ def test_saving_writes_only_what_was_asked_for(warp_pipe, monkeypatch, tmp_path)
         @staticmethod
         def fromarray(array):
             class Saved:
-                def save(self, path, pnginfo=None, compress_level=0):
-                    written.append(sorted(pnginfo.keys))
+                def save(self, path, *args, **kwargs):
+                    keys = sorted(kwargs["pnginfo"].keys) if "pnginfo" in kwargs else []
+                    written.append({"path": path, "keys": keys, "exif": "exif" in kwargs})
 
             return Saved()
 
@@ -365,7 +366,154 @@ def test_saving_writes_only_what_was_asked_for(warp_pipe, monkeypatch, tmp_path)
     node.save_images(images=[FakeTensor()], embed_metadata=False, embed_workflow=True, prompt=graph)
     node.save_images(images=[FakeTensor()], embed_metadata=False, embed_workflow=False, prompt=graph)
 
-    assert written == [["parameters", "prompt"], ["parameters"], ["prompt"], []]
+    assert [w["keys"] for w in written] == [
+        ["parameters", "prompt"],
+        ["parameters"],
+        ["prompt"],
+        [],
+    ]
+    assert all(w["path"].endswith(".png") for w in written)
+
+
+def test_jpeg_keeps_the_generation_info_but_cannot_keep_the_workflow(
+    warp_pipe, monkeypatch, tmp_path
+):
+    # A real file, read back the way anything else would read it.
+    import numpy as np
+    from PIL import Image
+
+    folder_paths = types.ModuleType("folder_paths")
+    folder_paths.get_output_directory = lambda: str(tmp_path)
+    folder_paths.get_save_image_path = lambda prefix, out, w, h: (str(tmp_path), "img", 1, "", prefix)
+    folder_paths.get_filename_list = lambda folder: []
+    monkeypatch.setitem(sys.modules, "folder_paths", folder_paths)
+
+    class FakeTensor:
+        shape = (8, 8, 3)
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return np.zeros((8, 8, 3), dtype=float)
+
+    warp = warp_pipe.Warp().warp(prompt_positive="a portrait", seed=123, steps_1=30)[0]
+    result = warp_pipe.SaveImageCivitai().save_images(
+        images=[FakeTensor()], warp=warp, file_format="jpeg",
+        embed_metadata=True, embed_workflow=True,
+    )
+
+    saved = result["ui"]["images"][0]["filename"]
+    assert saved.endswith(".jpg")
+
+    comment = Image.open(tmp_path / saved).getexif().get(0x9286)
+    assert comment[:8] == b"UNICODE\0"
+    text = comment[8:].decode("utf-16-be")
+    assert text.startswith("a portrait")
+    assert "Seed: 123" in text
+
+    # The workflow was asked for and cannot be given, so it says so rather than
+    # letting the reader believe the file carries one.
+    assert "nowhere to keep a ComfyUI workflow" in result["ui"]["warppipe_note"][0]
+
+
+def test_the_preview_can_be_turned_off_without_affecting_the_save(
+    warp_pipe, monkeypatch, tmp_path
+):
+    saved = []
+
+    class Saved:
+        def save(self, path, *args, **kwargs):
+            saved.append(path)
+
+    class FakePngInfo:
+        def __init__(self):
+            self.keys = []
+
+        def add_text(self, key, value):
+            self.keys.append(key)
+
+    folder_paths = types.ModuleType("folder_paths")
+    folder_paths.get_output_directory = lambda: str(tmp_path)
+    folder_paths.get_save_image_path = lambda prefix, out, w, h: (str(tmp_path), "img", 1, "", prefix)
+    folder_paths.get_filename_list = lambda folder: []
+    pil = types.ModuleType("PIL")
+    pil_image = types.ModuleType("PIL.Image")
+    pil_image.fromarray = lambda array: Saved()
+    pil_png = types.ModuleType("PIL.PngImagePlugin")
+    pil_png.PngInfo = FakePngInfo
+    for name, module in {
+        "folder_paths": folder_paths,
+        "PIL": pil,
+        "PIL.Image": pil_image,
+        "PIL.PngImagePlugin": pil_png,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+    import numpy as np
+
+    class FakeTensor:
+        shape = (8, 8, 3)
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return np.zeros((8, 8, 3), dtype=float)
+
+    node = warp_pipe.SaveImageCivitai()
+    shown = node.save_images(images=[FakeTensor()], preview=True)
+    quiet = node.save_images(images=[FakeTensor()], preview=False)
+
+    assert len(shown["ui"]["images"]) == 1
+    assert quiet["ui"]["images"] == []
+    # Both wrote a file; only the reporting differs.
+    assert len(saved) == 2
+
+
+def test_civitai_reads_resources_from_the_hashes_field(warp_pipe):
+    # Civitai's own extension writes "Hashes", keyed model / lora:<name>, and
+    # links resources from it. "Lora hashes" is A1111's separate convention;
+    # writing only that named the checkpoint and credited no LoRA at all.
+    text = warp_pipe.build_civitai_parameters(
+        positive="a portrait",
+        model_name="sdxl/base.safetensors",
+        model_hash="8e4eeda70d",
+        loras=[("detail tweaker", 0.8, "6f6061f493")],
+    )
+    field = text.split("Hashes: ")[1].split(", Version")[0]
+
+    assert json.loads(field) == {"model": "8e4eeda70d", "lora:detail tweaker": "6f6061f493"}
+    # Kept as well, for anything reading A1111's spelling.
+    assert 'Lora hashes: "detail tweaker: 6f6061f493"' in text
+
+
+def test_a_lora_the_workflow_names_but_does_not_have_is_not_credited(warp_pipe, monkeypatch):
+    # A folder renamed or a version replaced leaves the workflow naming a file
+    # that is not there. It was never applied, so crediting it would describe an
+    # image that was not made.
+    module = types.ModuleType("folder_paths")
+    module.get_filename_list = lambda folder: ["real.safetensors"]
+    module.get_full_path = lambda folder, name: (
+        "/models/loras/real.safetensors" if name == "real.safetensors" else None
+    )
+    monkeypatch.setitem(sys.modules, "folder_paths", module)
+
+    graph = {
+        "1": {
+            "class_type": "Power Lora Loader (rgthree)",
+            "inputs": {
+                "lora_1": {"on": True, "lora": "real.safetensors", "strength": 0.5},
+                "lora_2": {"on": True, "lora": "vanished.safetensors", "strength": 0.5},
+            },
+        },
+        "9": {"class_type": "SaveImageCivitai", "inputs": {"images": ["1", 0]}},
+    }
+
+    text = warp_pipe.SaveImageCivitai().build_metadata(prompt=graph, unique_id="9")
+
+    assert "real" in text
+    assert "vanished" not in text
 
 
 def test_build_metadata_combines_warp_values_and_graph(warp_pipe):

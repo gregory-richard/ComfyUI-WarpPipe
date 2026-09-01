@@ -54,7 +54,10 @@ used directly instead, since that node knows exactly what it applied.
   prompt, seed, sampler, size, model and LoRA hashes, in the form Civitai and
   A1111 read. This is what gets your resources credited when you upload.
 - **Workflow** (`embed_workflow`) — Write the ComfyUI graph, so the image can be
-  dragged back in to rebuild it.
+  dragged back in to rebuild it. PNG only.
+- **Format** (`file_format`) — `png` or `jpeg`. See below.
+- **Preview** (`preview`) — Whether the saved images appear on the node. Off
+  saves exactly the same files, and shows nothing.
 - **warp** (optional) — Supplies prompt, seed, steps, CFG, sampler, scheduler
   and size. Without it, only what can be read from the graph is written.
 
@@ -101,6 +104,42 @@ that holds it.
 What it cannot find is a model that was never a file: a merge built in the
 graph, or a loader that records no filename at all. Then no `Model:` is written,
 because there is nothing true to write.
+
+## How resources get credited
+
+Civitai links a model or a LoRA by its AutoV2 hash — the first ten characters of
+the file's SHA256. Two fields carry them:
+
+- `Model hash: <hash>` for the checkpoint.
+- `Hashes: {"model": "...", "lora:<name>": "..."}` for everything, which is the
+  field Civitai's own extension writes and the one it links LoRAs from.
+
+`Lora hashes: "<name>: <hash>"` is written too, because that is A1111's spelling
+and other tools read it — but it is not what Civitai uses. Writing only that one
+produced images whose checkpoint was recognised and whose LoRAs were not, since
+the checkpoint is read from `Model hash`, which both conventions agree on.
+
+Where a `.civitai.info` sidecar exists the hash is taken from it, which is
+Civitai's own recorded hash for that exact file, so it matches by construction.
+Otherwise the file is hashed directly.
+
+A LoRA the workflow names but which is not in the LoRA folder — a folder
+renamed, a version replaced — was never applied, so it is left out rather than
+credited, and the console says which.
+
+## PNG or JPEG
+
+PNG is lossless and has text chunks, which is where both the generation info and
+the workflow go. It is the default and the only format that can carry a
+workflow.
+
+JPEG is much smaller. It has no text chunks, so the generation info goes into
+**EXIF UserComment** instead — the same place A1111 puts it, written the same
+way (the eight-byte `UNICODE` marker then UTF-16), which is what Civitai reads.
+Resource linking works exactly as it does for PNG. Quality is 95.
+
+The workflow has nowhere to live in a JPEG. Asking for both says so on the node
+rather than leaving you to believe the file carries one.
 
 ## Which steps value is used
 

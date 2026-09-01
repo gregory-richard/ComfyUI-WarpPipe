@@ -11,6 +11,8 @@ const FRIENDLY_LABELS = {
   filename_prefix: "Save as",
   embed_metadata: "Generation info",
   embed_workflow: "Workflow",
+  file_format: "Format",
+  preview: "Preview",
 };
 
 /** A workflow saved when one toggle did both jobs.
