@@ -57,7 +57,6 @@ used directly instead, since that node knows exactly what it applied.
   dragged back in to rebuild it.
 - **warp** (optional) — Supplies prompt, seed, steps, CFG, sampler, scheduler
   and size. Without it, only what can be read from the graph is written.
-- **Checkpoint** (`model_name_override`, optional) — Leave empty. See below.
 
 ## The two switches
 
@@ -75,20 +74,33 @@ that credits its resources without publishing how you work.
 Turning the generation info off skips building it, which skips hashing the
 checkpoint and every LoRA.
 
-## Why a Checkpoint field at all
+## How the checkpoint is found
 
-The checkpoint is found by walking back through the graph from this node,
-recognising loaders by the input they carry — `ckpt_name`, `unet_name`,
-`model_name` — so checkpoint, UNet/diffusion and GGUF loaders are all covered
-without naming each pack. The walk only considers nodes upstream of this one, so
-an unrelated branch of a large workflow cannot contribute the wrong model.
+By walking back through the graph from this node and looking at what each node
+upstream of it holds. Only nodes upstream count, so an unrelated branch of a
+large workflow cannot contribute the wrong model, and the **nearest** loader
+wins — a refiner in front of a base is the one that made the picture.
 
-That covers the ordinary cases, and the field is the escape hatch for the rest:
-a loader whose input is named something else again, a model assembled by a pack
-that never records a filename, or two loaders where the walk picks the one you
-did not mean. Type the checkpoint's filename there and it is used instead.
+A node is not identified by its class name, so a loader from any pack works:
 
-Leave it empty unless the saved metadata names the wrong model, or none.
+- The usual input names — `ckpt_name`, `unet_name`, `model_name` — are read
+  first, which covers ComfyUI's own loaders and most others.
+- Failing that, any value that looks like a model filename and **resolves inside
+  the checkpoint, diffusion-model or UNet folders** is the model, whatever the
+  input happens to be called. A pack that calls its input `the_weights_i_want`
+  is found the same as one that does not.
+
+Where the file lives is what distinguishes a model from a LoRA, VAE or CLIP, so
+those are never mistaken for it even though they are all `.safetensors`.
+
+Renaming a node, or relabelling its ports, changes nothing: labels are display
+only, and none of this reads them. Converting `ckpt_name` into an input and
+feeding it from a string node also still works — the name is found on the node
+that holds it.
+
+What it cannot find is a model that was never a file: a merge built in the
+graph, or a loader that records no filename at all. Then no `Model:` is written,
+because there is nothing true to write.
 
 ## Which steps value is used
 

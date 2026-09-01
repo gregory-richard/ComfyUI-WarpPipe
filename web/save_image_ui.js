@@ -11,26 +11,23 @@ const FRIENDLY_LABELS = {
   filename_prefix: "Save as",
   embed_metadata: "Generation info",
   embed_workflow: "Workflow",
-  model_name_override: "Checkpoint",
 };
 
 /** A workflow saved when one toggle did both jobs.
  *
  * It held [filename_prefix, embed_workflow, model_name_override]. Read by
- * position against today's widgets, the workflow toggle lands on the metadata
- * one and the checkpoint name lands on the workflow toggle - where an empty
- * string reads as "off" and would quietly stop writing the workflow.
+ * position against today's widgets the workflow toggle lands on the metadata
+ * one, so both switches end up describing the wrong thing.
  */
 function migrateSingleToggle(node, values) {
   if (!Array.isArray(values) || values.length !== 3) return;
-  const [prefix, embedWorkflow, checkpoint] = values;
-  if (typeof embedWorkflow !== "boolean" || typeof checkpoint !== "string") return;
+  const [prefix, embedWorkflow] = values;
+  if (typeof embedWorkflow !== "boolean") return;
   setWidgetValues(node, {
     filename_prefix: prefix,
     // It always wrote the parameters block; only the workflow was optional.
     embed_metadata: true,
     embed_workflow: embedWorkflow,
-    model_name_override: checkpoint,
   });
 }
 

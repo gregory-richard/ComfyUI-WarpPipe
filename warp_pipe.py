@@ -8,6 +8,7 @@ import threading
 import time
 import urllib.parse
 import uuid
+from collections import deque
 from typing import Any, ClassVar, Optional
 
 logger = logging.getLogger("WarpPipe")
@@ -994,13 +995,56 @@ MODEL_INPUT_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("model_name", ("diffusion_models", "checkpoints")),
 )
 
+# Where a file has to live to be the model a picture is credited to. A LoRA, VAE
+# or CLIP resolves somewhere else, which is what tells them apart - the name of
+# the input it arrived in does not.
+MODEL_FOLDER_KEYS: tuple[str, ...] = ("checkpoints", "diffusion_models", "unet")
+MODEL_SUFFIXES: tuple[str, ...] = (
+    ".safetensors",
+    ".ckpt",
+    ".sft",
+    ".gguf",
+    ".pt",
+    ".pth",
+    ".bin",
+)
 
-def trace_upstream(graph: dict[str, Any], start_id: Optional[str]) -> Optional[set[str]]:
-    """Node ids that feed the given node, following links backwards.
+
+def model_named_by(inputs: dict[str, Any]) -> Optional[str]:
+    """The model file a loader names, however that loader spells its input.
+
+    The three usual input names are tried first because they cost nothing. For
+    anything else the question is settled by where the file actually is: a name
+    that resolves inside the checkpoint, diffusion-model or UNet folders is a
+    model whatever its input is called, so a loader from a pack nobody has heard
+    of still records what it loaded.
+    """
+    for key, _folders in MODEL_INPUT_KEYS:
+        value = inputs.get(key)
+        if isinstance(value, str) and value and value.lower() != "none":
+            return value
+
+    for value in inputs.values():
+        if not isinstance(value, str) or not value or value.lower() == "none":
+            continue
+        if not value.lower().endswith(MODEL_SUFFIXES):
+            continue
+        if any(_resolve_model_path(folder, value) for folder in MODEL_FOLDER_KEYS):
+            return value
+    return None
+
+
+def trace_upstream(graph: dict[str, Any], start_id: Optional[str]) -> Optional[dict[str, int]]:
+    """Node ids that feed the given node, mapped to how far back each one is.
 
     A large workflow holds many loaders behind switches and subgraphs; only the
     ones upstream of the image being saved actually produced it. Returns None
     when there is no usable starting point, meaning "consider the whole graph".
+
+    The distance matters once more than one loader is upstream - a refiner
+    behind a base, a model handed through a chain of patchers - because the
+    nearest one is the one that made this picture. Walking breadth-first is what
+    makes the number a distance rather than an accident of traversal.
     """
     if start_id is None or not isinstance(graph, dict):
         return None
@@ -1009,22 +1053,21 @@ def trace_upstream(graph: dict[str, Any], start_id: Optional[str]) -> Optional[s
     if start not in graph:
         return None
 
-    seen: set[str] = set()
-    pending = [start]
-    while pending:
-        node_id = pending.pop()
-        if node_id in seen:
-            continue
-        seen.add(node_id)
-
+    depth = {start: 0}
+    queue = deque([start])
+    while queue:
+        node_id = queue.popleft()
         node = graph.get(node_id)
         if not isinstance(node, dict):
             continue
         for value in (node.get("inputs") or {}).values():
             # A link is encoded as [source_node_id, output_index].
             if isinstance(value, list) and value and isinstance(value[0], (str, int)):
-                pending.append(str(value[0]))
-    return seen
+                feeder = str(value[0])
+                if feeder not in depth:
+                    depth[feeder] = depth[node_id] + 1
+                    queue.append(feeder)
+    return depth
 
 
 def collect_graph_resources(
@@ -1033,18 +1076,21 @@ def collect_graph_resources(
 ) -> tuple[Optional[str], list[tuple[str, float]]]:
     """Find the model and LoRAs that produced the image being saved.
 
-    Handles ComfyUI's own loaders, UNet/diffusion and GGUF loaders, and the
-    stacked slot format used by rgthree's Power Lora Loader. When start_id is
-    given, only nodes upstream of it are considered, so unrelated branches of a
-    large workflow do not contribute.
+    Handles ComfyUI's own loaders, UNet/diffusion and GGUF loaders, loaders from
+    packs nobody here has heard of, and the stacked slot format used by rgthree's
+    Power Lora Loader. When start_id is given, only nodes upstream of it are
+    considered, so unrelated branches of a large workflow do not contribute.
     """
-    model_name: Optional[str] = None
     loras: list[tuple[str, float]] = []
+    # (distance from the saved image, name) - the nearest loader wins, so a
+    # refiner sitting in front of a base is the one recorded.
+    found_models: list[tuple[int, str]] = []
 
     if not isinstance(prompt_graph, dict):
-        return model_name, loras
+        return None, loras
 
     upstream = trace_upstream(prompt_graph, start_id)
+    distance = upstream or {}
     for node_id, node in prompt_graph.items():
         if upstream is not None and str(node_id) not in upstream:
             continue
@@ -1054,12 +1100,9 @@ def collect_graph_resources(
         if not isinstance(inputs, dict):
             continue
 
-        if model_name is None:
-            for key, _folders in MODEL_INPUT_KEYS:
-                value = inputs.get(key)
-                if isinstance(value, str) and value and value.lower() != "none":
-                    model_name = value
-                    break
+        named = model_named_by(inputs)
+        if named is not None:
+            found_models.append((distance.get(str(node_id), 0), named))
 
         name = inputs.get("lora_name")
         if isinstance(name, str) and name and name.lower() != "none":
@@ -1093,6 +1136,9 @@ def collect_graph_resources(
         if name not in seen:
             seen.add(name)
             deduped.append((name, weight))
+
+    # Nearest first; ties fall to whichever the graph listed first.
+    model_name = min(found_models)[1] if found_models else None
     return model_name, deduped
 
 
@@ -1877,19 +1923,6 @@ class SaveImageCivitai:
                 # idle instead of failing the whole prompt with a missing input.
                 "images": ("IMAGE", {}),
                 "warp": ("WARPPIPE", {}),
-                "model_name_override": (
-                    "STRING",
-                    {
-                        "default": "",
-                        "multiline": False,
-                        "placeholder": "detected from the graph",
-                        "tooltip": (
-                            "Leave empty. The checkpoint is found by walking back "
-                            "from this node; name it here only when that finds the "
-                            "wrong one, or nothing."
-                        ),
-                    },
-                ),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -1909,7 +1942,6 @@ class SaveImageCivitai:
         self,
         warp: Optional[dict[str, Any]] = None,
         prompt: Optional[dict[str, Any]] = None,
-        model_name: str = "",
         width: Optional[int] = None,
         height: Optional[int] = None,
         unique_id: Optional[str] = None,
@@ -1948,8 +1980,7 @@ class SaveImageCivitai:
                 path = _resolve_model_path("loras", resolved)
                 loras.append((_lora_display_name(resolved), weight, model_autov2(path)))
 
-        checkpoint = model_name.strip() or graph_model
-        checkpoint_hash = model_autov2(resolve_model_file(checkpoint))
+        checkpoint_hash = model_autov2(resolve_model_file(graph_model))
 
         return build_civitai_parameters(
             positive=positive,
@@ -1961,7 +1992,7 @@ class SaveImageCivitai:
             seed=values.get("seed"),
             width=width or values.get("width"),
             height=height or values.get("height"),
-            model_name=checkpoint,
+            model_name=graph_model,
             model_hash=checkpoint_hash,
             loras=loras,
         )
@@ -1973,7 +2004,6 @@ class SaveImageCivitai:
         embed_metadata: bool = True,
         embed_workflow: bool = True,
         warp: Optional[dict[str, Any]] = None,
-        model_name_override: str = "",
         prompt: Optional[dict[str, Any]] = None,
         extra_pnginfo: Optional[dict[str, Any]] = None,
         unique_id: Optional[str] = None,
@@ -1995,7 +2025,6 @@ class SaveImageCivitai:
             parameters = self.build_metadata(
                 warp=warp,
                 prompt=prompt,
-                model_name=model_name_override,
                 width=width,
                 height=height,
                 unique_id=unique_id,

@@ -436,12 +436,90 @@ def test_without_a_start_id_the_whole_graph_is_considered(warp_pipe):
     assert "wrong.safetensors" in names
 
 
+def _folders(monkeypatch, files):
+    """Stand in for ComfyUI's folder_paths, with files in named folders."""
+    module = types.ModuleType("folder_paths")
+    module.get_full_path = lambda folder, name: (
+        f"/models/{folder}/{name}" if name in files.get(folder, ()) else None
+    )
+    monkeypatch.setitem(sys.modules, "folder_paths", module)
+
+
+def test_a_loader_from_an_unknown_pack_is_still_recognised(warp_pipe, monkeypatch):
+    # No ckpt_name, no unet_name, no model_name - an input this code has never
+    # heard of. What settles it is that the file resolves in a model folder.
+    _folders(monkeypatch, {"checkpoints": {"sdxl/base.safetensors"}})
+    graph = {
+        "1": {
+            "class_type": "SomeoneElsesLoader",
+            "inputs": {"the_weights_i_want": "sdxl/base.safetensors"},
+        },
+        "9": {"class_type": "SaveImageCivitai", "inputs": {"images": ["1", 0]}},
+    }
+
+    model, _ = warp_pipe.collect_graph_resources(graph, start_id="9")
+
+    assert model == "sdxl/base.safetensors"
+
+
+def test_a_lora_is_not_mistaken_for_the_model(warp_pipe, monkeypatch):
+    # Both end in .safetensors and neither input is a name this code knows.
+    # Where the file lives is what tells them apart.
+    _folders(
+        monkeypatch,
+        {"checkpoints": {"sdxl/base.safetensors"}, "loras": {"some lora.safetensors"}},
+    )
+    graph = {
+        "1": {"class_type": "OddLoader", "inputs": {"weights": "sdxl/base.safetensors"}},
+        "2": {"class_type": "OddLoraLoader", "inputs": {"extra": "some lora.safetensors"}},
+        "9": {"class_type": "SaveImageCivitai", "inputs": {"a": ["1", 0], "b": ["2", 0]}},
+    }
+
+    model, _ = warp_pipe.collect_graph_resources(graph, start_id="9")
+
+    assert model == "sdxl/base.safetensors"
+
+
+def test_a_name_fed_in_from_another_node_is_found(warp_pipe, monkeypatch):
+    # ckpt_name converted to an input and driven by a string node: the loader
+    # itself now holds a link, not a name, so the name is found where it is.
+    _folders(monkeypatch, {"checkpoints": {"sdxl/base.safetensors"}})
+    graph = {
+        "1": {"class_type": "StringLiteral", "inputs": {"string": "sdxl/base.safetensors"}},
+        "2": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ["1", 0]}},
+        "9": {"class_type": "SaveImageCivitai", "inputs": {"images": ["2", 0]}},
+    }
+
+    model, _ = warp_pipe.collect_graph_resources(graph, start_id="9")
+
+    assert model == "sdxl/base.safetensors"
+
+
+def test_the_nearest_loader_is_the_one_recorded(warp_pipe):
+    # A refiner in front of a base: the picture came out of the refiner.
+    graph = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base.safetensors"}},
+        "2": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "refiner.safetensors", "hint": ["1", 0]},
+        },
+        "9": {"class_type": "SaveImageCivitai", "inputs": {"images": ["2", 0]}},
+    }
+
+    model, _ = warp_pipe.collect_graph_resources(graph, start_id="9")
+
+    assert model == "refiner.safetensors"
+
+
 def test_trace_upstream_walks_links(warp_pipe):
     reachable = warp_pipe.trace_upstream(BRANCHED_GRAPH, "99")
 
-    assert {"99", "13", "12", "11", "10"} <= reachable
+    assert {"99", "13", "12", "11", "10"} <= set(reachable)
     assert "20" not in reachable
     assert "21" not in reachable
+    # Mapped to how far back each one is, so the nearest loader can be picked.
+    assert reachable["99"] == 0
+    assert reachable["13"] < reachable["10"]
 
 
 def test_trace_upstream_handles_unknown_start(warp_pipe):
