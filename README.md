@@ -1,254 +1,123 @@
-# WarpPipe - ComfyUI Custom Nodes
+![WarpPipe](assets/registry/banner.png)
 
-<p align="center">
-  <img src="banner.png" alt="WarpPipe Banner">
-</p>
+# WarpPipe
 
-WarpPipe is a set of custom nodes for ComfyUI that provides a data bundling and transfer system. It allows you to package multiple data types (models, conditioning, images, parameters, etc.) into a single "warp" object that can be passed between nodes and unpacked later in your workflow -- like a Super Mario warp pipe for your data.
+ComfyUI nodes that bundle a whole generation into one wire, and a prompt box
+that keeps a prompt and its LoRAs in the same place.
 
-## Why WarpPipe?
+- **Warp / Unwarp** — everything a sampler needs travels as a single link.
+  Switching between whole model setups is one wire moved instead of twenty.
+- **Prompt + LoRAs** — write `a portrait <lora:detail tweaker:0.8>` and have it
+  mean it. The tags *are* the loader; the prompt is still a prompt.
+- **Save Image (Civitai)** — writes metadata Civitai reads, so an upload
+  credits the checkpoint and the LoRAs that actually made the picture.
 
-If you've ever built a complex ComfyUI workflow, you know the pain: dozens of connections criss-crossing your canvas, making it impossible to read or maintain. WarpPipe solves this by letting you **bundle everything into a single wire**.
+They work apart as well as together.
 
-- **Clean workflows**: Replace 20+ tangled connections with one clean Warp-to-Unwarp link. Your workflow becomes readable at a glance.
-- **Fast model switching**: Set up multiple Warp nodes -- one per model/style -- each with its own settings (steps, CFG, scheduler, sampler, resolution). Switch between them instantly by connecting a different Warp to your Unwarp.
-- **Flexible and modular**: Build reusable workflow sections that accept and return warp bundles. Change one part without touching the rest.
-- **No data loss**: Every standard ComfyUI type is supported -- models, CLIP, VAE, conditioning, images, latents, prompts, and all sampling parameters travel together.
-
-## Features
-
-- **Warp Node**: Bundles multiple ComfyUI data types into a single transferable object
-- **Unwarp Node**: Unpacks the bundled data back into individual outputs
-- **Warp Provider**: Generates latents and parameters with 30+ resolution presets
-- **FD Scheduler Adapter**: Converts KSampler schedulers to FaceDetailer-compatible schedulers
-- **Dead End Node**: Accepts any input type but produces no output -- perfect for debugging
-- **Chain-able**: Warp nodes can copy and extend data from other warp nodes
-- **Scheduler Compatibility**: Automatic coercion of exotic schedulers to safe values
-
-## Installation
-
-### Method 1: Comfy Registry (Recommended)
+## Install
 
 ```bash
 comfy node install warppipe
 ```
 
-### Method 2: ComfyUI Manager
+Or clone into `ComfyUI/custom_nodes` and restart. Python 3.9+, no third-party
+dependencies.
 
-1. Open ComfyUI Manager
-2. Search for "WarpPipe"
-3. Click Install
+## The prompt box
 
-### Method 3: Manual (git clone)
+![The Prompt + LoRAs node, with tags, notes and trigger words coloured](assets/docs/prompt-node.webp)
 
-```bash
-cd ComfyUI/custom_nodes
-git clone https://github.com/gregory-richard/ComfyUI-WarpPipe.git
-```
+Colour says what will happen before you run anything: cyan resolves, red matches
+nothing, orange is built for another base model, green is a trigger word, grey
+is a `//` note that never reaches the model. The line underneath describes
+whichever tag the caret is in.
 
-Restart ComfyUI after installation.
+Press `/` to complete against your library inline, `Tab` to take it, `Tab` again
+on a tag for that LoRA's trigger words. Weight, ordering and switching a LoRA off
+are ordinary text edits, so undo covers all of them.
 
-## Nodes
+→ [Writing a prompt](WIKI.md#writing-a-prompt) ·
+[the browser](WIKI.md#the-browser) · [all the keys](WIKI.md#keys)
 
-### Warp Node
+## One wire
 
-**Category**: `Custom/WarpPipe Nodes` | **Display Name**: 🌀 Warp
+![A Warp bundling three sources into one link, unpacked by Unwarp](assets/docs/warp-unwarp.webp)
 
-Bundles multiple data types into a single "warp" object.
+Everything on the left goes into a **Warp**. One link crosses the canvas. An
+**Unwarp** gives it all back. Warps chain, so a second one downstream carries
+everything the first did and adds to it.
 
-**Inputs** (all optional):
+→ [Bundling a generation](WIKI.md#bundling-a-generation)
 
-- `warp`: Copy data from an existing warp object (WARPPIPE type)
-- `model_1`, `model_2`: MODEL objects (e.g. checkpoints, LoRA-modified models)
-- `clip`: CLIP encoder
-- `clip_vision`: CLIP_VISION encoder
-- `vae`: VAE model
-- `conditioning_positive`, `conditioning_negative`: CONDITIONING inputs
-- `image`: IMAGE batch
-- `mask`: MASK input
-- `latent`: LATENT data
-- `prompt_positive`, `prompt_negative`: Text prompts (STRING)
-- `batch_size`, `seed`, `steps_1`, `steps_2`, `steps_3`, `width`, `height`: Integer parameters
-- `cfg`: CFG scale (FLOAT)
-- `sampler_name`: Sampler selection (matches KSampler)
-- `scheduler`: Scheduler selection (matches KSampler)
+## Works with Civitai Updater
 
-**Output**:
+WarpPipe reads the `.civitai.info` sidecars that
+[Civitai Updater](https://github.com/gregory-richard/comfyui-civitai-updater)
+writes: trigger words, base models, titles, Civitai links and the AutoV2 hash
+Civitai matches on. Only the hash has a fallback — the rest simply are not there
+without a sidecar, and the features built on them go quiet.
 
-- `warp`: Bundled data object (WARPPIPE type)
+→ [What the sidecars give you](WIKI.md#what-the-sidecars-give-you)
 
-### Unwarp Node
+## The nodes
 
-**Category**: `Custom/WarpPipe Nodes` | **Display Name**: 🌀 Unwarp
+| Node | |
+| --- | --- |
+| 🌀 **Warp** | Bundles models, conditioning, images, latents, prompts and parameters into one link |
+| 🌀 **Unwarp** | Unpacks it into twenty-two outputs |
+| 🌀 **Warp Provider** | Latent and parameters together, with 30+ resolution presets |
+| 🌀 **Prompt + LoRAs** | The prompt box above |
+| 🌀 **Save Image (Civitai)** | Saves with metadata Civitai reads |
+| 🌀 **Scheduler Adapter for FaceDetailer** | Maps KSampler schedulers onto FaceDetailer's set |
+| 🚫 **Dead End** | Accepts any type, produces nothing. Parks a branch without deleting it |
 
-Unpacks a warp object back into individual data types.
+Every node carries its own help inside ComfyUI, behind the `?` on the node.
 
-**Input**:
+→ [Every input and output](WIKI.md#node-reference)
 
-- `warp`: The warp object to unpack (WARPPIPE type) -- optional, returns None values if not connected
+## Example workflow
 
-**Outputs** (in order):
-
-- `model_1`, `model_2`: MODEL objects
-- `image`: IMAGE
-- `mask`: MASK
-- `clip`: CLIP
-- `clip_vision`: CLIP_VISION
-- `vae`: VAE
-- `conditioning_positive`, `conditioning_negative`: CONDITIONING
-- `latent`: LATENT
-- `prompt_positive`, `prompt_negative`: STRING
-- `batch_size`, `seed`, `steps_1`, `steps_2`, `steps_3`: INT
-- `cfg`: FLOAT
-- `sampler_name`: Sampler enum
-- `scheduler`: Scheduler enum
-- `width`, `height`: INT
-
-### Warp Provider Node
-
-**Category**: `Custom/WarpPipe Nodes` | **Display Name**: 🌀 Warp Provider
-
-Generates latents and parameters with convenient preset dimensions. Features 30+ resolution presets covering all major aspect ratios (9:16, 3:4, 2:3, 4:5, 1:1, 5:4, 3:2, 4:3, 16:9), each labeled with use case, aspect ratio, resolution, and megapixel count.
-
-**Inputs** (all optional):
-
-- `batch_size`: Number of images (default: 1, range: 1-64)
-- `seed`: Random seed (default: 0)
-- `steps_1`: Primary sampling steps (default: 20, range: 1-200)
-- `steps_2`, `steps_3`: Additional step counts for multi-pass workflows (default: 0)
-- `cfg`: CFG scale (default: 7.0, range: 0.0-50.0)
-- `sampler_name`: Sampler to use (default: "euler")
-- `scheduler`: Scheduler to use (default: "normal")
-- `size_preset`: Resolution preset dropdown (30+ options, default: Square SDXL native 1024x1024)
-- `custom_width`, `custom_height`: Custom dimensions when "Custom" preset is selected (step: 8)
-
-**Outputs**:
-
-- `latent`: Generated empty latent at selected resolution
-- `batch_size`, `seed`, `steps_1`, `steps_2`, `steps_3`, `width`, `height`: INT
-- `cfg`: FLOAT
-- `sampler_name`: Sampler enum
-- `scheduler`: Scheduler enum
-
-### FD Scheduler Adapter Node
-
-**Category**: `Custom/WarpPipe Nodes` | **Display Name**: 🌀 Scheduler Adapter for FaceDetailer
-
-Converts KSampler schedulers to FaceDetailer-compatible schedulers. Exotic schedulers (AYS SDXL, GITS, OSS variants, etc.) are automatically mapped to their closest compatible equivalent.
-
-**Input**:
-
-- `scheduler`: KSampler scheduler type (required)
-
-**Output**:
-
-- `scheduler`: FaceDetailer-compatible scheduler
-
-### Dead End Node
-
-**Category**: `Custom/WarpPipe Nodes` | **Display Name**: 🚫 Dead End
-
-A true dead end node that accepts any input type but produces no output. Does not trigger execution.
-
-**Input**:
-
-- `input`: Any data type (wildcard) -- optional
-
-**Output**: None
-
-**Use Cases**:
-
-- **Debugging**: Temporarily disconnect a workflow branch without deleting nodes
-- **Workflow organization**: Cleanly terminate unused output paths
-- **Testing**: Isolate parts of complex workflows during development
-
-## Usage Examples
-
-### Basic Usage
-
-1. Add a **Warp** node to your workflow
-2. Connect your models, conditioning, and other data to the Warp node inputs
-3. Connect the Warp output to an **Unwarp** node
-4. Use the Unwarp outputs in the rest of your workflow
-
-### Using Warp Provider
-
-1. Add a **Warp Provider** node to generate latents and parameters
-2. Choose from 30+ presets organized by aspect ratio, or use custom sizes
-3. Connect the outputs directly to your sampling nodes or bundle them with a **Warp** node
-
-### Chaining Warps
-
-```
-[Model] --> [Warp A] --> [Some Processing] --> [Warp B] --> [Unwarp] --> [KSampler]
-                ^                                  ^
-          [Additional Data]                  [More Data]
-```
-
-Warp B copies all data from Warp A and adds additional data, creating a cumulative bundle.
-
-### FaceDetailer Compatibility
-
-```
-[KSampler Scheduler] --> [FD Scheduler Adapter] --> [FaceDetailer Node]
-```
-
-### Debugging with Dead End
-
-```
-[Model] --> [KSampler] --> [Dead End]
-                       \-> [VAE Decode] --> [Save Image]
-```
-
-Use the Dead End node to temporarily disable a branch while keeping the rest active.
-
-### Example Workflow
-
-Here's a real workflow using WarpPipe with multiple model configurations:
+Two model configurations — Krea 2 and Z-Image Turbo — each with its own Warp,
+switched into one shared workflow:
 
 <p align="center">
-  <img src="examples/workflow_example.png" alt="WarpPipe Example Workflow" width="800">
+  <img src="examples/workflow_example_screenshot.png" alt="The example workflow: two model groups feeding one shared pipeline" width="820">
 </p>
 
-Download the [example workflow JSON](examples/workflow_example.json) and drag it into ComfyUI to try it out.
+It produced this, and carries the workflow inside it — drag the image into
+ComfyUI to open it:
 
-## Technical Details
+<p align="center">
+  <img src="examples/workflow_example.png" alt="A pixel-art warp pipe, generated by the example workflow" width="300">
+</p>
 
-- **Data Types**: Custom `WARPPIPE` type for bundled data transfer between Warp and Unwarp nodes
-- **Data Storage**: Global storage with unique UUIDs per warp instance, thread-safe with locking
-- **Memory Management**: Automatic time-based cleanup (1-hour expiry) with a 256-entry hard cap
-- **Scheduler Compatibility**: Automatic coercion of exotic schedulers to safe, compatible values
-- **RES4LYF Compatibility**: Registers the `beta57` and `bong_tangent` schedulers globally so other node packs (like FaceDetailer) accept them even if RES4LYF hasn't loaded yet
-- **V3 Combo Compatibility**: Uses ComfyUI's native combo-output schema so sampler and scheduler links validate without modifying ComfyUI's global prompt validator
-- **Preset Dimensions**: 30+ SDXL-optimized resolution presets across all major aspect ratios
-- **Logging**: Uses Python `logging` module (set to DEBUG level to see internal details)
+Save Image (Civitai) wrote this alongside it, which is what a site reads:
 
-### V3 Schema Support (Experimental)
-
-WarpPipe includes optional ComfyUI V3 schema node implementations. Legacy registration is the default because the V3 API is still unstable upstream. To try the V3 nodes, set the environment variable `WARPPIPE_ENABLE_V3=1` before starting ComfyUI. Saved workflows keep working either way — both paths register the same node IDs.
-
-## Troubleshooting
-
-### Node Not Appearing
-
-- Ensure you've restarted ComfyUI after installation
-- Check the console for any error messages during startup
-- Verify all files are in the correct directory
-
-### Migrating from v2.x
-
-v3.0.0 renamed the internal data type from `CONTROL` to `WARPPIPE`. If you load an old workflow, you may need to reconnect the Warp-to-Unwarp links once. All node names and functionality remain the same.
-
-## Contributing
-
-Contributions are welcome! Before submitting a pull request, run:
-
-```bash
-python -m ruff check . --exclude .agents --exclude .claude
-python -m ruff format --check . --exclude .agents --exclude .claude
-python -m pytest -q
+```
+Steps: 8, Sampler: euler, Schedule type: simple, CFG scale: 1.0, Seed: 44,
+Size: 1024x1536, Model hash: 8e4eeda70d, Model: krea2_turbo_int8_convrot,
+Hashes: {"model":"8e4eeda70d"}, Version: ComfyUI-WarpPipe
 ```
 
-## License
+Or download the [workflow JSON](examples/workflow_example.json).
 
-MIT License - see LICENSE file for details
+## Documentation
+
+Everything else is in **[WIKI.md](WIKI.md)**:
+[getting started](WIKI.md#getting-started) ·
+[usage](WIKI.md#usage) ·
+[node reference](WIKI.md#node-reference) ·
+[HTTP API](WIKI.md#http-api) ·
+[architecture](WIKI.md#architecture) ·
+[development](WIKI.md#development) ·
+[troubleshooting](WIKI.md#troubleshooting)
+
+## Credits
+
+UI screenshots are taken from a real ComfyUI against a small demo LoRA folder;
+those names are illustrative and that preview art is generated stand-in, not any
+creator's work.
+
+Developed with AI assistance (Claude Opus 5).
+
+Licensed under the [MIT License](LICENSE).

@@ -5,7 +5,7 @@
             "reference": "https://github.com/gregory-richard/ComfyUI-WarpPipe",
             "files": ["https://github.com/gregory-richard/ComfyUI-WarpPipe"],
             "install_type": "git-clone",
-            "description": "WarpPipe nodes for bundling and transferring multiple data types between ComfyUI nodes. Includes Warp and Unwarp nodes for workflow organization and data management."
+            "description": "Bundle a whole generation - models, conditioning, latents, prompts and every sampling parameter - into a single wire, and write prompts with their LoRAs inline. Saves images with metadata Civitai reads."
         }
     ]
 }

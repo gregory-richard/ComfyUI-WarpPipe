@@ -1,0 +1,6 @@
+# One line ending everywhere. Without this a Windows checkout gets CRLF, and the
+# frontend format check - which normalises to LF - fails on files nobody touched.
+* text=auto eol=lf
+
+# Binary, so git never tries to normalise them.
+*.png binary

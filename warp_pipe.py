@@ -1,10 +1,14 @@
+import difflib
 import hashlib
+import json
 import logging
 import os
 import re
 import threading
 import time
+import urllib.parse
 import uuid
+from collections import deque
 from typing import Any, ClassVar, Optional
 
 logger = logging.getLogger("WarpPipe")
@@ -89,24 +93,40 @@ def _register_res4lyf_scheduler_fallbacks() -> None:
         ksampler_schedulers = list(ksampler_schedulers or ())
         comfy.samplers.KSampler.SCHEDULERS = ksampler_schedulers
 
+    stood_in = []
     for scheduler_name in RES4LYF_SCHEDULERS:
-        handlers.setdefault(scheduler_name, handlers["karras"])
+        if handlers.setdefault(scheduler_name, handlers["karras"]) is handlers["karras"]:
+            stood_in.append(scheduler_name)
         if scheduler_name not in scheduler_names:
             scheduler_names.append(scheduler_name)
         if scheduler_name not in ksampler_schedulers:
             ksampler_schedulers.append(scheduler_name)
 
+    # These names now appear in every scheduler dropdown in ComfyUI, and until
+    # RES4LYF loads they are karras wearing another label. Choosing one then
+    # samples with karras sigmas, which is a quiet thing to do without saying
+    # so: the point is that FaceDetailer accepts a workflow built around them,
+    # not that WarpPipe implements them.
+    if stood_in:
+        logger.info(
+            "Registered %s as karras stand-ins so other nodes accept them. "
+            "Install RES4LYF for the real schedulers.",
+            ", ".join(stood_in),
+        )
+
 
 _register_res4lyf_scheduler_fallbacks()
 
-# Safe scheduler/sampler lists for compatibility (pulled dynamically from Comfy).
-SAFE_SAMPLERS = getattr(comfy.samplers.KSampler, "SAMPLERS", [])
-if not isinstance(SAFE_SAMPLERS, list):
-    SAFE_SAMPLERS = list(SAFE_SAMPLERS)
-
-SAFE_SCHEDULERS = getattr(comfy.samplers.KSampler, "SCHEDULERS", [])
-if not isinstance(SAFE_SCHEDULERS, list):
-    SAFE_SCHEDULERS = list(SAFE_SCHEDULERS)
+# Safe scheduler/sampler lists, read from Comfy once at import.
+#
+# Copied rather than referenced. ComfyUI's KSampler.SAMPLERS and .SCHEDULERS are
+# the very lists other packs append to, so holding a reference would make these
+# live views: whatever anyone added later would silently widen the combo boxes
+# below and, worse, walk straight through coerce_scheduler untouched - which is
+# the one thing it exists to prevent. A snapshot means "safe" keeps meaning the
+# set ComfyUI itself shipped, plus the RES4LYF names registered just above.
+SAFE_SAMPLERS = list(getattr(comfy.samplers.KSampler, "SAMPLERS", []))
+SAFE_SCHEDULERS = list(getattr(comfy.samplers.KSampler, "SCHEDULERS", []))
 
 # Compatibility mappings for exotic schedulers
 SCHEDULER_ALIASES = {
@@ -223,7 +243,13 @@ def _validate_linked_input_types(
     return True
 
 
-# Global storage for warp data; keys are unique per Warp instance
+# Global storage for warp data; keys are unique per Warp instance.
+#
+# A bundle holds whatever was warped into it, models and CLIPs included, so an
+# entry keeps those objects alive and their memory unreclaimable for as long as
+# it lasts. That is what the age limit and the cap below are for: an abandoned
+# workflow's models are released within the hour rather than for the lifetime of
+# the process.
 warp_storage: dict[str, dict[str, Any]] = {}
 _storage_timestamps: dict[str, float] = {}  # Track last-access time per warp ID
 _storage_lock = threading.Lock()
@@ -264,6 +290,15 @@ def cleanup_warp_storage() -> None:
 
 
 def _fingerprint_inputs(kwargs: dict[str, Any]) -> str:
+    """A cache key for a node's inputs.
+
+    repr() is identity for a MODEL, CLIP or VAE - "<ModelPatcher object at 0x..>"
+    - so those are keyed on which object arrived rather than on its weights.
+    That is the right answer here: ComfyUI hands back the same patcher for as
+    long as a checkpoint stays loaded, and a reload is exactly the change this
+    should notice. Hashing weights instead would cost more than the execution
+    it saves.
+    """
     h = hashlib.sha256()
     for key in sorted(kwargs.keys()):
         if kwargs[key] is not None:
@@ -276,6 +311,10 @@ def _get_v3_node_id(cls, fallback_prefix: str) -> str:
     if unique_id:
         return f"v3:{unique_id}"
     return f"{fallback_prefix}:{uuid.uuid4().hex}"
+
+
+# SD1.5/SDXL latents. See _create_empty_latent.
+LATENT_CHANNELS = 4
 
 
 def _create_empty_latent(width: int, height: int, batch_size: int):
@@ -294,9 +333,14 @@ def _create_empty_latent(width: int, height: int, batch_size: int):
 
     import torch
 
+    # Four channels and an eighth of the size: the SD1.5/SDXL latent shape, and
+    # the same one ComfyUI's own EmptyLatentImage produces. Architectures with a
+    # wider latent - Flux, SD3, and anything else on 16 channels - need their
+    # own empty-latent node instead; the resolution presets below are SDXL's
+    # anyway, so this node does not pretend to cover them.
     latent_width = width // 8
     latent_height = height // 8
-    latent = torch.zeros([batch_size, 4, latent_height, latent_width])
+    latent = torch.zeros([batch_size, LATENT_CHANNELS, latent_height, latent_width])
     return {"samples": latent}
 
 
@@ -804,6 +848,1540 @@ class DeadEnd:
         return ()
 
 
+# ---------------------------------------------------------------------------
+# Civitai-compatible image saving
+#
+# Civitai identifies a checkpoint or LoRA by a hash of the file, not by its
+# name: AutoV2 is the first 10 hex characters of the file's SHA256. It reads
+# those hashes out of an A1111-style "parameters" text chunk, which is a
+# different dialect from ComfyUI's own "prompt"/"workflow" chunks. Writing both
+# lets one PNG satisfy Civitai and still reopen as a workflow.
+# ---------------------------------------------------------------------------
+
+CIVITAI_INFO_SUFFIX = ".civitai.info"
+AUTOV2_LENGTH = 10
+
+# Matches an A1111 LoRA tag: <lora:name:0.8>, tolerating a trailing clip weight.
+_LORA_TAG_RE = re.compile(r"<lora:([^:>]+):(-?[0-9]*\.?[0-9]+)[^>]*>", re.IGNORECASE)
+
+
+_hash_cache: dict[str, str] = {}
+_hash_cache_lock = threading.Lock()
+_hash_cache_loaded = False
+
+
+def _hash_cache_path() -> Optional[str]:
+    """Writable location for the hash cache, or None when running outside ComfyUI."""
+    try:
+        import folder_paths
+    except ImportError:
+        return None
+
+    for getter in ("get_user_directory", "get_output_directory", "get_temp_directory"):
+        resolve = getattr(folder_paths, getter, None)
+        if not callable(resolve):
+            continue
+        try:
+            base = resolve()
+        except Exception:
+            continue
+        if base and os.path.isdir(base):
+            return os.path.join(base, "warppipe_hashes.json")
+    return None
+
+
+def _load_hash_cache() -> None:
+    global _hash_cache_loaded
+    if _hash_cache_loaded:
+        return
+    _hash_cache_loaded = True
+
+    path = _hash_cache_path()
+    if not path or not os.path.isfile(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as handle:
+            stored = json.load(handle)
+        if isinstance(stored, dict):
+            _hash_cache.update({k: v for k, v in stored.items() if isinstance(v, str)})
+    except (OSError, ValueError) as exc:
+        logger.debug("Could not read hash cache: %s", exc)
+
+
+def _write_atomically(path: str, write) -> bool:
+    """Write through a temporary file in the same directory, then rename.
+
+    Writing straight to the destination leaves a half-finished file behind if
+    anything interrupts it - a crash, a full disk, ComfyUI being closed - and
+    the next reader finds truncated JSON or a torn image rather than nothing at
+    all. os.replace is atomic within a filesystem, so a reader sees either the
+    old file or the new one and never the middle of a write.
+    """
+    directory = os.path.dirname(path) or "."
+    temporary = os.path.join(directory, f".{os.path.basename(path)}.{uuid.uuid4().hex}.tmp")
+    try:
+        write(temporary)
+        os.replace(temporary, path)
+        return True
+    except Exception as exc:
+        logger.debug("Could not write %s: %s", path, exc)
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        return False
+
+
+def _persist_hash_cache() -> None:
+    path = _hash_cache_path()
+    if not path:
+        return
+
+    def write(temporary: str) -> None:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(_hash_cache, handle)
+
+    _write_atomically(path, write)
+
+
+def _cache_key(file_path: str) -> Optional[str]:
+    """Identify a file by path, size and mtime so a replaced file re-hashes."""
+    try:
+        stat = os.stat(file_path)
+    except OSError:
+        return None
+    return f"{os.path.abspath(file_path)}|{stat.st_size}|{int(stat.st_mtime)}"
+
+
+def sha256_file(file_path: str, chunk_size: int = 1024 * 1024) -> Optional[str]:
+    """SHA256 of a file, cached on disk. Returns None if the file cannot be read."""
+    key = _cache_key(file_path)
+    if key is None:
+        return None
+
+    with _hash_cache_lock:
+        _load_hash_cache()
+        cached = _hash_cache.get(key)
+    if cached:
+        return cached
+
+    digest = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(chunk_size), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        logger.warning("Could not hash %s: %s", file_path, exc)
+        return None
+
+    value = digest.hexdigest()
+    with _hash_cache_lock:
+        _hash_cache[key] = value
+        _persist_hash_cache()
+    return value
+
+
+def read_civitai_sidecar(file_path: str) -> Optional[dict[str, Any]]:
+    """Read the .civitai.info sidecar written by Civitai Updater and similar tools."""
+    base, _ = os.path.splitext(file_path)
+    sidecar = base + CIVITAI_INFO_SUFFIX
+    if not os.path.isfile(sidecar):
+        return None
+    try:
+        with open(sidecar, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError) as exc:
+        logger.debug("Could not read sidecar %s: %s", sidecar, exc)
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _sha256_from_sidecar(payload: dict[str, Any]) -> Optional[str]:
+    for entry in payload.get("files") or ():
+        if not isinstance(entry, dict):
+            continue
+        hashes = entry.get("hashes")
+        if isinstance(hashes, dict):
+            value = hashes.get("SHA256") or hashes.get("sha256")
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def model_autov2(file_path: Optional[str]) -> Optional[str]:
+    """AutoV2 for a model file: the sidecar's SHA256 when present, else hash it."""
+    if not file_path:
+        return None
+
+    payload = read_civitai_sidecar(file_path)
+    if payload:
+        sha = _sha256_from_sidecar(payload)
+        if sha:
+            return sha[:AUTOV2_LENGTH].lower()
+
+    sha = sha256_file(file_path)
+    return sha[:AUTOV2_LENGTH].lower() if sha else None
+
+
+def _resolve_model_path(folder: str, name: Optional[str]) -> Optional[str]:
+    if not name:
+        return None
+    try:
+        import folder_paths
+    except ImportError:
+        return None
+    try:
+        return folder_paths.get_full_path(folder, name)
+    except Exception as exc:
+        logger.debug("Could not resolve %s/%s: %s", folder, name, exc)
+        return None
+
+
+def _as_float(value: Any, default: float = 1.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def extract_lora_tags(text: Optional[str]) -> list[tuple[str, float]]:
+    """Pull <lora:name:weight> tags out of prompt text."""
+    if not isinstance(text, str):
+        return []
+    return [(m.group(1).strip(), _as_float(m.group(2))) for m in _LORA_TAG_RE.finditer(text)]
+
+
+# Model loaders are recognised by the input they carry rather than by class
+# name, so checkpoint, UNet/diffusion and GGUF loaders are all covered without
+# naming each pack. Each entry maps the input to the folder_paths keys to try.
+MODEL_INPUT_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("ckpt_name", ("checkpoints",)),
+    ("unet_name", ("diffusion_models", "unet")),
+    ("model_name", ("diffusion_models", "checkpoints")),
+)
+
+# Where a file has to live to be the model a picture is credited to. A LoRA, VAE
+# or CLIP resolves somewhere else, which is what tells them apart - the name of
+# the input it arrived in does not.
+MODEL_FOLDER_KEYS: tuple[str, ...] = ("checkpoints", "diffusion_models", "unet")
+
+MODEL_SUFFIXES: tuple[str, ...] = (
+    ".safetensors",
+    ".ckpt",
+    ".sft",
+    ".gguf",
+    ".pt",
+    ".pth",
+    ".bin",
+)
+
+
+def model_named_by(inputs: dict[str, Any]) -> Optional[str]:
+    """The model file a loader names, however that loader spells its input.
+
+    The three usual input names are tried first because they cost nothing. For
+    anything else the question is settled by where the file actually is: a name
+    that resolves inside the checkpoint, diffusion-model or UNet folders is a
+    model whatever its input is called, so a loader from a pack nobody has heard
+    of still records what it loaded.
+    """
+    for key, _folders in MODEL_INPUT_KEYS:
+        value = inputs.get(key)
+        if isinstance(value, str) and value and value.lower() != "none":
+            return value
+
+    for value in inputs.values():
+        if not isinstance(value, str) or not value or value.lower() == "none":
+            continue
+        if not value.lower().endswith(MODEL_SUFFIXES):
+            continue
+        if any(_resolve_model_path(folder, value) for folder in MODEL_FOLDER_KEYS):
+            return value
+    return None
+
+
+_SWITCH_INPUT_RE = re.compile(r"input(\d+)$")
+
+
+def _literal_int(graph: dict[str, Any], value: Any) -> Optional[int]:
+    """An integer written on the graph, directly or one link away.
+
+    A switch's selector is usually not a number sitting on the switch: it is
+    fed from a small constant node, so the link has to be followed to read it.
+    Only an unambiguous source counts - one number and no other - because
+    guessing which of several is the selector would be worse than not knowing.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, list) and value and isinstance(value[0], (str, int)):
+        source = graph.get(str(value[0]))
+        if isinstance(source, dict):
+            numbers = [
+                v
+                for v in (source.get("inputs") or {}).values()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            ]
+            if len(numbers) == 1:
+                return int(numbers[0])
+    return None
+
+
+def switch_choice(graph: dict[str, Any], node: dict[str, Any]) -> Optional[str]:
+    """For a node that picks one of its inputs at run time, the one it picks.
+
+    A switch names its inputs input1..inputN and carries a `select` saying which
+    is used. Every other branch is wired but never runs, so walking into them
+    collects models the picture never went through - which is how an upload ends
+    up credited with LoRAs from a pipeline that was switched off.
+
+    Returns None when the choice cannot be read, and the caller then follows
+    everything, as it always did. A wrong guess here would drop real resources,
+    so not knowing has to stay the safe answer.
+    """
+    inputs = node.get("inputs") or {}
+    numbered = [key for key in inputs if _SWITCH_INPUT_RE.fullmatch(key)]
+    if not numbered or "select" not in inputs:
+        return None
+    chosen = _literal_int(graph, inputs.get("select"))
+    if chosen is None:
+        return None
+    name = f"input{chosen}"
+    return name if name in inputs else None
+
+
+def trace_upstream(graph: dict[str, Any], start_id: Optional[str]) -> Optional[dict[str, int]]:
+    """Node ids that feed the given node, mapped to how far back each one is.
+
+    A large workflow holds many loaders behind switches and subgraphs; only the
+    ones upstream of the image being saved actually produced it. Returns None
+    when there is no usable starting point, meaning "consider the whole graph".
+
+    The distance matters once more than one loader is upstream - a refiner
+    behind a base, a model handed through a chain of patchers - because the
+    nearest one is the one that made this picture. Walking breadth-first is what
+    makes the number a distance rather than an accident of traversal.
+    """
+    if start_id is None or not isinstance(graph, dict):
+        return None
+
+    start = str(start_id)
+    if start not in graph:
+        return None
+
+    depth = {start: 0}
+    queue = deque([start])
+    while queue:
+        node_id = queue.popleft()
+        node = graph.get(node_id)
+        if not isinstance(node, dict):
+            continue
+        taken = switch_choice(graph, node)
+        for key, value in (node.get("inputs") or {}).items():
+            # The branches a switch did not take were never run.
+            if taken and _SWITCH_INPUT_RE.fullmatch(key) and key != taken:
+                continue
+            # A link is encoded as [source_node_id, output_index].
+            if isinstance(value, list) and value and isinstance(value[0], (str, int)):
+                feeder = str(value[0])
+                if feeder not in depth:
+                    depth[feeder] = depth[node_id] + 1
+                    queue.append(feeder)
+    return depth
+
+
+# What a loader might call the strength beside a lora_name. Order matters only
+# in that the first one present wins; a loader naming none of them gets 1.0.
+LORA_STRENGTH_KEYS: tuple[str, ...] = (
+    "strength_model",
+    "lora_model_strength",
+    "model_strength",
+    "model_str",
+    "strength",
+    "weight",
+)
+
+
+def _lora_strength(inputs: dict[str, Any], suffix: str = "") -> float:
+    """The model strength sitting beside a lora_name input.
+
+    Every pack spells it differently - strength_model, lora_model_strength,
+    model_str - and a stacker numbers them to match its slots. Reading only one
+    spelling records the right LoRA at the wrong weight, which is a quieter kind
+    of wrong than missing it.
+    """
+    for key in LORA_STRENGTH_KEYS:
+        value = inputs.get(key + suffix)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return 1.0
+
+
+def collect_graph_resources(
+    prompt_graph: Optional[dict[str, Any]],
+    start_id: Optional[str] = None,
+) -> tuple[Optional[str], list[tuple[str, float]]]:
+    """Find the model and LoRAs that produced the image being saved.
+
+    Handles ComfyUI's own loaders, UNet/diffusion and GGUF loaders, loaders from
+    packs nobody here has heard of, and the stacked slot format used by rgthree's
+    Power Lora Loader. When start_id is given, only nodes upstream of it are
+    considered, so unrelated branches of a large workflow do not contribute.
+    """
+    loras: list[tuple[str, float]] = []
+    # (distance from the saved image, name) - the nearest loader wins, so a
+    # refiner sitting in front of a base is the one recorded.
+    found_models: list[tuple[int, str]] = []
+
+    if not isinstance(prompt_graph, dict):
+        return None, loras
+
+    upstream = trace_upstream(prompt_graph, start_id)
+    distance = upstream or {}
+    for node_id, node in prompt_graph.items():
+        if upstream is not None and str(node_id) not in upstream:
+            continue
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+
+        named = model_named_by(inputs)
+        if named is not None:
+            found_models.append((distance.get(str(node_id), 0), named))
+
+        # One LoRA per loader, or several numbered ones per stacker: the
+        # Efficiency-style nodes name them lora_name_1, lora_name_2 and put the
+        # matching strength at model_str_1 and so on. Reading only the unnumbered
+        # spelling found nothing at all in those.
+        for key, name in inputs.items():
+            if key != "lora_name" and not key.startswith("lora_name_"):
+                continue
+            if not isinstance(name, str) or not name or name.lower() == "none":
+                continue
+            suffix = key[len("lora_name") :]
+            loras.append((name, _lora_strength(inputs, suffix)))
+
+        # Nodes that take LoRAs as <lora:name:weight> in their text - this pack's
+        # Prompt + LoRAs node, and power-prompt nodes from other packs - keep the
+        # tags in a plain string input, so the graph still records what was used.
+        #
+        # Comments go first, for the same reason they do everywhere else: a tag
+        # behind a // was switched off and never loaded, and crediting it in the
+        # metadata would describe an image that was not made.
+        for value in inputs.values():
+            if isinstance(value, str) and "<lora:" in value.lower():
+                loras.extend(extract_lora_tags(strip_comments(value)))
+
+        # Stacked loaders keep one dict per slot, e.g. {"lora": ..., "on": ...}.
+        for value in inputs.values():
+            if not isinstance(value, dict):
+                continue
+            slot = value.get("lora")
+            if not isinstance(slot, str) or not slot or slot.lower() == "none":
+                continue
+            if value.get("on") is False:
+                continue
+            loras.append((slot, _as_float(value.get("strength"))))
+
+    deduped: list[tuple[str, float]] = []
+    seen: set[str] = set()
+    for name, weight in loras:
+        if name not in seen:
+            seen.add(name)
+            deduped.append((name, weight))
+
+    # Nearest first; ties fall to whichever the graph listed first. Keying on
+    # the distance alone is what makes that true - min() is stable, whereas
+    # comparing whole tuples would break ties on the filename and credit
+    # whichever model happens to sort first.
+    model_name = min(found_models, key=lambda found: found[0])[1] if found_models else None
+    return model_name, deduped
+
+
+def resolve_model_file(name: Optional[str]) -> Optional[str]:
+    """Locate a model file across the folder types different loaders use."""
+    if not name:
+        return None
+    for _key, folders in MODEL_INPUT_KEYS:
+        for folder in folders:
+            path = _resolve_model_path(folder, name)
+            if path:
+                return path
+    return None
+
+
+def _lora_display_name(name: str) -> str:
+    """Civitai shows the bare filename, without folders or extension."""
+    return os.path.splitext(os.path.basename(name))[0]
+
+
+def build_civitai_parameters(
+    positive: str = "",
+    negative: str = "",
+    steps: Optional[int] = None,
+    sampler_name: Optional[str] = None,
+    scheduler: Optional[str] = None,
+    cfg: Optional[float] = None,
+    seed: Optional[int] = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    model_name: Optional[str] = None,
+    model_hash: Optional[str] = None,
+    loras: Optional[list[tuple[str, float, Optional[str]]]] = None,
+) -> str:
+    """Assemble the A1111-style parameters block that Civitai parses."""
+    loras = loras or []
+    positive = positive or ""
+
+    # A1111 carries LoRAs as tags in the prompt. Only add ones not already there,
+    # so prompts that already use tag syntax are not duplicated.
+    existing = {name.lower() for name, _ in extract_lora_tags(positive)}
+    additions = [
+        f"<lora:{display}:{weight:g}>"
+        for display, weight, _ in loras
+        if display.lower() not in existing
+    ]
+    if additions:
+        positive = " ".join([positive.strip(), *additions]).strip()
+
+    fields: list[tuple[str, Any]] = [
+        ("Steps", steps),
+        ("Sampler", sampler_name),
+        ("Schedule type", scheduler),
+        ("CFG scale", cfg),
+        ("Seed", seed),
+        ("Size", f"{width}x{height}" if width and height else None),
+        ("Model hash", model_hash),
+        ("Model", os.path.splitext(os.path.basename(model_name))[0] if model_name else None),
+    ]
+
+    hashed = [(display, sha) for display, _, sha in loras if sha]
+    if hashed:
+        pairs = ", ".join(f"{display}: {sha}" for display, sha in hashed)
+        fields.append(("Lora hashes", '"' + pairs + '"'))
+
+    # The field Civitai actually links resources from. "Lora hashes" above is
+    # A1111's additional-networks convention, and Civitai's own extension does
+    # not write it - it writes this, keyed "model", "lora:<name>", "embed:<name>".
+    # Writing only the other one is why an upload would name its checkpoint and
+    # credit none of its LoRAs: the checkpoint is read from "Model hash", which
+    # both conventions agree on, and the LoRAs were never anywhere it looked.
+    hashes: dict[str, str] = {}
+    if model_hash:
+        hashes["model"] = model_hash
+    for display, sha in hashed:
+        hashes[f"lora:{display}"] = sha
+    if hashes:
+        fields.append(("Hashes", json.dumps(hashes, separators=(",", ":"))))
+
+    fields.append(("Version", "ComfyUI-WarpPipe"))
+
+    rendered = ", ".join(f"{key}: {value}" for key, value in fields if value not in (None, ""))
+
+    lines = [positive]
+    if negative:
+        lines.append("Negative prompt: " + negative)
+    lines.append(rendered)
+    return "\n".join(lines)
+
+
+def trigger_words_in(payload: Optional[dict[str, Any]]) -> list[str]:
+    """Trigger words out of a sidecar that has already been read.
+
+    Split from the reading so a caller holding the payload does not open and
+    parse the same file a second time. Indexing a library is thousands of these.
+    """
+    if not payload:
+        return []
+
+    words: list[str] = []
+    for entry in payload.get("trainedWords") or ():
+        if not isinstance(entry, str):
+            continue
+        # Civitai often packs several comma-separated words into one entry.
+        words.extend(part.strip() for part in entry.split(",") if part.strip())
+    return words
+
+
+def civitai_trigger_words(file_path: Optional[str]) -> list[str]:
+    """Trigger words for a model, from its .civitai.info sidecar."""
+    if not file_path:
+        return []
+    return trigger_words_in(read_civitai_sidecar(file_path))
+
+
+def available_loras() -> list[str]:
+    try:
+        import folder_paths
+
+        return list(folder_paths.get_filename_list("loras"))
+    except Exception:
+        return []
+
+
+class LoraTagError(ValueError):
+    """A LoRA tag names no file, or names too many."""
+
+
+def _normalise(value: str) -> str:
+    """Compare paths without caring about slash direction or case."""
+    return value.replace("\\", "/").strip().lower()
+
+
+def resolve_lora_name(
+    query: str,
+    candidates: Optional[list[str]] = None,
+    strict: bool = False,
+) -> Optional[str]:
+    """Match what a tag names against the LoRAs on disk.
+
+    Tried in order: the full name, the filename without folder or extension,
+    then a unique substring. A folder prefix disambiguates, which matters: a
+    real collection here holds 24 files whose names all contain "secret sauce",
+    so a bare fragment cannot identify one.
+
+    With strict=True an unresolvable tag raises instead of returning None, so a
+    typo fails the run rather than silently producing an image without the LoRA.
+    An empty library is the exception: "there is no such file" cannot be told
+    from "I could not look", and failing a run over the second would be wrong.
+    """
+    if not query or not query.strip():
+        return None
+    names = available_loras() if candidates is None else candidates
+    if not names:
+        return None
+
+    wanted = _normalise(query)
+
+    for name in names:
+        if _normalise(name) == wanted:
+            return name
+
+    for name in names:
+        stem = _normalise(os.path.splitext(os.path.basename(name))[0])
+        if stem == wanted:
+            return name
+
+    # A folder-qualified fragment, e.g. "sdxl/secret sauce".
+    suffix = [name for name in names if _normalise(name).startswith(wanted)]
+    if len(suffix) == 1:
+        return suffix[0]
+
+    partial = [name for name in names if wanted in _normalise(name)]
+    if len(partial) == 1:
+        return partial[0]
+
+    # Fall back to matching every word separately, so a folder and a fragment
+    # can be combined even though the creator's name sits between them:
+    # "anima/grabbing breasts" finds "anima/bolero537 - grabbing breasts (anima)".
+    terms = wanted.replace("/", " ").split()
+    if len(terms) > 1:
+        every = [name for name in names if all(term in _normalise(name) for term in terms)]
+        if len(every) == 1:
+            return every[0]
+        if every:
+            partial = every
+
+    if partial:
+        shown = ", ".join(os.path.basename(name) for name in partial[:4])
+        more = f" and {len(partial) - 4} more" if len(partial) > 4 else ""
+        message = (
+            f"LoRA tag '{query}' matches {len(partial)} files ({shown}{more}). "
+            "Add the folder or more of the name to pick one."
+        )
+    else:
+        message = f"LoRA tag '{query}' matches no file in the loras folder."
+        # With hundreds of LoRAs installed a typo is the likeliest cause, so
+        # point at the nearest names rather than leaving a dead end.
+        # Compare against whole names and their dash-separated parts, so a typo
+        # in a short fragment ("fake breast slidr") still finds its file.
+        keys: dict[str, str] = {}
+        for name in names:
+            stem = os.path.splitext(os.path.basename(name))[0]
+            keys.setdefault(stem, stem)
+            for part in stem.split(" - "):
+                keys.setdefault(part.strip(), stem)
+        close = difflib.get_close_matches(query.strip(), list(keys), n=5, cutoff=0.7)
+        suggestions: list[str] = []
+        for key in close:
+            full = keys[key]
+            if full not in suggestions:
+                suggestions.append(full)
+        if suggestions:
+            message += " Did you mean: " + "; ".join(suggestions[:3]) + "?"
+
+    if strict:
+        raise LoraTagError(message)
+    logger.warning("%s", message)
+    return None
+
+
+# Everything from // to the end of the line is a note to yourself.
+_COMMENT_RE = re.compile(r"//[^\n]*")
+# Tidy-ups applied after removing tags and comments, in order.
+# Every pattern here is deliberately newline-blind: blank lines are part of how
+# a prompt was laid out, and a rule written with \s would eat them whenever the
+# next line happened to start with a comma.
+_TIDY = (
+    (re.compile(r"[ \t]+"), " "),  # runs of spaces
+    (re.compile(r"[ \t]+([,.;:!?])"), r"\1"),  # space stranded before punctuation
+    (re.compile(r"(,[ \t]*){2,}"), ", "),  # commas left adjacent by a removal
+    (re.compile(r"\n{3,}"), "\n\n"),  # never more than one blank line
+    (re.compile(r"^[\s,]+|[\s,]+$"), ""),  # leading and trailing debris
+)
+
+
+def strip_comments(text: Optional[str]) -> str:
+    """Remove // notes. They are for the person writing the prompt, not the model."""
+    if not isinstance(text, str):
+        return ""
+    return _COMMENT_RE.sub("", text)
+
+
+def strip_lora_tags(text: Optional[str]) -> str:
+    """Remove <lora:...> tags, leaving the prompt that should be encoded."""
+    if not isinstance(text, str):
+        return ""
+    return _LORA_TAG_RE.sub("", text)
+
+
+def clean_prompt(text: Optional[str]) -> str:
+    """The prompt as the encoder should see it: no tags, no notes, no debris.
+
+    Removing a tag from the middle of a sentence leaves gaps behind it - a space
+    before a comma, or two commas in a row - so the text is tidied afterwards.
+    """
+    if not isinstance(text, str):
+        return ""
+    cleaned = strip_lora_tags(strip_comments(text))
+    # Blank lines are how a long prompt is kept readable, so the ones that were
+    # written stay - at most one in a row. A line that held only a note or only
+    # a tag was never blank, and must not become one: the prompt would then be
+    # spaced out differently every time a tag was added or moved.
+    #
+    # Neither strip removes a newline, so the two still line up and can be read
+    # side by side to tell those cases apart.
+    kept: list[str] = []
+    for original, line in zip(text.splitlines(), cleaned.splitlines()):
+        body = line.strip()
+        if body:
+            kept.append(body)
+        elif not original.strip() and kept and kept[-1] != "":
+            kept.append("")
+    cleaned = "\n".join(kept)
+    for pattern, replacement in _TIDY:
+        cleaned = pattern.sub(replacement, cleaned)
+    return cleaned.strip()
+
+
+class WarpLoraPrompt:
+    CATEGORY = "Custom/WarpPipe Nodes"
+    FUNCTION = "apply"
+    DESCRIPTION = "Write the prompt and its LoRAs in one place, A1111 style"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": (
+                    "STRING",
+                    {
+                        "multiline": True,
+                        "default": "",
+                        "placeholder": "a portrait, dramatic lighting <lora:detail tweaker:0.8>",
+                        "tooltip": (
+                            "The prompt. LoRAs go inline as <lora:name:weight>, and "
+                            "anything after // is a note that is not sent."
+                        ),
+                    },
+                ),
+                # Many architectures ship model-only LoRAs, where patching CLIP
+                # does nothing; SDXL-era ones usually carry text-encoder weights.
+                "apply_to_clip": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "label_on": "model + CLIP",
+                        "label_off": "model only",
+                    },
+                ),
+            },
+            "optional": {
+                # Written by the node's interface rather than by hand: keeping
+                # the LoRA list out of the prompt means the prompt stays prose.
+                # Tags typed directly into the prompt still work.
+                "loras": ("STRING", {"default": "", "multiline": False}),
+                "model": ("MODEL", {}),
+                "clip": ("CLIP", {}),
+            },
+        }
+
+    # No warp of its own. Assembling one is what the Warp node is for, and it
+    # takes this node's model, clip and prompt like anything else's - one place
+    # that builds warps rather than two that disagree about what is in them.
+    RETURN_TYPES = ("MODEL", "CLIP", "STRING")
+    RETURN_NAMES = ("model", "clip", "prompt")
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs) -> str:
+        return _fingerprint_inputs(kwargs)
+
+    def plan(
+        self, text: str, strict: bool = False, loras: str = ""
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """Work out which LoRAs a prompt asks for, without loading anything.
+
+        Returns the resolved LoRAs and any trigger words they declare, so the
+        parsing can be tested without a ComfyUI runtime.
+        """
+        candidates = available_loras()
+        resolved: list[dict[str, Any]] = []
+        trigger_words: list[str] = []
+        seen: set[str] = set()
+
+        # Comments are stripped here rather than by the caller: a commented tag
+        # is one switched off, and forgetting that in any one call site would
+        # quietly load a LoRA the user had disabled.
+        # The list the interface maintains, then any tags typed into the prompt.
+        wanted = extract_lora_tags(strip_comments(loras)) + extract_lora_tags(strip_comments(text))
+        for query, weight in wanted:
+            if query.lower() in seen:
+                continue
+            seen.add(query.lower())
+            name = resolve_lora_name(query, candidates, strict=strict)
+            if name is None:
+                continue
+            path = _resolve_model_path("loras", name)
+            resolved.append(
+                {
+                    "query": query,
+                    "name": name,
+                    "path": path,
+                    "weight": weight,
+                    "display": _lora_display_name(name),
+                    "hash": model_autov2(path),
+                }
+            )
+            for word in civitai_trigger_words(path):
+                if word not in trigger_words:
+                    trigger_words.append(word)
+
+        return resolved, trigger_words
+
+    def apply(
+        self,
+        text: str = "",
+        apply_to_clip: bool = True,
+        loras: str = "",
+        model: Optional[Any] = None,
+        clip: Optional[Any] = None,
+    ) -> tuple:
+        # A tag that cannot be resolved fails the run: generating without a
+        # LoRA the prompt asked for produces a wrong image and wrong metadata.
+        resolved, _ = self.plan(text, strict=True, loras=loras)
+
+        # Nothing is added to the prompt. Trigger words are put in by hand, with
+        # Tab on a tag or from the strip, where they can be read, placed and
+        # edited like the rest of the prompt. Appending them here as well would
+        # send words the writer never saw - and some creators put whole
+        # sentences in trainedWords, so that is not a small addition.
+        prompt = clean_prompt(text)
+
+        for entry in resolved:
+            if entry["path"] is None:
+                continue
+            if model is None and clip is None:
+                break
+            try:
+                import comfy.sd
+                import comfy.utils
+
+                lora, metadata = comfy.utils.load_torch_file(
+                    entry["path"], safe_load=True, return_metadata=True
+                )
+                # Passing clip=None patches the model alone and returns None for
+                # the clip, so the untouched one is kept.
+                patched_model, patched_clip = comfy.sd.load_lora_for_models(
+                    model,
+                    clip if apply_to_clip else None,
+                    lora,
+                    entry["weight"],
+                    entry["weight"] if apply_to_clip else 0.0,
+                    lora_metadata=metadata,
+                )
+                model = patched_model
+                if patched_clip is not None:
+                    clip = patched_clip
+            except Exception as exc:
+                logger.warning("Could not apply LoRA %s: %s", entry["name"], exc)
+
+        return (model, clip, prompt)
+
+
+# ComfyUI's server expands %year%, %month% and friends, but the %date:FORMAT%
+# form is substituted by its frontend, so it never reaches a prompt sent over the
+# API. Expanding it here means the same prefix behaves the same either way.
+_DATE_TOKEN_RE = re.compile(r"%date:([^%]*)%")
+
+# .NET-style field letters, as used by A1111 and ComfyUI. Case matters: MM is the
+# month, mm the minute.
+_DATE_FIELDS = {
+    "yyyy": lambda t: f"{t.tm_year:04d}",
+    "yy": lambda t: f"{t.tm_year % 100:02d}",
+    "MM": lambda t: f"{t.tm_mon:02d}",
+    "dd": lambda t: f"{t.tm_mday:02d}",
+    "hh": lambda t: f"{t.tm_hour:02d}",
+    "mm": lambda t: f"{t.tm_min:02d}",
+    "ss": lambda t: f"{t.tm_sec:02d}",
+}
+
+# Longest first, so yyyy is not consumed as two yy.
+_DATE_FIELD_RE = re.compile("|".join(sorted(_DATE_FIELDS, key=len, reverse=True)))
+
+# Illegal in a Windows filename. Slashes are left alone: ComfyUI reads them as
+# subfolders, so %date:yyyy/MM% usefully files output by month.
+_ILLEGAL_IN_FILENAME = str.maketrans({c: "-" for c in '<>:"|?*'})
+
+
+def format_date_pattern(pattern: str, now: Optional[time.struct_time] = None) -> str:
+    """Render one %date:...% body, e.g. "yy-MM-dd hh-mm-ss" -> "26-08-28 17-28-56"."""
+    stamp = now or time.localtime()
+    rendered = _DATE_FIELD_RE.sub(lambda m: _DATE_FIELDS[m.group(0)](stamp), pattern)
+    return rendered.translate(_ILLEGAL_IN_FILENAME)
+
+
+def expand_filename_prefix(prefix: str, now: Optional[time.struct_time] = None) -> str:
+    """Expand every %date:FORMAT% in a filename prefix."""
+    if not prefix or "%date:" not in prefix:
+        return prefix
+    stamp = now or time.localtime()
+    return _DATE_TOKEN_RE.sub(lambda m: format_date_pattern(m.group(1), stamp), prefix)
+
+
+# ---------------------------------------------------------------------------
+# LoRA library index and thumbnails
+#
+# Preview images sit next to the model files and are full generations: in the
+# collection this was built against, 624 of them totalling about a gigabyte, a
+# median of 1.27 MB each. A browser cannot load those, so they are cached down
+# to small WebP thumbnails on first request - measured at 20 ms and 8 KB each.
+# ---------------------------------------------------------------------------
+
+THUMBNAIL_SIZE = 320
+THUMBNAIL_QUALITY = 80
+
+PREVIEW_EXTENSIONS = (
+    ".preview.png",
+    ".preview.jpg",
+    ".preview.jpeg",
+    ".preview.webp",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+)
+
+# "creator - name - version (base).safetensors" is the convention this indexes.
+# Anything that does not match keeps its whole stem as the name.
+_BASE_TAIL_RE = re.compile(r"\s*\(([^()]+)\)\s*$")
+_VERSION_RE = re.compile(r"^(v[\d.]+\S*|beta|alpha|final|nano|slim|low|high|full|exp)\b", re.I)
+
+
+def parse_lora_filename(name: str) -> dict[str, Optional[str]]:
+    """Split a LoRA filename into the parts worth showing separately."""
+    folder = ""
+    normalised = name.replace("\\", "/")
+    if "/" in normalised:
+        folder = normalised.rsplit("/", 1)[0].split("/")[0]
+
+    stem = os.path.splitext(os.path.basename(normalised))[0]
+
+    tail = None
+    match = _BASE_TAIL_RE.search(stem)
+    if match:
+        tail = match.group(1).strip()
+        stem = stem[: match.start()].strip()
+
+    parts = [part.strip() for part in stem.split(" - ") if part.strip()]
+    creator = version = None
+    if len(parts) >= 2:
+        creator = parts[0]
+        parts = parts[1:]
+    if len(parts) >= 2 and _VERSION_RE.match(parts[-1]):
+        version = parts[-1]
+        parts = parts[:-1]
+
+    return {
+        "folder": folder,
+        "creator": creator,
+        "name": " - ".join(parts) if parts else stem,
+        "version": version,
+        "tagged_base": tail,
+    }
+
+
+def normalise_base_model(value: Optional[str]) -> Optional[str]:
+    """Tidy Civitai's base-model spellings without merging distinct ones.
+
+    The same base is written several ways ("Flux.2 Klein 9B" and
+    "Flux.2 Klein 9B-base"), but neighbouring names are genuinely different
+    models, so only trivial variants are folded together - never whole families.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    cleaned = re.sub(r"\s+", " ", value.strip())
+    cleaned = re.sub(r"[-\s]*base$", "", cleaned, flags=re.I)
+    return cleaned or None
+
+
+def base_model_of(file_path: Optional[str]) -> Optional[str]:
+    """The base model a file declares in its sidecar, if it has one."""
+    payload = read_civitai_sidecar(file_path) if file_path else None
+    return normalise_base_model(_sidecar_base_model(payload))
+
+
+def find_model_path(name: str) -> Optional[str]:
+    """Locate a model by name across the folders different loaders use."""
+    for folder in ("loras", "checkpoints", "diffusion_models", "unet", "embeddings"):
+        path = _resolve_model_path(folder, name)
+        if path:
+            return path
+    return None
+
+
+def lora_preview_path(model_path: Optional[str]) -> Optional[str]:
+    """The preview image sitting beside a model file, if there is one."""
+    if not model_path:
+        return None
+    base = os.path.splitext(model_path)[0]
+    for extension in PREVIEW_EXTENSIONS:
+        candidate = base + extension
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _sidecar_title(payload: Optional[dict[str, Any]]) -> Optional[str]:
+    """The name Civitai gives the model, which beats guessing from a filename."""
+    model = (payload or {}).get("model")
+    name = model.get("name") if isinstance(model, dict) else None
+    return name if isinstance(name, str) and name.strip() else None
+
+
+# Where a model's page lives. Adult models are on civitai.red, and a link to
+# .com for one of those does not arrive anywhere useful. The .red domain serves
+# everything else too - checked against a model flagged as safe - so one host
+# covers both rather than guessing from a sidecar's maturity flag, which 136 of
+# 1884 files in a real collection do not carry at all.
+CIVITAI_SITE = "https://civitai.red"
+
+
+def _civitai_url(payload: Optional[dict[str, Any]]) -> Optional[str]:
+    """The page this file came from, so a row can link back to it."""
+    model_id = (payload or {}).get("modelId")
+    version_id = (payload or {}).get("id")
+    if not isinstance(model_id, int):
+        return None
+    url = f"{CIVITAI_SITE}/models/{model_id}"
+    return f"{url}?modelVersionId={version_id}" if isinstance(version_id, int) else url
+
+
+def _sidecar_base_model(payload: Optional[dict[str, Any]]) -> Optional[str]:
+    if not payload:
+        return None
+    value = payload.get("baseModel")
+    return value if isinstance(value, str) and value else None
+
+
+def _thumbnail_dir() -> Optional[str]:
+    cache = _hash_cache_path()
+    if not cache:
+        return None
+    directory = os.path.join(os.path.dirname(cache), "warppipe_thumbs")
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except OSError:
+        return None
+    return directory
+
+
+def thumbnail_for(preview_path: str) -> Optional[str]:
+    """Path to a cached thumbnail, building it on first request.
+
+    Keyed by path, size and mtime, so replacing a preview refreshes it.
+    """
+    key = _cache_key(preview_path)
+    if key is None:
+        return None
+
+    directory = _thumbnail_dir()
+    if directory is None:
+        return None
+
+    cached = os.path.join(directory, hashlib.sha256(key.encode()).hexdigest()[:32] + ".webp")
+    if os.path.isfile(cached):
+        return cached
+
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+
+    try:
+        with Image.open(preview_path) as image:
+            image.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE))
+            small = image.convert("RGB")
+    except Exception as exc:
+        logger.warning("Could not thumbnail %s: %s", preview_path, exc)
+        return None
+
+    # A grid of cards asks for every uncached thumbnail at once, so two requests
+    # for the same one arrive together routinely. Writing in place would let one
+    # of them serve the half-written file the other is still saving.
+    def write(temporary: str) -> None:
+        small.save(temporary, "WEBP", quality=THUMBNAIL_QUALITY)
+
+    return cached if _write_atomically(cached, write) else None
+
+
+def available_models(folder_key: str) -> list[str]:
+    try:
+        import folder_paths
+
+        return list(folder_paths.get_filename_list(folder_key))
+    except Exception:
+        return []
+
+
+def embedding_index() -> list[dict[str, Any]]:
+    """Embeddings, in the same shape as the LoRA index.
+
+    An embedding is used by writing embedding:name in the prompt, so "insert"
+    means something different, but everything the browser shows is the same.
+    """
+    return model_index("embeddings")
+
+
+def lora_index() -> list[dict[str, Any]]:
+    return model_index("loras")
+
+
+def model_index(folder_key: str = "loras") -> list[dict[str, Any]]:
+    """Everything the browser needs to list a library, without any image data."""
+    entries: list[dict[str, Any]] = []
+    for name in available_models(folder_key):
+        path = _resolve_model_path(folder_key, name)
+        payload = read_civitai_sidecar(path) if path else None
+        parsed = parse_lora_filename(name)
+        has_preview = lora_preview_path(path) is not None
+        entries.append(
+            {
+                # The exact string a tag must contain.
+                "id": name,
+                "folder": parsed["folder"],
+                "creator": parsed["creator"],
+                "name": parsed["name"],
+                "version": parsed["version"],
+                # What the filename claims, and what Civitai recorded.
+                "tagged_base": parsed["tagged_base"],
+                "base_model": normalise_base_model(_sidecar_base_model(payload)),
+                # True when the filename actually followed a
+                # "creator - name - version" shape. Anything else keeps its
+                # whole stem as the name, and callers should not pretend
+                # otherwise.
+                "structured": parsed["creator"] is not None,
+                # What Civitai calls it, when we know. Portable in a way a
+                # filename convention is not.
+                "title": _sidecar_title(payload),
+                "url": _civitai_url(payload),
+                # Read from the payload already in hand. Calling
+                # civitai_trigger_words here re-opened and re-parsed the same
+                # sidecar, doubling the file reads for the whole library.
+                "triggers": trigger_words_in(payload),
+                "has_preview": has_preview,
+                # The server owns URL construction; the client just uses it.
+                "kind": folder_key,
+                "thumbnail": (
+                    "/warppipe/lora/thumbnail?name="
+                    + urllib.parse.quote(name)
+                    + "&kind="
+                    + urllib.parse.quote(folder_key)
+                    if has_preview
+                    else None
+                ),
+            }
+        )
+    return entries
+
+
+def _register_routes() -> None:
+    """Expose the index and thumbnails to the frontend, when running in ComfyUI."""
+    try:
+        from aiohttp import web
+        from server import PromptServer
+    except ImportError:
+        return
+
+    instance = getattr(PromptServer, "instance", None)
+    routes = getattr(instance, "routes", None)
+    if routes is None:
+        return
+
+    @routes.get("/warppipe/loras")
+    async def _loras(request):
+        return web.json_response({"loras": lora_index()})
+
+    @routes.get("/warppipe/embeddings")
+    async def _embeddings(request):
+        return web.json_response({"embeddings": embedding_index()})
+
+    @routes.get("/warppipe/model/base")
+    async def _model_base(request):
+        """The base model of an arbitrary model file, for matching LoRAs to it."""
+        name = request.query.get("name", "")
+        path = find_model_path(name)
+        return web.json_response(
+            {"name": name, "base_model": base_model_of(path), "found": bool(path)}
+        )
+
+    @routes.get("/warppipe/lora/thumbnail")
+    async def _thumbnail(request):
+        name = request.query.get("name", "")
+        kind = request.query.get("kind", "loras")
+        if kind not in {"loras", "embeddings"}:
+            return web.Response(status=400, text="unknown kind")
+        # Resolving through folder_paths is what keeps this to configured
+        # model folders; an arbitrary path can never be requested.
+        path = _resolve_model_path(kind, name)
+        preview = lora_preview_path(path)
+        if not preview:
+            return web.Response(status=404, text="no preview")
+
+        # The thumbnail is capped at 320px, which is a card. Looking properly at
+        # a preview wants the file itself, so one is served on request - still
+        # only ever a preview beside a configured model.
+        if request.query.get("full") == "1":
+            return web.FileResponse(preview, headers={"Cache-Control": "max-age=86400"})
+
+        cached = thumbnail_for(preview)
+        if not cached:
+            return web.Response(status=404, text="no thumbnail")
+        return web.FileResponse(cached, headers={"Cache-Control": "max-age=86400"})
+
+    logger.info("WarpPipe LoRA library routes registered")
+
+
+try:
+    _register_routes()
+except Exception as exc:
+    logger.warning("Could not register WarpPipe library routes: %s", exc)
+
+
+# What a saved file can be. PNG carries text chunks, which is where both the
+# generation info and the workflow go. JPEG has no such thing: the generation
+# info goes in EXIF, which Civitai reads too, and the workflow has nowhere to
+# live at all.
+FILE_FORMATS: dict[str, dict[str, Any]] = {
+    "png": {"suffix": "png", "pillow": "PNG", "carries_workflow": True},
+    "jpeg": {"suffix": "jpg", "pillow": "JPEG", "carries_workflow": False},
+}
+JPEG_QUALITY = 95
+
+
+def exif_with_parameters(parameters: str) -> bytes:
+    """EXIF holding the generation info the way A1111 writes it.
+
+    UserComment is an UNDEFINED field: an eight-byte encoding name, then the
+    text. A1111 uses UNICODE, meaning UTF-16 big-endian, and that is what every
+    reader of these files expects to find - Civitai included.
+    """
+    from PIL import Image
+
+    exif = Image.Exif()
+    exif[0x9286] = b"UNICODE\0" + parameters.encode("utf-16-be")
+    return exif.tobytes()
+
+
+class SaveImageCivitai:
+    CATEGORY = "Custom/WarpPipe Nodes"
+    FUNCTION = "save_images"
+    OUTPUT_NODE = True
+    RETURN_TYPES = ()
+    RETURN_NAMES = ()
+    DESCRIPTION = "Save images with Civitai-readable generation metadata"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "filename_prefix": (
+                    "STRING",
+                    {
+                        "default": "WarpPipe",
+                        "tooltip": (
+                            "Supports %date:yy-MM-dd hh-mm-ss% and ComfyUI's own "
+                            "%width%/%height%. A slash makes a subfolder."
+                        ),
+                    },
+                ),
+                # Two separate things went into one toggle before, and they are
+                # wanted separately: the parameters block is what a site reads
+                # to credit the model and the LoRAs, while the workflow is your
+                # whole pipeline - every node, every path - which you may not
+                # want to publish with the picture.
+                "embed_metadata": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "label_on": "generation info",
+                        "label_off": "no generation info",
+                        "tooltip": (
+                            "The prompt, seed, sampler, model and LoRA hashes, "
+                            "written the way Civitai and A1111 read them."
+                        ),
+                    },
+                ),
+                "embed_workflow": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "label_on": "workflow",
+                        "label_off": "no workflow",
+                        "tooltip": (
+                            "The whole ComfyUI graph, so the image can be dragged "
+                            "back in to rebuild it. Also reveals it to anyone you "
+                            "send the file to. PNG only - JPEG has nowhere to put it."
+                        ),
+                    },
+                ),
+                "file_format": (
+                    list(FILE_FORMATS),
+                    {
+                        "default": "png",
+                        "tooltip": (
+                            "PNG is lossless and holds the workflow. JPEG is much "
+                            "smaller and keeps the generation info in EXIF, which "
+                            "Civitai reads, but cannot carry the workflow."
+                        ),
+                    },
+                ),
+                "preview": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "label_on": "show the images",
+                        "label_off": "save quietly",
+                        "tooltip": "Whether the saved images appear on the node.",
+                    },
+                ),
+            },
+            "optional": {
+                # Optional so that bypassing an upstream branch leaves this node
+                # idle instead of failing the whole prompt with a missing input.
+                "images": ("IMAGE", {}),
+                "warp": ("WARPPIPE", {}),
+            },
+            "hidden": {
+                "prompt": "PROMPT",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+                "unique_id": "UNIQUE_ID",
+            },
+        }
+
+    def _warp_values(self, warp: Optional[dict[str, Any]]) -> dict[str, Any]:
+        if not isinstance(warp, dict) or "id" not in warp:
+            return {}
+        with _storage_lock:
+            stored = warp_storage.get(warp["id"])
+        return dict(stored) if isinstance(stored, dict) else {}
+
+    def build_metadata(
+        self,
+        warp: Optional[dict[str, Any]] = None,
+        prompt: Optional[dict[str, Any]] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        unique_id: Optional[str] = None,
+    ) -> str:
+        """Resolve every resource and return the parameters block.
+
+        Kept separate from saving so it can be exercised without an image or a
+        filesystem.
+        """
+        values = self._warp_values(warp)
+        graph_model, graph_loras = collect_graph_resources(prompt, start_id=unique_id)
+
+        positive = values.get("prompt_positive") or ""
+        negative = values.get("prompt_negative") or ""
+
+        # Every LoRA comes from the graph. Prompt + LoRAs needs no special case:
+        # its tags live in a text widget, which the scan reads like any other.
+        tagged = extract_lora_tags(positive)
+        combined = list(graph_loras)
+        known = {name.lower() for name, _ in combined}
+        combined.extend((n, w) for n, w in tagged if n.lower() not in known)
+
+        loras = []
+        candidates = available_loras()
+        # An empty listing means the library could not be read at all, and
+        # "this file is missing" cannot be told from "I cannot look". Only
+        # when the library did answer is an unresolvable name really absent.
+        library_answered = bool(candidates)
+        for name, weight in combined:
+            # A tag may hold a fragment rather than a full filename.
+            resolved = resolve_lora_name(name, candidates) or name
+            path = _resolve_model_path("loras", resolved)
+            if path is None and library_answered:
+                # A workflow can name a file that is not there - a folder
+                # renamed, a version replaced - and the loader will not have
+                # applied it. Recording it anyway credits a resource this
+                # picture never saw, which is worse than leaving it out.
+                logger.warning(
+                    "Save Image (Civitai): the workflow names %s, which is not in "
+                    "the LoRA folder, so it was not applied and is left out of the "
+                    "metadata.",
+                    name,
+                )
+                continue
+            loras.append((_lora_display_name(resolved), weight, model_autov2(path)))
+
+        checkpoint_hash = model_autov2(resolve_model_file(graph_model))
+
+        return build_civitai_parameters(
+            positive=positive,
+            negative=negative,
+            steps=values.get("steps_1"),
+            sampler_name=values.get("sampler_name"),
+            scheduler=values.get("scheduler"),
+            cfg=values.get("cfg"),
+            seed=values.get("seed"),
+            width=width or values.get("width"),
+            height=height or values.get("height"),
+            model_name=graph_model,
+            model_hash=checkpoint_hash,
+            loras=loras,
+        )
+
+    def save_images(
+        self,
+        images=None,
+        filename_prefix: str = "WarpPipe",
+        embed_metadata: bool = True,
+        embed_workflow: bool = True,
+        file_format: str = "png",
+        preview: bool = True,
+        warp: Optional[dict[str, Any]] = None,
+        prompt: Optional[dict[str, Any]] = None,
+        extra_pnginfo: Optional[dict[str, Any]] = None,
+        unique_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        if images is None or len(images) == 0:
+            # Nothing arrived. This is not an error - a bypassed branch upstream
+            # is a normal reason for it, and failing the whole prompt over one
+            # would be worse than saving nothing. But it looked exactly like a
+            # successful save: no file, no message, a green tick. The run says
+            # so now, and the node's own interface puts it on screen.
+            logger.info("Save Image (Civitai): nothing reached the images input, nothing saved.")
+            return {
+                "ui": {
+                    "images": [],
+                    "warppipe_note": [
+                        "Nothing reached the images input, so no file was written. "
+                        "Check that images is connected and that nothing upstream is bypassed."
+                    ],
+                }
+            }
+
+        import folder_paths
+        import numpy as np
+        from PIL import Image, PngImagePlugin
+
+        height = int(images[0].shape[0])
+        width = int(images[0].shape[1])
+        # Building it hashes the checkpoint and every LoRA, so it is not built
+        # at all when it is not going to be written.
+        parameters = ""
+        if embed_metadata:
+            parameters = self.build_metadata(
+                warp=warp,
+                prompt=prompt,
+                width=width,
+                height=height,
+                unique_id=unique_id,
+            )
+            logger.debug("Civitai parameters: %s", parameters)
+
+        full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
+            expand_filename_prefix(filename_prefix),
+            folder_paths.get_output_directory(),
+            width,
+            height,
+        )
+
+        fmt = FILE_FORMATS.get(file_format) or FILE_FORMATS["png"]
+        notes = []
+        if embed_workflow and not fmt["carries_workflow"]:
+            notes.append(
+                f"{file_format.upper()} has nowhere to keep a ComfyUI workflow, so it "
+                "was not written. The generation info is in EXIF, which Civitai reads."
+            )
+            logger.info("Save Image (Civitai): %s", notes[-1])
+
+        results = []
+        for image in images:
+            array = np.clip(255.0 * image.cpu().numpy(), 0, 255).astype(np.uint8)
+            file_name = f"{filename}_{counter:05}_.{fmt['suffix']}"
+            path = os.path.join(full_output_folder, file_name)
+            picture = Image.fromarray(array)
+
+            if fmt["pillow"] == "PNG":
+                png_info = PngImagePlugin.PngInfo()
+                if embed_metadata:
+                    png_info.add_text("parameters", parameters)
+                if embed_workflow:
+                    if prompt is not None:
+                        png_info.add_text("prompt", json.dumps(prompt))
+                    for key, value in (extra_pnginfo or {}).items():
+                        png_info.add_text(key, json.dumps(value))
+                picture.save(path, pnginfo=png_info, compress_level=4)
+            else:
+                # No text chunks here, so the generation info goes in EXIF - the
+                # same place A1111 puts it for JPEG, and where Civitai looks.
+                extra = {}
+                if embed_metadata:
+                    extra["exif"] = exif_with_parameters(parameters)
+                picture.save(path, fmt["pillow"], quality=JPEG_QUALITY, **extra)
+
+            results.append({"filename": file_name, "subfolder": subfolder, "type": "output"})
+            counter += 1
+
+        # An image the node does not show is still saved; the list is only what
+        # the node puts on screen.
+        ui: dict[str, Any] = {"images": results if preview else []}
+        if notes:
+            ui["warppipe_note"] = notes
+        return {"ui": ui}
+
+
+# The node ids this pack registers, with the name each one shows. Both
+# registration paths below are built from this table rather than from their own
+# list: keeping two lists in step by hand is what let V3 mode ship five of these
+# seven nodes, so any workflow using the other two failed to load and nothing
+# said why.
+NODE_DEFINITIONS: dict[str, tuple[str, type]] = {
+    "Warp": ("🌀 Warp", Warp),
+    "Unwarp": ("🌀 Unwarp", Unwarp),
+    "Warp Provider": ("🌀 Warp Provider", WarpProvider),
+    "FD Scheduler Adapter": ("🌀 Scheduler Adapter for FaceDetailer", FDSchedulerAdapter),
+    "Dead End": ("🚫 Dead End", DeadEnd),
+    "Save Image Civitai": ("🌀 Save Image (Civitai)", SaveImageCivitai),
+    "Warp Lora Prompt": ("🌀 Prompt + LoRAs", WarpLoraPrompt),
+}
+
+
 if ENABLE_V3_NODES:
     WARPPIPE_TYPE = io.Custom("WARPPIPE")
     ANY_TYPE = getattr(io, "AnyType", io.Custom("*"))
@@ -833,6 +2411,13 @@ if ENABLE_V3_NODES:
 
     def _combo_output(output_id: str, options: list[str], display_name: str):
         return io.Combo.Output(output_id, display_name=display_name, options=options)
+
+    def _hidden(*names: str) -> list:
+        """The hidden inputs this build of the V3 API actually knows about."""
+        return [getattr(io.Hidden, name) for name in names if hasattr(io.Hidden, name)]
+
+    def _hidden_value(cls, name: str):
+        return getattr(getattr(cls, "hidden", None), name, None)
 
     class WarpV3(io.ComfyNode):
         @classmethod
@@ -1051,15 +2636,139 @@ if ENABLE_V3_NODES:
         def execute(cls, input=None) -> io.NodeOutput:
             return io.NodeOutput()
 
+    class SaveImageCivitaiV3(io.ComfyNode):
+        @classmethod
+        def define_schema(cls) -> io.Schema:
+            required = SaveImageCivitai.INPUT_TYPES()["required"]
+            return io.Schema(
+                node_id="Save Image Civitai",
+                display_name="🌀 Save Image (Civitai)",
+                category=SaveImageCivitai.CATEGORY,
+                description=SaveImageCivitai.DESCRIPTION,
+                is_output_node=True,
+                hidden=_hidden("prompt", "extra_pnginfo", "unique_id"),
+                inputs=[
+                    io.String.Input(
+                        "filename_prefix",
+                        default="WarpPipe",
+                        tooltip=required["filename_prefix"][1]["tooltip"],
+                    ),
+                    io.Boolean.Input(
+                        "embed_metadata",
+                        default=True,
+                        label_on="generation info",
+                        label_off="no generation info",
+                        tooltip=required["embed_metadata"][1]["tooltip"],
+                    ),
+                    io.Boolean.Input(
+                        "embed_workflow",
+                        default=True,
+                        label_on="workflow",
+                        label_off="no workflow",
+                        tooltip=required["embed_workflow"][1]["tooltip"],
+                    ),
+                    _combo_input(
+                        "file_format",
+                        list(FILE_FORMATS),
+                        default="png",
+                        tooltip=required["file_format"][1]["tooltip"],
+                    ),
+                    io.Boolean.Input(
+                        "preview",
+                        default=True,
+                        label_on="show the images",
+                        label_off="save quietly",
+                        tooltip=required["preview"][1]["tooltip"],
+                    ),
+                    _io_type("IMAGE").Input("images", optional=True),
+                    WARPPIPE_TYPE.Input("warp", optional=True),
+                ],
+                outputs=[],
+            )
+
+        @classmethod
+        def execute(cls, **kwargs) -> io.NodeOutput:
+            result = SaveImageCivitai().save_images(
+                prompt=_hidden_value(cls, "prompt"),
+                extra_pnginfo=_hidden_value(cls, "extra_pnginfo"),
+                unique_id=_hidden_value(cls, "unique_id"),
+                **kwargs,
+            )
+            return io.NodeOutput(ui=result["ui"])
+
+    class WarpLoraPromptV3(io.ComfyNode):
+        @classmethod
+        def define_schema(cls) -> io.Schema:
+            schema = WarpLoraPrompt.INPUT_TYPES()
+            text = schema["required"]["text"][1]
+            return io.Schema(
+                node_id="Warp Lora Prompt",
+                display_name="🌀 Prompt + LoRAs",
+                category=WarpLoraPrompt.CATEGORY,
+                description=WarpLoraPrompt.DESCRIPTION,
+                inputs=[
+                    io.String.Input(
+                        "text",
+                        multiline=True,
+                        default="",
+                        placeholder=text["placeholder"],
+                        tooltip=text["tooltip"],
+                    ),
+                    io.Boolean.Input(
+                        "apply_to_clip",
+                        default=True,
+                        label_on="model + CLIP",
+                        label_off="model only",
+                    ),
+                    io.String.Input("loras", optional=True, default="", multiline=False),
+                    _io_type("MODEL").Input("model", optional=True),
+                    _io_type("CLIP").Input("clip", optional=True),
+                ],
+                # Output ids differ from the input ids they mirror because a
+                # schema's field ids share one namespace; the display names are
+                # what the node shows, and those match the legacy node exactly.
+                outputs=[
+                    _io_type("MODEL").Output("model_out", display_name="model"),
+                    _io_type("CLIP").Output("clip_out", display_name="clip"),
+                    io.String.Output("prompt", display_name="prompt"),
+                ],
+            )
+
+        @classmethod
+        def fingerprint_inputs(cls, **kwargs):
+            return _fingerprint_inputs(kwargs)
+
+        @classmethod
+        def execute(cls, **kwargs) -> io.NodeOutput:
+            return io.NodeOutput(*WarpLoraPrompt().apply(**kwargs))
+
+    # Keyed by the same node ids as NODE_DEFINITIONS, and checked against it
+    # below, so the two paths cannot drift apart again in silence.
+    V3_NODE_CLASSES: dict[str, type] = {
+        "Warp": WarpV3,
+        "Unwarp": UnwarpV3,
+        "Warp Provider": WarpProviderV3,
+        "FD Scheduler Adapter": FDSchedulerAdapterV3,
+        "Dead End": DeadEndV3,
+        "Save Image Civitai": SaveImageCivitaiV3,
+        "Warp Lora Prompt": WarpLoraPromptV3,
+    }
+
+    _unschemad = sorted(set(NODE_DEFINITIONS) - set(V3_NODE_CLASSES))
+    if _unschemad:
+        logger.error(
+            "WARPPIPE_ENABLE_V3 is set but %s ha%s no V3 schema, so %s will not load and "
+            "workflows using %s will fail to open. Unset WARPPIPE_ENABLE_V3 to register "
+            "every node through the legacy path.",
+            ", ".join(_unschemad),
+            "s" if len(_unschemad) == 1 else "ve",
+            "it" if len(_unschemad) == 1 else "they",
+            "it" if len(_unschemad) == 1 else "them",
+        )
+
     class WarpPipeExtension(ComfyExtension):
         async def get_node_list(self) -> list[type[io.ComfyNode]]:
-            return [
-                WarpV3,
-                UnwarpV3,
-                WarpProviderV3,
-                FDSchedulerAdapterV3,
-                DeadEndV3,
-            ]
+            return list(V3_NODE_CLASSES.values())
 
     async def comfy_entrypoint() -> WarpPipeExtension:
         return WarpPipeExtension()
@@ -1069,19 +2778,11 @@ if ENABLE_V3_NODES:
 # the same node IDs exclusively through comfy_entrypoint().
 if not ENABLE_V3_NODES:
     NODE_CLASS_MAPPINGS = {
-        "Warp": Warp,
-        "Unwarp": Unwarp,
-        "Warp Provider": WarpProvider,
-        "FD Scheduler Adapter": FDSchedulerAdapter,
-        "Dead End": DeadEnd,
+        node_id: node_class for node_id, (_display, node_class) in NODE_DEFINITIONS.items()
     }
 
     NODE_DISPLAY_NAME_MAPPINGS = {
-        "Warp": "🌀 Warp",
-        "Unwarp": "🌀 Unwarp",
-        "Warp Provider": "🌀 Warp Provider",
-        "FD Scheduler Adapter": "🌀 Scheduler Adapter for FaceDetailer",
-        "Dead End": "🚫 Dead End",
+        node_id: display for node_id, (display, _node_class) in NODE_DEFINITIONS.items()
     }
 
 # Optional: Web directory for custom UI files (if you add them later)

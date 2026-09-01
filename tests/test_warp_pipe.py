@@ -1,10 +1,80 @@
 import asyncio
+import fnmatch
+import hashlib
 import inspect
+import json
+import os
+import pathlib
+import re
+import sys
 import time
+import types
 
 import pytest
 
-NODE_IDS = {"Warp", "Unwarp", "Warp Provider", "FD Scheduler Adapter", "Dead End"}
+NODE_IDS = {
+    "Warp",
+    "Unwarp",
+    "Warp Provider",
+    "FD Scheduler Adapter",
+    "Dead End",
+    "Save Image Civitai",
+    "Warp Lora Prompt",
+}
+
+
+class _Pixels:
+    """Just enough array to carry an image through save_images.
+
+    warp_pipe does `np.clip(255.0 * image.cpu().numpy(), 0, 255).astype(np.uint8)`
+    and hands the result to Pillow, which these tests fake. Nothing here computes
+    anything: it exists so the arithmetic resolves, the same way conftest's numpy
+    stub exists so the import does.
+    """
+
+    def __init__(self, shape):
+        self.shape = tuple(shape)
+
+    def __rmul__(self, _other):
+        return self
+
+    __mul__ = __rmul__
+
+    def astype(self, _dtype):
+        return self
+
+    def tobytes(self):
+        height, width, channels = self.shape
+        return bytes(height * width * channels)
+
+    @property
+    def __array_interface__(self):
+        # One test writes a real JPEG with real Pillow to read its EXIF back.
+        # This is the protocol Image.fromarray consumes, so it works without
+        # numpy: unsigned bytes, in the shape a black image would have. Strides
+        # are given because that is what makes Pillow take the tobytes() route
+        # rather than expecting a buffer object.
+        _height, width, channels = self.shape
+        return {
+            "shape": self.shape,
+            "typestr": "|u1",
+            "strides": (width * channels, channels, 1),
+            "data": self.tobytes(),
+            "version": 3,
+        }
+
+
+class ImageTensor:
+    """What an IMAGE input looks like to the save node: HxWxC, .cpu().numpy()."""
+
+    def __init__(self, shape=(8, 8, 3)):
+        self.shape = tuple(shape)
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return _Pixels(self.shape)
 
 
 def test_legacy_registration_and_node_contracts(warp_pipe):
@@ -135,6 +205,8 @@ def test_v3_entrypoint_schemas_and_execution(warp_pipe_loader):
     nodes = asyncio.run(extension.get_node_list())
     schemas = [node.GET_SCHEMA() for node in nodes]
 
+    # Every node, not a subset: registering only some of them under V3 means a
+    # saved workflow using one of the others silently fails to open.
     assert {schema.node_id for schema in schemas} == NODE_IDS
     combo_outputs = [
         output for schema in schemas for output in schema.outputs if output.io_type == "COMBO"
@@ -163,3 +235,1323 @@ def test_package_exports_only_one_registration_path(package_loader, enable_v3):
             "NODE_DISPLAY_NAME_MAPPINGS",
             "WEB_DIRECTORY",
         }
+
+
+# ---------------------------------------------------------------------------
+# Civitai metadata
+# ---------------------------------------------------------------------------
+
+RGTHREE_GRAPH = {
+    "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sdxl/base.safetensors"}},
+    "2": {
+        "class_type": "LoraLoader",
+        "inputs": {"lora_name": "style/abstract.safetensors", "strength_model": 0.8},
+    },
+    "3": {
+        "class_type": "Power Lora Loader (rgthree)",
+        "inputs": {
+            "lora_1": {"lora": "detail.safetensors", "strength": 0.6, "on": True},
+            "lora_2": {"lora": "off.safetensors", "strength": 1.0, "on": False},
+            "lora_3": {"lora": "None", "strength": 1.0, "on": True},
+        },
+    },
+}
+
+
+def test_collect_graph_resources_reads_standard_and_stacked_loaders(warp_pipe):
+    checkpoint, loras = warp_pipe.collect_graph_resources(RGTHREE_GRAPH)
+
+    assert checkpoint == "sdxl/base.safetensors"
+    assert loras == [("style/abstract.safetensors", 0.8), ("detail.safetensors", 0.6)]
+
+
+def test_collect_graph_resources_tolerates_junk(warp_pipe):
+    assert warp_pipe.collect_graph_resources(None) == (None, [])
+    assert warp_pipe.collect_graph_resources({"a": "not-a-node"}) == (None, [])
+    assert warp_pipe.collect_graph_resources({"a": {"class_type": "X"}}) == (None, [])
+
+
+def test_extract_lora_tags(warp_pipe):
+    tags = warp_pipe.extract_lora_tags("a cat <lora:foo:0.5> and <lora:bar:1.2>")
+
+    assert tags == [("foo", 0.5), ("bar", 1.2)]
+    assert warp_pipe.extract_lora_tags(None) == []
+    assert warp_pipe.extract_lora_tags("no tags here") == []
+
+
+def test_build_parameters_matches_a1111_shape(warp_pipe):
+    text = warp_pipe.build_civitai_parameters(
+        positive="a portrait",
+        negative="blurry",
+        steps=30,
+        sampler_name="dpmpp_2m",
+        scheduler="karras",
+        cfg=7.0,
+        seed=123,
+        width=1024,
+        height=768,
+        model_name="sdxl/base.safetensors",
+        model_hash="67ab2fd8ec",
+        loras=[("AbstractPainting", 0.8, "df7c757437")],
+    )
+    lines = text.split("\n")
+
+    assert lines[0] == "a portrait <lora:AbstractPainting:0.8>"
+    assert lines[1] == "Negative prompt: blurry"
+    assert "Steps: 30" in lines[2]
+    assert "Schedule type: karras" in lines[2]
+    assert "Size: 1024x768" in lines[2]
+    assert "Model hash: 67ab2fd8ec" in lines[2]
+    assert "Model: base" in lines[2]
+    assert 'Lora hashes: "AbstractPainting: df7c757437"' in lines[2]
+
+
+def test_build_parameters_does_not_duplicate_existing_tags(warp_pipe):
+    text = warp_pipe.build_civitai_parameters(
+        positive="a cat <lora:foo:0.5>",
+        loras=[("foo", 0.5, "aaaaaaaaaa")],
+    )
+
+    assert text.split("\n")[0].count("<lora:foo") == 1
+
+
+def test_build_parameters_omits_missing_fields(warp_pipe):
+    text = warp_pipe.build_civitai_parameters(positive="just a prompt")
+
+    assert "Negative prompt:" not in text
+    assert "Lora hashes" not in text
+    assert "Steps:" not in text
+
+
+def test_sidecar_hash_is_preferred_over_rehashing(warp_pipe, tmp_path):
+    model = tmp_path / "some_lora.safetensors"
+    model.write_bytes(b"pretend weights")
+    sidecar = tmp_path / "some_lora.civitai.info"
+    sidecar.write_text(
+        json.dumps({"files": [{"hashes": {"SHA256": "DF7C757437EF3696E76EE5CC18C06368"}}]}),
+        encoding="utf-8",
+    )
+
+    # Ten characters, lowercased - the AutoV2 form Civitai indexes on.
+    assert warp_pipe.model_autov2(str(model)) == "df7c757437"
+
+
+def test_falls_back_to_hashing_when_no_sidecar(warp_pipe, tmp_path):
+    model = tmp_path / "bare.safetensors"
+    model.write_bytes(b"pretend weights")
+
+    expected = hashlib.sha256(b"pretend weights").hexdigest()[:10]
+    assert warp_pipe.model_autov2(str(model)) == expected
+
+
+def test_missing_file_hashes_to_none(warp_pipe, tmp_path):
+    assert warp_pipe.model_autov2(str(tmp_path / "nope.safetensors")) is None
+    assert warp_pipe.model_autov2(None) is None
+
+
+def test_save_node_contract(warp_pipe):
+    node = warp_pipe.NODE_CLASS_MAPPINGS["Save Image Civitai"]
+
+    assert node.OUTPUT_NODE is True
+    assert node.RETURN_TYPES == ()
+    hidden = node.INPUT_TYPES()["hidden"]
+    assert hidden["prompt"] == "PROMPT"
+    assert hidden["extra_pnginfo"] == "EXTRA_PNGINFO"
+
+
+def test_the_two_embeds_are_separate_switches(warp_pipe):
+    # One toggle used to do both. They are wanted apart: the generation info is
+    # what a site reads, while the workflow is the whole pipeline, which you may
+    # not want to hand over with the picture.
+    required = warp_pipe.NODE_CLASS_MAPPINGS["Save Image Civitai"].INPUT_TYPES()["required"]
+
+    assert required["embed_metadata"][0] == "BOOLEAN"
+    assert required["embed_workflow"][0] == "BOOLEAN"
+    assert required["embed_metadata"][1]["default"] is True
+    assert required["embed_workflow"][1]["default"] is True
+
+
+def test_saving_writes_only_what_was_asked_for(warp_pipe, monkeypatch, tmp_path):
+    written = []
+
+    class FakePngInfo:
+        def __init__(self):
+            self.keys = []
+
+        def add_text(self, key, value):
+            self.keys.append(key)
+
+    class FakeImage:
+        @staticmethod
+        def fromarray(array):
+            class Saved:
+                def save(self, path, *args, **kwargs):
+                    keys = sorted(kwargs["pnginfo"].keys) if "pnginfo" in kwargs else []
+                    written.append({"path": path, "keys": keys, "exif": "exif" in kwargs})
+
+            return Saved()
+
+    folder_paths = types.ModuleType("folder_paths")
+    folder_paths.get_output_directory = lambda: str(tmp_path)
+    folder_paths.get_save_image_path = lambda prefix, out, w, h: (
+        str(tmp_path),
+        "img",
+        1,
+        "",
+        prefix,
+    )
+    pil = types.ModuleType("PIL")
+    pil_image = types.ModuleType("PIL.Image")
+    pil_image.fromarray = FakeImage.fromarray
+    pil_png = types.ModuleType("PIL.PngImagePlugin")
+    pil_png.PngInfo = FakePngInfo
+    pil.Image = pil_image
+    pil.PngImagePlugin = pil_png
+    for name, module in {
+        "folder_paths": folder_paths,
+        "PIL": pil,
+        "PIL.Image": pil_image,
+        "PIL.PngImagePlugin": pil_png,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+    node = warp_pipe.SaveImageCivitai()
+    graph = {"1": {"class_type": "SaveImageCivitai", "inputs": {}}}
+
+    node.save_images(images=[ImageTensor()], embed_metadata=True, embed_workflow=True, prompt=graph)
+    node.save_images(
+        images=[ImageTensor()], embed_metadata=True, embed_workflow=False, prompt=graph
+    )
+    node.save_images(
+        images=[ImageTensor()], embed_metadata=False, embed_workflow=True, prompt=graph
+    )
+    node.save_images(
+        images=[ImageTensor()], embed_metadata=False, embed_workflow=False, prompt=graph
+    )
+
+    assert [w["keys"] for w in written] == [
+        ["parameters", "prompt"],
+        ["parameters"],
+        ["prompt"],
+        [],
+    ]
+    assert all(w["path"].endswith(".png") for w in written)
+
+
+def test_jpeg_keeps_the_generation_info_but_cannot_keep_the_workflow(
+    warp_pipe, monkeypatch, tmp_path
+):
+    # A real file, read back the way anything else would read it.
+    from PIL import Image
+
+    folder_paths = types.ModuleType("folder_paths")
+    folder_paths.get_output_directory = lambda: str(tmp_path)
+    folder_paths.get_save_image_path = lambda prefix, out, w, h: (
+        str(tmp_path),
+        "img",
+        1,
+        "",
+        prefix,
+    )
+    folder_paths.get_filename_list = lambda folder: []
+    monkeypatch.setitem(sys.modules, "folder_paths", folder_paths)
+
+    warp = warp_pipe.Warp().warp(prompt_positive="a portrait", seed=123, steps_1=30)[0]
+    result = warp_pipe.SaveImageCivitai().save_images(
+        images=[ImageTensor()],
+        warp=warp,
+        file_format="jpeg",
+        embed_metadata=True,
+        embed_workflow=True,
+    )
+
+    saved = result["ui"]["images"][0]["filename"]
+    assert saved.endswith(".jpg")
+
+    comment = Image.open(tmp_path / saved).getexif().get(0x9286)
+    assert comment[:8] == b"UNICODE\0"
+    text = comment[8:].decode("utf-16-be")
+    assert text.startswith("a portrait")
+    assert "Seed: 123" in text
+
+    # The workflow was asked for and cannot be given, so it says so rather than
+    # letting the reader believe the file carries one.
+    assert "nowhere to keep a ComfyUI workflow" in result["ui"]["warppipe_note"][0]
+
+
+def test_the_preview_can_be_turned_off_without_affecting_the_save(warp_pipe, monkeypatch, tmp_path):
+    saved = []
+
+    class Saved:
+        def save(self, path, *args, **kwargs):
+            saved.append(path)
+
+    class FakePngInfo:
+        def __init__(self):
+            self.keys = []
+
+        def add_text(self, key, value):
+            self.keys.append(key)
+
+    folder_paths = types.ModuleType("folder_paths")
+    folder_paths.get_output_directory = lambda: str(tmp_path)
+    folder_paths.get_save_image_path = lambda prefix, out, w, h: (
+        str(tmp_path),
+        "img",
+        1,
+        "",
+        prefix,
+    )
+    folder_paths.get_filename_list = lambda folder: []
+    pil = types.ModuleType("PIL")
+    pil_image = types.ModuleType("PIL.Image")
+    pil_image.fromarray = lambda array: Saved()
+    pil_png = types.ModuleType("PIL.PngImagePlugin")
+    pil_png.PngInfo = FakePngInfo
+    for name, module in {
+        "folder_paths": folder_paths,
+        "PIL": pil,
+        "PIL.Image": pil_image,
+        "PIL.PngImagePlugin": pil_png,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+    node = warp_pipe.SaveImageCivitai()
+    shown = node.save_images(images=[ImageTensor()], preview=True)
+    quiet = node.save_images(images=[ImageTensor()], preview=False)
+
+    assert len(shown["ui"]["images"]) == 1
+    assert quiet["ui"]["images"] == []
+    # Both wrote a file; only the reporting differs.
+    assert len(saved) == 2
+
+
+def test_civitai_reads_resources_from_the_hashes_field(warp_pipe):
+    # Civitai's own extension writes "Hashes", keyed model / lora:<name>, and
+    # links resources from it. "Lora hashes" is A1111's separate convention;
+    # writing only that named the checkpoint and credited no LoRA at all.
+    text = warp_pipe.build_civitai_parameters(
+        positive="a portrait",
+        model_name="sdxl/base.safetensors",
+        model_hash="8e4eeda70d",
+        loras=[("detail tweaker", 0.8, "6f6061f493")],
+    )
+    field = text.split("Hashes: ")[1].split(", Version")[0]
+
+    assert json.loads(field) == {"model": "8e4eeda70d", "lora:detail tweaker": "6f6061f493"}
+    # Kept as well, for anything reading A1111's spelling.
+    assert 'Lora hashes: "detail tweaker: 6f6061f493"' in text
+
+
+def test_a_lora_the_workflow_names_but_does_not_have_is_not_credited(warp_pipe, monkeypatch):
+    # A folder renamed or a version replaced leaves the workflow naming a file
+    # that is not there. It was never applied, so crediting it would describe an
+    # image that was not made.
+    module = types.ModuleType("folder_paths")
+    module.get_filename_list = lambda folder: ["real.safetensors"]
+    module.get_full_path = lambda folder, name: (
+        "/models/loras/real.safetensors" if name == "real.safetensors" else None
+    )
+    monkeypatch.setitem(sys.modules, "folder_paths", module)
+
+    graph = {
+        "1": {
+            "class_type": "Power Lora Loader (rgthree)",
+            "inputs": {
+                "lora_1": {"on": True, "lora": "real.safetensors", "strength": 0.5},
+                "lora_2": {"on": True, "lora": "vanished.safetensors", "strength": 0.5},
+            },
+        },
+        "9": {"class_type": "SaveImageCivitai", "inputs": {"images": ["1", 0]}},
+    }
+
+    text = warp_pipe.SaveImageCivitai().build_metadata(prompt=graph, unique_id="9")
+
+    assert "real" in text
+    assert "vanished" not in text
+
+
+def test_build_metadata_combines_warp_values_and_graph(warp_pipe):
+    warp = warp_pipe.Warp().warp(
+        prompt_positive="a portrait",
+        prompt_negative="blurry",
+        seed=123,
+        steps_1=30,
+        cfg=7.0,
+        width=1024,
+        height=768,
+    )[0]
+
+    text = warp_pipe.SaveImageCivitai().build_metadata(warp=warp, prompt=RGTHREE_GRAPH)
+
+    assert text.startswith("a portrait")
+    assert "Negative prompt: blurry" in text
+    assert "Steps: 30" in text
+    assert "Seed: 123" in text
+    assert "Size: 1024x768" in text
+    # Names come through even when the files are absent and cannot be hashed.
+    assert "<lora:abstract:0.8>" in text
+    assert "<lora:detail:0.6>" in text
+
+
+# A Flux-style graph: a UNet loader, a stacked LoRA loader with one slot off,
+# and a second unrelated branch that must not leak into the metadata.
+BRANCHED_GRAPH = {
+    "10": {"class_type": "UNETLoader", "inputs": {"unet_name": "flux/krea2.safetensors"}},
+    "11": {
+        "class_type": "Power Lora Loader (rgthree)",
+        "inputs": {
+            "model": ["10", 0],
+            "lora_1": {"lora": "detail.safetensors", "strength": 0.7, "on": True},
+            "lora_2": {"lora": "unused.safetensors", "strength": 1.0, "on": False},
+        },
+    },
+    "12": {"class_type": "KSampler", "inputs": {"model": ["11", 0]}},
+    "13": {"class_type": "VAEDecode", "inputs": {"samples": ["12", 0]}},
+    "20": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": "sdxl/other.safetensors"},
+    },
+    "21": {
+        "class_type": "LoraLoader",
+        "inputs": {"model": ["20", 0], "lora_name": "wrong.safetensors", "strength_model": 1.0},
+    },
+    "99": {"class_type": "Save Image Civitai", "inputs": {"images": ["13", 0]}},
+}
+
+
+def test_unet_loaders_are_detected_not_just_checkpoints(warp_pipe):
+    model, _ = warp_pipe.collect_graph_resources(BRANCHED_GRAPH, start_id="99")
+
+    assert model == "flux/krea2.safetensors"
+
+
+def test_tracing_ignores_branches_that_did_not_make_the_image(warp_pipe):
+    _, loras = warp_pipe.collect_graph_resources(BRANCHED_GRAPH, start_id="99")
+
+    assert loras == [("detail.safetensors", 0.7)]
+
+
+def test_without_a_start_id_the_whole_graph_is_considered(warp_pipe):
+    _, loras = warp_pipe.collect_graph_resources(BRANCHED_GRAPH)
+    names = [name for name, _ in loras]
+
+    assert "wrong.safetensors" in names
+
+
+def _folders(monkeypatch, files):
+    """Stand in for ComfyUI's folder_paths, with files in named folders."""
+    module = types.ModuleType("folder_paths")
+    module.get_full_path = lambda folder, name: (
+        f"/models/{folder}/{name}" if name in files.get(folder, ()) else None
+    )
+    monkeypatch.setitem(sys.modules, "folder_paths", module)
+
+
+def test_a_loader_from_an_unknown_pack_is_still_recognised(warp_pipe, monkeypatch):
+    # No ckpt_name, no unet_name, no model_name - an input this code has never
+    # heard of. What settles it is that the file resolves in a model folder.
+    _folders(monkeypatch, {"checkpoints": {"sdxl/base.safetensors"}})
+    graph = {
+        "1": {
+            "class_type": "SomeoneElsesLoader",
+            "inputs": {"the_weights_i_want": "sdxl/base.safetensors"},
+        },
+        "9": {"class_type": "SaveImageCivitai", "inputs": {"images": ["1", 0]}},
+    }
+
+    model, _ = warp_pipe.collect_graph_resources(graph, start_id="9")
+
+    assert model == "sdxl/base.safetensors"
+
+
+def test_a_lora_is_not_mistaken_for_the_model(warp_pipe, monkeypatch):
+    # Both end in .safetensors and neither input is a name this code knows.
+    # Where the file lives is what tells them apart.
+    _folders(
+        monkeypatch,
+        {"checkpoints": {"sdxl/base.safetensors"}, "loras": {"some lora.safetensors"}},
+    )
+    graph = {
+        "1": {"class_type": "OddLoader", "inputs": {"weights": "sdxl/base.safetensors"}},
+        "2": {"class_type": "OddLoraLoader", "inputs": {"extra": "some lora.safetensors"}},
+        "9": {"class_type": "SaveImageCivitai", "inputs": {"a": ["1", 0], "b": ["2", 0]}},
+    }
+
+    model, _ = warp_pipe.collect_graph_resources(graph, start_id="9")
+
+    assert model == "sdxl/base.safetensors"
+
+
+def test_a_name_fed_in_from_another_node_is_found(warp_pipe, monkeypatch):
+    # ckpt_name converted to an input and driven by a string node: the loader
+    # itself now holds a link, not a name, so the name is found where it is.
+    _folders(monkeypatch, {"checkpoints": {"sdxl/base.safetensors"}})
+    graph = {
+        "1": {"class_type": "StringLiteral", "inputs": {"string": "sdxl/base.safetensors"}},
+        "2": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ["1", 0]}},
+        "9": {"class_type": "SaveImageCivitai", "inputs": {"images": ["2", 0]}},
+    }
+
+    model, _ = warp_pipe.collect_graph_resources(graph, start_id="9")
+
+    assert model == "sdxl/base.safetensors"
+
+
+@pytest.mark.parametrize(
+    ("label", "node", "expected"),
+    [
+        (
+            "ComfyUI's own loader",
+            {
+                "class_type": "LoraLoader",
+                "inputs": {"lora_name": "a.safetensors", "strength_model": 0.8},
+            },
+            [("a.safetensors", 0.8)],
+        ),
+        (
+            "a stacker numbering its slots",
+            {
+                "class_type": "LoRA Stacker",
+                "inputs": {
+                    "lora_name_1": "c.safetensors",
+                    "model_str_1": 0.9,
+                    "lora_name_2": "d.safetensors",
+                    "model_str_2": 0.5,
+                    "lora_name_3": "None",
+                },
+            },
+            [("c.safetensors", 0.9), ("d.safetensors", 0.5)],
+        ),
+        (
+            "a loader spelling strength its own way",
+            {
+                "class_type": "Lora Loader (WAS)",
+                "inputs": {"lora_name": "g.safetensors", "lora_model_strength": 1.2},
+            },
+            [("g.safetensors", 1.2)],
+        ),
+        (
+            "a stacked loader with a slot switched off",
+            {
+                "class_type": "Power Lora Loader (rgthree)",
+                "inputs": {
+                    "lora_1": {"on": True, "lora": "e.safetensors", "strength": 0.6},
+                    "lora_2": {"on": False, "lora": "off.safetensors", "strength": 1},
+                },
+            },
+            [("e.safetensors", 0.6)],
+        ),
+        (
+            "tags in someone else's prompt node",
+            {"class_type": "Power Prompt (rgthree)", "inputs": {"prompt": "a cat <lora:f:0.4>"}},
+            [("f", 0.4)],
+        ),
+    ],
+)
+def test_loras_are_found_however_the_pack_spells_them(warp_pipe, label, node, expected):
+    graph = {"1": node, "9": {"class_type": "SaveImageCivitai", "inputs": {"images": ["1", 0]}}}
+
+    _, loras = warp_pipe.collect_graph_resources(graph, start_id="9")
+
+    assert loras == expected, label
+
+
+def test_a_switch_contributes_only_the_branch_it_took(warp_pipe):
+    # A switch wires every branch and runs one. Walking into the others credits
+    # an image with LoRAs from a pipeline it never went through - which is how
+    # an upload ends up listing models that are not in the prompt at all.
+    graph = {
+        "1": {"class_type": "INTConstant", "inputs": {"value": 2}},
+        "10": {
+            "class_type": "Power Lora Loader (rgthree)",
+            "inputs": {"lora_1": {"on": True, "lora": "branch one.safetensors", "strength": 1}},
+        },
+        "20": {
+            "class_type": "Power Lora Loader (rgthree)",
+            "inputs": {"lora_1": {"on": True, "lora": "branch two.safetensors", "strength": 0.5}},
+        },
+        "30": {
+            "class_type": "ImpactSwitch",
+            "inputs": {"select": ["1", 0], "input1": ["10", 0], "input2": ["20", 0]},
+        },
+        "9": {"class_type": "SaveImageCivitai", "inputs": {"images": ["30", 0]}},
+    }
+
+    _, loras = warp_pipe.collect_graph_resources(graph, start_id="9")
+
+    assert [name for name, _ in loras] == ["branch two.safetensors"]
+
+
+def test_an_unreadable_switch_still_contributes_everything(warp_pipe):
+    # The selector cannot be resolved here, and guessing would drop resources
+    # that were really used, so every branch is kept as it always was.
+    graph = {
+        "10": {
+            "class_type": "Power Lora Loader (rgthree)",
+            "inputs": {"lora_1": {"on": True, "lora": "one.safetensors", "strength": 1}},
+        },
+        "20": {
+            "class_type": "Power Lora Loader (rgthree)",
+            "inputs": {"lora_1": {"on": True, "lora": "two.safetensors", "strength": 1}},
+        },
+        "30": {
+            "class_type": "ImpactSwitch",
+            "inputs": {"select": ["99", 0], "input1": ["10", 0], "input2": ["20", 0]},
+        },
+        "9": {"class_type": "SaveImageCivitai", "inputs": {"images": ["30", 0]}},
+    }
+
+    _, loras = warp_pipe.collect_graph_resources(graph, start_id="9")
+
+    assert sorted(name for name, _ in loras) == ["one.safetensors", "two.safetensors"]
+
+
+def test_the_nearest_loader_is_the_one_recorded(warp_pipe):
+    # A refiner in front of a base: the picture came out of the refiner.
+    graph = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base.safetensors"}},
+        "2": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "refiner.safetensors", "hint": ["1", 0]},
+        },
+        "9": {"class_type": "SaveImageCivitai", "inputs": {"images": ["2", 0]}},
+    }
+
+    model, _ = warp_pipe.collect_graph_resources(graph, start_id="9")
+
+    assert model == "refiner.safetensors"
+
+
+def test_trace_upstream_walks_links(warp_pipe):
+    reachable = warp_pipe.trace_upstream(BRANCHED_GRAPH, "99")
+
+    assert {"99", "13", "12", "11", "10"} <= set(reachable)
+    assert "20" not in reachable
+    assert "21" not in reachable
+    # Mapped to how far back each one is, so the nearest loader can be picked.
+    assert reachable["99"] == 0
+    assert reachable["13"] < reachable["10"]
+
+
+def test_trace_upstream_handles_unknown_start(warp_pipe):
+    assert warp_pipe.trace_upstream(BRANCHED_GRAPH, None) is None
+    assert warp_pipe.trace_upstream(BRANCHED_GRAPH, "does-not-exist") is None
+
+
+# ---------------------------------------------------------------------------
+# Prompt + LoRAs
+# ---------------------------------------------------------------------------
+
+# Long, foldered names like the ones a real loras folder holds.
+LORA_ON_DISK = "sdxl/w4r10ck - detail tweaker (sdxl).safetensors"
+OTHER_LORA = "ill/somebody - other thing (ill).safetensors"
+
+
+@pytest.fixture
+def lora_folder(monkeypatch, tmp_path):
+    """A loras folder holding one real file with a Civitai sidecar."""
+    weights = tmp_path / "detail.safetensors"
+    weights.write_bytes(b"weights")
+    (tmp_path / "detail.civitai.info").write_text(
+        json.dumps(
+            {
+                "files": [{"hashes": {"SHA256": "ABCDEF0123456789"}}],
+                "trainedWords": ["detail tweaker, sharp focus"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    module = types.ModuleType("folder_paths")
+    module.get_filename_list = lambda kind: [LORA_ON_DISK, OTHER_LORA]
+    module.get_full_path = lambda kind, name: str(weights) if name == LORA_ON_DISK else None
+    monkeypatch.setitem(sys.modules, "folder_paths", module)
+    return weights
+
+
+def test_a_tag_may_name_any_unambiguous_fragment(warp_pipe, lora_folder):
+    names = [LORA_ON_DISK, OTHER_LORA]
+
+    assert warp_pipe.resolve_lora_name(LORA_ON_DISK, names) == LORA_ON_DISK
+    assert warp_pipe.resolve_lora_name("detail tweaker", names) == LORA_ON_DISK
+    assert warp_pipe.resolve_lora_name("w4r10ck - detail tweaker (sdxl)", names) == LORA_ON_DISK
+
+
+def test_ambiguous_or_unknown_tags_are_skipped(warp_pipe, caplog):
+    names = ["a/thing one.safetensors", "b/thing two.safetensors"]
+
+    assert warp_pipe.resolve_lora_name("thing", names) is None
+    assert warp_pipe.resolve_lora_name("nothing like this", names) is None
+    assert warp_pipe.resolve_lora_name("", names) is None
+
+
+def test_strip_lora_tags_removes_only_the_tags(warp_pipe):
+    # strip_lora_tags is deliberately literal; clean_prompt does the tidying.
+    text = "a portrait <lora:foo:0.8> in the rain <lora:bar:1>"
+
+    assert warp_pipe.strip_lora_tags(text) == "a portrait  in the rain "
+    assert warp_pipe.strip_lora_tags(None) == ""
+    assert warp_pipe.clean_prompt(text) == "a portrait in the rain"
+
+
+def test_trigger_words_are_split_out_of_the_sidecar(warp_pipe, lora_folder):
+    assert warp_pipe.civitai_trigger_words(str(lora_folder)) == ["detail tweaker", "sharp focus"]
+    assert warp_pipe.civitai_trigger_words(None) == []
+
+
+def test_plan_resolves_hash_and_trigger_words(warp_pipe, lora_folder):
+    resolved, words = warp_pipe.WarpLoraPrompt().plan("a portrait <lora:detail tweaker:0.8>")
+
+    assert len(resolved) == 1
+    assert resolved[0]["name"] == LORA_ON_DISK
+    assert resolved[0]["weight"] == 0.8
+    # Read from the sidecar rather than hashing the file again.
+    assert resolved[0]["hash"] == "abcdef0123"
+    assert words == ["detail tweaker", "sharp focus"]
+
+
+def test_the_node_adds_nothing_to_the_prompt(warp_pipe, lora_folder):
+    # The LoRA declares trigger words and they are not appended. Putting them
+    # in is the writer's own move - Tab on a tag, or the strip - so that they
+    # can be read and placed. Some creators write whole sentences there, and
+    # sending one nobody chose is not a small addition.
+    _, _, prompt = warp_pipe.WarpLoraPrompt().apply(text="a portrait <lora:detail tweaker:0.8>")
+
+    assert prompt == "a portrait"
+
+
+def test_trigger_words_already_written_are_left_alone(warp_pipe, lora_folder):
+    _, _, prompt = warp_pipe.WarpLoraPrompt().apply(
+        text="a portrait, sharp focus <lora:detail tweaker:0.8>"
+    )
+
+    assert prompt == "a portrait, sharp focus"
+
+
+def test_a_switched_off_lora_is_not_applied(warp_pipe, lora_folder):
+    resolved, _ = warp_pipe.WarpLoraPrompt().plan("a portrait\n// <lora:detail tweaker:0.8>")
+
+    assert resolved == []
+
+
+def test_the_graph_ignores_a_switched_off_tag(warp_pipe, lora_folder):
+    # The graph is the only record once the node carries no warp, so a tag
+    # behind a // must not be credited for an image it did not touch.
+    graph = {
+        "1": {
+            "class_type": "Warp Lora Prompt",
+            "inputs": {"text": "a portrait\n// <lora:detail tweaker:0.8>"},
+        }
+    }
+
+    _, loras = warp_pipe.collect_graph_resources(graph)
+
+    assert loras == []
+
+
+def test_an_unresolvable_tag_fails_the_run(warp_pipe, lora_folder):
+    # Generating without a LoRA the prompt asked for gives a wrong image and
+    # wrong metadata, so this is louder than a console warning on purpose.
+    with pytest.raises(warp_pipe.LoraTagError, match="matches no file"):
+        warp_pipe.WarpLoraPrompt().apply(text="a portrait <lora:ghost:1>")
+
+
+def test_an_ambiguous_tag_names_the_candidates(warp_pipe):
+    names = [
+        "sdxl/creator - secret sauce (sdxl).safetensors",
+        "flux2/creator - secret sauce (flux2).safetensors",
+    ]
+
+    with pytest.raises(warp_pipe.LoraTagError) as excinfo:
+        warp_pipe.resolve_lora_name("secret sauce", names, strict=True)
+
+    assert "matches 2 files" in str(excinfo.value)
+    assert "secret sauce (sdxl)" in str(excinfo.value)
+
+
+def test_a_folder_prefix_disambiguates(warp_pipe):
+    names = [
+        "sdxl/creator - secret sauce (sdxl).safetensors",
+        "flux2/creator - secret sauce (flux2).safetensors",
+    ]
+
+    assert warp_pipe.resolve_lora_name("sdxl/", names) == names[0]
+    assert warp_pipe.resolve_lora_name("flux2/creator", names) == names[1]
+
+
+def test_slash_direction_does_not_matter(warp_pipe):
+    # Filenames come back with backslashes on Windows; nobody types those.
+    names = [r"sdxl\creator - thing (sdxl).safetensors"]
+
+    assert warp_pipe.resolve_lora_name("sdxl/creator - thing (sdxl)", names) == names[0]
+    assert warp_pipe.resolve_lora_name("SDXL/CREATOR - THING (SDXL)", names) == names[0]
+
+
+def test_lora_tags_in_text_are_found_without_a_warp(warp_pipe, lora_folder):
+    # The Prompt + LoRAs node keeps its tags in a text input, so the graph still
+    # records them even when its warp output is left unconnected.
+    graph = {
+        "5": {"class_type": "UNETLoader", "inputs": {"unet_name": "flux/krea2.safetensors"}},
+        "6": {
+            "class_type": "Warp Lora Prompt",
+            "inputs": {"model": ["5", 0], "text": "a portrait <lora:detail tweaker:0.8>"},
+        },
+        "7": {"class_type": "KSampler", "inputs": {"model": ["6", 0]}},
+        "9": {"class_type": "Save Image Civitai", "inputs": {"images": ["7", 0]}},
+    }
+
+    text = warp_pipe.SaveImageCivitai().build_metadata(warp=None, prompt=graph, unique_id="9")
+
+    assert "Model: krea2" in text
+    # The fragment in the tag is expanded to the real file, then hashed.
+    assert 'Lora hashes: "w4r10ck - detail tweaker (sdxl): abcdef0123"' in text
+
+
+def test_every_node_has_a_documentation_page():
+    docs = pathlib.Path(__file__).resolve().parents[1] / "web" / "docs"
+    documented = {path.stem for path in docs.glob("*.md")}
+
+    assert NODE_IDS <= documented
+
+
+def test_save_node_is_idle_when_nothing_is_connected(warp_pipe):
+    # Bypassing an upstream branch should leave this node idle rather than
+    # failing the whole prompt on a missing required input.
+    node = warp_pipe.NODE_CLASS_MAPPINGS["Save Image Civitai"]
+    assert "images" in node.INPUT_TYPES()["optional"]
+    assert "images" not in node.INPUT_TYPES()["required"]
+
+    # Idle rather than failed - a bypassed branch upstream is a normal reason -
+    # but it says so, because a silent success is indistinguishable from a save.
+    for empty in (None, []):
+        result = warp_pipe.SaveImageCivitai().save_images(images=empty)
+        assert result["ui"]["images"] == []
+        assert "no file was written" in result["ui"]["warppipe_note"][0]
+
+
+def test_a_typo_suggests_the_right_file(warp_pipe):
+    names = [
+        "krea2/loraholic - fake breast slider - v1 (krea2).safetensors",
+        "sdxl/w4r10ck - detail tweaker (sdxl).safetensors",
+    ]
+
+    with pytest.raises(warp_pipe.LoraTagError) as excinfo:
+        warp_pipe.resolve_lora_name(
+            "loraholic - fake brest slider - v1 (krea2)", names, strict=True
+        )
+    assert "loraholic - fake breast slider - v1 (krea2)" in str(excinfo.value)
+
+    # A typo in a short fragment is matched against the name's parts.
+    with pytest.raises(warp_pipe.LoraTagError) as excinfo:
+        warp_pipe.resolve_lora_name("detial tweaker", names, strict=True)
+    assert "detail tweaker" in str(excinfo.value)
+
+
+def test_apply_to_clip_is_exposed_and_defaults_on(warp_pipe):
+    spec = warp_pipe.WarpLoraPrompt.INPUT_TYPES()["required"]["apply_to_clip"]
+
+    assert spec[0] == "BOOLEAN"
+    assert spec[1]["default"] is True
+    assert spec[1]["label_off"] == "model only"
+
+
+def test_model_only_leaves_the_clip_untouched(warp_pipe, lora_folder, monkeypatch):
+    seen = {}
+    sentinel_clip = object()
+
+    def fake_load(model, clip, lora, s_model, s_clip, lora_metadata=None):
+        seen["clip_arg"] = clip
+        seen["strength_clip"] = s_clip
+        return "patched-model", None if clip is None else "patched-clip"
+
+    comfy_sd = types.ModuleType("comfy.sd")
+    comfy_sd.load_lora_for_models = fake_load
+    comfy_utils = types.ModuleType("comfy.utils")
+    comfy_utils.load_torch_file = lambda p, safe_load=True, return_metadata=True: ({}, None)
+    # "import comfy.sd" resolves through the parent package, so it needs one.
+    comfy_pkg = types.ModuleType("comfy")
+    comfy_pkg.__path__ = []
+    comfy_pkg.sd = comfy_sd
+    comfy_pkg.utils = comfy_utils
+    monkeypatch.setitem(sys.modules, "comfy", comfy_pkg)
+    monkeypatch.setitem(sys.modules, "comfy.sd", comfy_sd)
+    monkeypatch.setitem(sys.modules, "comfy.utils", comfy_utils)
+
+    model, clip, _ = warp_pipe.WarpLoraPrompt().apply(
+        text="x <lora:detail tweaker:0.8>",
+        apply_to_clip=False,
+        model="a-model",
+        clip=sentinel_clip,
+    )
+
+    assert seen["clip_arg"] is None
+    assert seen["strength_clip"] == 0.0
+    assert model == "patched-model"
+    assert clip is sentinel_clip  # untouched
+
+
+STAMP = time.struct_time((2026, 8, 28, 17, 28, 56, 0, 240, 0))
+
+
+def test_date_pattern_uses_dotnet_field_letters(warp_pipe):
+    # MM is the month, mm the minute - the case is the only thing telling them apart.
+    assert warp_pipe.format_date_pattern("yy-MM-dd hh-mm-ss", STAMP) == "26-08-28 17-28-56"
+    assert warp_pipe.format_date_pattern("yyyy", STAMP) == "2026"
+    assert warp_pipe.format_date_pattern("MM/mm", STAMP) == "08/28"
+
+
+def test_filename_prefix_expands_date_tokens(warp_pipe):
+    assert (
+        warp_pipe.expand_filename_prefix("%date:yy-MM-dd hh-mm-ss%", STAMP) == "26-08-28 17-28-56"
+    )
+    assert warp_pipe.expand_filename_prefix("%date:yyyy%_%date:MM%", STAMP) == "2026_08"
+
+
+def test_a_prefix_without_tokens_is_untouched(warp_pipe):
+    assert warp_pipe.expand_filename_prefix("WarpPipe", STAMP) == "WarpPipe"
+    assert warp_pipe.expand_filename_prefix("", STAMP) == ""
+    # ComfyUI's own tokens are left for it to expand.
+    assert (
+        warp_pipe.expand_filename_prefix("shot_%width%x%height%", STAMP) == "shot_%width%x%height%"
+    )
+
+
+def test_slashes_survive_so_subfolders_still_work(warp_pipe):
+    assert (
+        warp_pipe.expand_filename_prefix("Krea2/%date:yyyy-MM-dd%/x", STAMP) == "Krea2/2026-08-28/x"
+    )
+
+
+def test_characters_illegal_in_a_filename_are_replaced(warp_pipe):
+    # A colon is the natural thing to type for a time, and is illegal on Windows.
+    assert warp_pipe.expand_filename_prefix("%date:hh:mm%", STAMP) == "17-28"
+
+
+# ---------------------------------------------------------------------------
+# LoRA library index
+# ---------------------------------------------------------------------------
+
+
+def test_filename_parsing_follows_the_collection_convention(warp_pipe):
+    parsed = warp_pipe.parse_lora_filename(r"krea2\alejnd77 - real cum - beta (krea2).safetensors")
+
+    assert parsed["folder"] == "krea2"
+    assert parsed["creator"] == "alejnd77"
+    assert parsed["name"] == "real cum"
+    assert parsed["version"] == "beta"
+    assert parsed["tagged_base"] == "krea2"
+
+
+def test_filename_parsing_without_a_version(warp_pipe):
+    parsed = warp_pipe.parse_lora_filename(r"krea2\aiguild - galaxyace (krea2).safetensors")
+
+    assert parsed["creator"] == "aiguild"
+    assert parsed["name"] == "galaxyace"
+    assert parsed["version"] is None
+
+
+def test_filename_parsing_keeps_extra_middle_parts_in_the_name(warp_pipe):
+    parsed = warp_pipe.parse_lora_filename(
+        r"ill\suteka434 - hentai comic random generator - full color - v2.0 (ill).safetensors"
+    )
+
+    assert parsed["name"] == "hentai comic random generator - full color"
+    assert parsed["version"] == "v2.0"
+
+
+def test_a_filename_with_no_structure_degrades_to_its_stem(warp_pipe):
+    parsed = warp_pipe.parse_lora_filename("oddball.safetensors")
+
+    assert parsed["name"] == "oddball"
+    assert parsed["creator"] is None
+    assert parsed["folder"] == ""
+
+
+def test_preview_is_found_beside_the_model(warp_pipe, tmp_path):
+    model = tmp_path / "thing.safetensors"
+    model.write_bytes(b"w")
+    assert warp_pipe.lora_preview_path(str(model)) is None
+
+    preview = tmp_path / "thing.preview.png"
+    preview.write_bytes(b"not really a png")
+    assert warp_pipe.lora_preview_path(str(model)) == str(preview)
+    assert warp_pipe.lora_preview_path(None) is None
+
+
+def test_index_carries_what_the_browser_needs(warp_pipe, lora_folder):
+    entries = warp_pipe.lora_index()
+
+    assert {e["id"] for e in entries} == {LORA_ON_DISK, OTHER_LORA}
+    detail = next(e for e in entries if e["id"] == LORA_ON_DISK)
+    assert detail["folder"] == "sdxl"
+    assert detail["creator"] == "w4r10ck"
+    assert detail["name"] == "detail tweaker"
+    assert detail["triggers"] == ["detail tweaker", "sharp focus"]
+    assert detail["has_preview"] is False
+
+
+def test_thumbnail_is_cached_and_much_smaller(warp_pipe, tmp_path, monkeypatch):
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    preview = tmp_path / "big.preview.png"
+    Image.new("RGB", (832, 1152), (90, 110, 130)).save(preview)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr(warp_pipe, "_thumbnail_dir", lambda: str(cache))
+
+    first = warp_pipe.thumbnail_for(str(preview))
+    assert first and os.path.isfile(first)
+    assert os.path.getsize(first) < os.path.getsize(preview)
+    with Image.open(first) as thumb:
+        assert max(thumb.size) <= warp_pipe.THUMBNAIL_SIZE
+
+    # Second call reuses the file rather than re-encoding.
+    assert warp_pipe.thumbnail_for(str(preview)) == first
+
+
+def test_a_broken_image_does_not_break_the_listing(warp_pipe, tmp_path, monkeypatch):
+    preview = tmp_path / "broken.preview.png"
+    preview.write_bytes(b"this is not an image")
+    cache = tmp_path / "cache2"
+    cache.mkdir()
+    monkeypatch.setattr(warp_pipe, "_thumbnail_dir", lambda: str(cache))
+
+    assert warp_pipe.thumbnail_for(str(preview)) is None
+
+
+# ---------------------------------------------------------------------------
+# Prompt text: notes and tags
+# ---------------------------------------------------------------------------
+
+
+def test_notes_after_a_double_slash_are_not_sent(warp_pipe):
+    assert warp_pipe.clean_prompt("cat // trying the warm one") == "cat"
+    assert warp_pipe.clean_prompt("cat, // note\n// another\ndog") == "cat,\ndog"
+    assert warp_pipe.clean_prompt("  // only a note  ") == ""
+
+
+def test_removing_a_tag_does_not_leave_debris(warp_pipe):
+    # The gap a removed tag leaves would otherwise show as " ," or a double comma.
+    assert warp_pipe.clean_prompt("a portrait <lora:x:0.8>, dramatic") == "a portrait, dramatic"
+    assert warp_pipe.clean_prompt("a, <lora:x:1> <lora:y:1> b") == "a, b"
+    assert warp_pipe.clean_prompt("<lora:only:1>") == ""
+
+
+def test_deliberate_line_breaks_survive(warp_pipe):
+    assert warp_pipe.clean_prompt("keep\nmy\nlines") == "keep\nmy\nlines"
+
+
+def test_a_tag_inside_a_note_is_not_loaded(warp_pipe, lora_folder):
+    # Commenting a LoRA out should stop it applying, not just hide it.
+    resolved, _ = warp_pipe.WarpLoraPrompt().plan(
+        warp_pipe.strip_comments("a portrait // <lora:detail tweaker:0.8>")
+    )
+
+    assert resolved == []
+
+
+def test_blank_lines_the_writer_put_there_survive(warp_pipe):
+    # A long prompt is kept readable with blank lines between its sections.
+    # Losing them ran every section together; keeping every one of them would
+    # space the prompt out differently each time a tag moved.
+    prompt = (
+        "// overview\n"
+        "a candid photo\n"
+        "\n"
+        "// subject\n"
+        "18 years old\n"
+        "\n"
+        "\n"
+        "// tags\n"
+        "<lora:a:1.0>\n"
+        "\n"
+        "<lora:b:1.0> keyword"
+    )
+
+    assert warp_pipe.clean_prompt(prompt) == "a candid photo\n\n18 years old\n\nkeyword"
+
+
+def test_the_node_sends_the_cleaned_prompt(warp_pipe, lora_folder):
+    _, _, prompt = warp_pipe.WarpLoraPrompt().apply(
+        text="a portrait <lora:detail tweaker:0.8>, lit // remember to try 0.6"
+    )
+
+    # The tag and the note are gone, and nothing has been put in their place.
+    assert prompt == "a portrait, lit"
+
+
+def test_embeddings_are_indexed_like_loras(warp_pipe, monkeypatch, tmp_path):
+    embedding = tmp_path / "creator - lazy neg - v3 (ill).safetensors"
+    embedding.write_bytes(b"e")
+    module = types.ModuleType("folder_paths")
+    module.get_filename_list = lambda kind: (
+        [r"ill\creator - lazy neg - v3 (ill).safetensors"] if kind == "embeddings" else []
+    )
+    module.get_full_path = lambda kind, name: str(embedding) if kind == "embeddings" else None
+    monkeypatch.setitem(sys.modules, "folder_paths", module)
+
+    entries = warp_pipe.embedding_index()
+
+    assert len(entries) == 1
+    assert entries[0]["kind"] == "embeddings"
+    assert entries[0]["creator"] == "creator"
+    assert entries[0]["name"] == "lazy neg"
+
+
+# ---------------------------------------------------------------------------
+# Portability: other people name their files differently
+# ---------------------------------------------------------------------------
+
+
+def test_base_model_normalisation_folds_only_trivial_variants(warp_pipe):
+    assert warp_pipe.normalise_base_model("Flux.2 Klein 9B-base") == "Flux.2 Klein 9B"
+    assert warp_pipe.normalise_base_model("  Krea 2 ") == "Krea 2"
+    # Neighbouring names are genuinely different models and must stay apart.
+    assert warp_pipe.normalise_base_model("Flux.2 Klein 4B") != warp_pipe.normalise_base_model(
+        "Flux.2 Klein 9B"
+    )
+    assert warp_pipe.normalise_base_model(None) is None
+    assert warp_pipe.normalise_base_model("") is None
+
+
+def test_a_filename_without_the_convention_keeps_its_whole_name(warp_pipe):
+    for name in ["myLoRA.safetensors", "style/some_lora_v2.safetensors", "AAA_BBB-CCC.safetensors"]:
+        parsed = warp_pipe.parse_lora_filename(name)
+        assert parsed["creator"] is None
+        assert parsed["name"] == os.path.splitext(os.path.basename(name))[0]
+
+
+def test_index_says_whether_a_name_was_structured(warp_pipe, monkeypatch, tmp_path):
+    plain = tmp_path / "myLoRA.safetensors"
+    plain.write_bytes(b"w")
+    module = types.ModuleType("folder_paths")
+    module.get_filename_list = lambda kind: ["myLoRA.safetensors"] if kind == "loras" else []
+    module.get_full_path = lambda kind, name: str(plain) if kind == "loras" else None
+    monkeypatch.setitem(sys.modules, "folder_paths", module)
+
+    entry = warp_pipe.lora_index()[0]
+
+    assert entry["structured"] is False
+    assert entry["name"] == "myLoRA"
+
+
+def test_loras_input_is_applied_alongside_the_prompt(warp_pipe, lora_folder):
+    node = warp_pipe.WarpLoraPrompt()
+
+    resolved, _ = node.plan("a portrait", loras="<lora:detail tweaker:0.8>")
+
+    assert len(resolved) == 1
+    assert resolved[0]["weight"] == 0.8
+
+
+def test_the_prompt_is_unchanged_by_the_loras_input(warp_pipe, lora_folder):
+    _, _, prompt = warp_pipe.WarpLoraPrompt().apply(
+        text="a photo in a kitchen", loras="<lora:detail tweaker:0.8>"
+    )
+
+    # The legacy field applies its LoRA and leaves the prompt alone.
+    assert prompt == "a photo in a kitchen"
+
+
+def test_a_lora_is_not_applied_twice_if_it_is_in_both(warp_pipe, lora_folder):
+    resolved, _ = warp_pipe.WarpLoraPrompt().plan(
+        "a portrait <lora:detail tweaker:0.5>", loras="<lora:detail tweaker:0.8>"
+    )
+
+    assert len(resolved) == 1
+    # The interface's list wins, since that is what the rows show.
+    assert resolved[0]["weight"] == 0.8
+
+
+def test_a_switched_off_lora_is_a_commented_line(warp_pipe, lora_folder):
+    # The interface switches a LoRA off by commenting its line out, which the
+    # backend already treats as absent - so there is one rule, not two.
+    listing = "// <lora:detail tweaker:0.8>\n<lora:detail tweaker:0.4>"
+
+    resolved, _ = warp_pipe.WarpLoraPrompt().plan("a portrait", loras=listing)
+
+    assert len(resolved) == 1
+    assert resolved[0]["weight"] == 0.4
+
+
+def test_every_line_of_the_list_is_read(warp_pipe, lora_folder):
+    resolved, _ = warp_pipe.WarpLoraPrompt().plan(
+        "a portrait", loras="<lora:detail tweaker:0.8>\n<lora:ghost:1.0>"
+    )
+
+    # The unknown one is skipped with a warning; the known one still applies.
+    assert [r["weight"] for r in resolved] == [0.8]
+
+
+def test_index_carries_the_civitai_title_and_link(warp_pipe, monkeypatch, tmp_path):
+    model = tmp_path / "creator - thing - v1 (sdxl).safetensors"
+    model.write_bytes(b"w")
+    (tmp_path / "creator - thing - v1 (sdxl).civitai.info").write_text(
+        json.dumps({"modelId": 2237913, "id": 2951752, "model": {"name": "Proper Title"}}),
+        encoding="utf-8",
+    )
+    module = types.ModuleType("folder_paths")
+    module.get_filename_list = lambda kind: (
+        ["creator - thing - v1 (sdxl).safetensors"] if kind == "loras" else []
+    )
+    module.get_full_path = lambda kind, name: str(model) if kind == "loras" else None
+    monkeypatch.setitem(sys.modules, "folder_paths", module)
+
+    entry = warp_pipe.lora_index()[0]
+
+    assert entry["title"] == "Proper Title"
+    # Adult models live on civitai.red, and that host serves the rest as well.
+    assert entry["url"] == "https://civitai.red/models/2237913?modelVersionId=2951752"
+
+
+def test_a_file_with_no_sidecar_has_no_title_or_link(warp_pipe, lora_folder):
+    other = next(e for e in warp_pipe.lora_index() if e["id"] == OTHER_LORA)
+
+    assert other["title"] is None
+    assert other["url"] is None
+
+
+# --- regressions ------------------------------------------------------------
+
+
+def test_both_registration_paths_cover_every_node(warp_pipe_loader):
+    """V3 mode once registered five of the seven nodes.
+
+    Nothing said so: a workflow using Save Image (Civitai) simply failed to
+    open. Both paths are built from NODE_DEFINITIONS now, and this is what
+    holds them there.
+    """
+    legacy = warp_pipe_loader(enable_v3=False)
+    assert set(legacy.NODE_CLASS_MAPPINGS) == set(legacy.NODE_DEFINITIONS)
+    assert set(legacy.NODE_DISPLAY_NAME_MAPPINGS) == set(legacy.NODE_DEFINITIONS)
+
+    v3 = warp_pipe_loader(enable_v3=True)
+    nodes = asyncio.run(asyncio.run(v3.comfy_entrypoint()).get_node_list())
+    assert {node.GET_SCHEMA().node_id for node in nodes} == set(v3.NODE_DEFINITIONS)
+
+
+def test_the_v3_save_node_writes_the_same_ui_payload(warp_pipe_loader):
+    warp_pipe = warp_pipe_loader(enable_v3=True)
+
+    # No images is the bypassed-branch case, which reports rather than fails.
+    output = warp_pipe.SaveImageCivitaiV3.execute(images=None, filename_prefix="x")
+
+    assert output.metadata["ui"]["images"] == []
+    assert "warppipe_note" in output.metadata["ui"]
+
+
+def test_the_v3_prompt_node_strips_tags_and_notes_like_the_legacy_one(warp_pipe_loader):
+    warp_pipe = warp_pipe_loader(enable_v3=True)
+
+    text = "a portrait // try 0.6\n<lora:nothing here:0.8>\ndramatic lighting"
+    assert tuple(warp_pipe.WarpLoraPromptV3.execute(text=text)) == tuple(
+        warp_pipe.WarpLoraPrompt().apply(text=text)
+    )
+
+
+def test_the_nearest_model_wins_and_ties_keep_graph_order(warp_pipe):
+    """min() over whole tuples broke ties on the filename, not on the graph.
+
+    With no start_id every node sits at distance 0, so a two-checkpoint
+    workflow credited whichever name sorted first rather than the first one
+    the graph listed.
+    """
+    graph = {
+        "9": {"inputs": {"ckpt_name": "zeta.safetensors"}},
+        "1": {"inputs": {"ckpt_name": "alpha.safetensors"}},
+    }
+    assert warp_pipe.collect_graph_resources(graph)[0] == "zeta.safetensors"
+
+    # With distances to compare, the nearest still wins over the graph order.
+    nearer = {
+        "1": {"inputs": {"ckpt_name": "far.safetensors"}},
+        "2": {"inputs": {"model": ["1", 0]}},
+        "3": {"inputs": {"ckpt_name": "near.safetensors"}},
+        "4": {"inputs": {"a": ["2", 0], "b": ["3", 0]}},
+    }
+    assert warp_pipe.collect_graph_resources(nearer, start_id="4")[0] == "near.safetensors"
+
+
+def test_the_safe_lists_do_not_track_later_additions_by_other_packs(warp_pipe):
+    """They were the very lists other packs append to, not copies of them.
+
+    coerce_scheduler exists to keep an unknown name out of a workflow, and it
+    cannot do that while its allowlist grows behind it.
+    """
+    import comfy.samplers
+
+    comfy.samplers.KSampler.SCHEDULERS.append("added_by_another_pack")
+    comfy.samplers.KSampler.SAMPLERS.append("also_added_later")
+
+    assert "added_by_another_pack" not in warp_pipe.SAFE_SCHEDULERS
+    assert warp_pipe.coerce_scheduler("added_by_another_pack") == "karras"
+    assert warp_pipe.coerce_sampler("also_added_later") == "euler"
+
+
+def test_trigger_words_come_from_a_sidecar_already_read(warp_pipe):
+    """Indexing a library read every sidecar twice: once for the payload and
+    once more inside civitai_trigger_words."""
+    payload = {"trainedWords": ["one, two", "three", 4]}
+
+    assert warp_pipe.trigger_words_in(payload) == ["one", "two", "three"]
+    assert warp_pipe.trigger_words_in(None) == []
+
+
+def test_the_library_index_reads_each_sidecar_once(warp_pipe, lora_folder, monkeypatch):
+    opened = []
+    real_open = warp_pipe.read_civitai_sidecar
+
+    def counted(path):
+        opened.append(path)
+        return real_open(path)
+
+    monkeypatch.setattr(warp_pipe, "read_civitai_sidecar", counted)
+    warp_pipe.lora_index()
+
+    assert len(opened) == len(set(opened))
+
+
+def test_a_cache_write_that_fails_leaves_no_partial_file(warp_pipe, tmp_path):
+    target = str(tmp_path / "cache.json")
+
+    def explode(temporary):
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write("half a fi")
+        raise OSError("disk full")
+
+    assert warp_pipe._write_atomically(target, explode) is False
+    assert not os.path.exists(target)
+    # And nothing is left behind to be picked up as a stray file either.
+    assert list(tmp_path.iterdir()) == []
+
+    def succeed(temporary):
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write('{"ok": true}')
+
+    assert warp_pipe._write_atomically(target, succeed) is True
+    assert json.loads(pathlib.Path(target).read_text(encoding="utf-8")) == {"ok": True}
+
+
+def test_the_package_ships_every_file_the_frontend_needs():
+    """WEB_DIRECTORY points ComfyUI at ./web, and the wheel once carried only
+    the documentation in it - no JavaScript at all, so an installed copy had no
+    prompt UI, no library browser and no save-node labels."""
+    root = pathlib.Path(__file__).resolve().parents[1]
+    declared = re.search(
+        r"^warppipe = \[(.*?)\]", (root / "pyproject.toml").read_text(encoding="utf-8"), re.M
+    )
+    assert declared, "package-data for warppipe not found in pyproject.toml"
+    globs = re.findall(r'"([^"]+)"', declared.group(1))
+
+    shipped = [
+        path.relative_to(root).as_posix() for path in (root / "web").rglob("*") if path.is_file()
+    ]
+    assert shipped, "no files under web/ to check"
+
+    for path in shipped:
+        assert any(fnmatch.fnmatch(path, pattern) for pattern in globs), (
+            f"{path} is in web/ but no package-data glob matches it, "
+            f"so it will be missing from the built wheel"
+        )
