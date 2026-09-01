@@ -51,6 +51,13 @@ const STYLE = `
 /* The textarea keeps selection, undo and IME. Only its ink is hidden. */
 .wpe-live { position: relative; z-index: 1; background: transparent !important; }
 .wpe-live.is-lit { color: transparent !important; }
+/* Selecting text paints it in the browser's own selection colour, which is
+   opaque - so a selection put plain grey text over the coloured layer and the
+   notes stopped being italic while they were highlighted. Keeping the selected
+   ink transparent as well leaves the layer showing through, and the highlight
+   is a tint rather than a fill so it still shows what is selected. */
+.wpe-live.is-lit::selection { color: transparent !important; background: rgba(78,200,232,0.28); }
+.wpe-live.is-lit::-moz-selection { color: transparent !important; background: rgba(78,200,232,0.28); }
 .wpe-tag { color: #4ec8e8; }
 /* Two different complaints, told apart at a glance: red is a file that is not
    there, orange is a file that is there and is for another base model. The

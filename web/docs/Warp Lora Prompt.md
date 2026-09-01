@@ -70,6 +70,10 @@ a file whose sidecar names no base, nothing can be judged and nothing is orange.
 A tag inside a note is coloured as a note, because that is what happens to it:
 it does not load.
 
+Selecting text keeps all of it. The colouring is drawn behind the box you type
+in, so a selection that painted its own opaque text would hide it — the
+selection is a tint instead, and the notes stay italic while highlighted.
+
 ## Where the LoRAs live
 
 In the prompt, as text, each tag on a line of its own:
