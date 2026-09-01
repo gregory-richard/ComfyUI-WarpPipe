@@ -38,9 +38,8 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - **Rewritten README**, compact and built to be scanned: what the pack does, three screenshots, install, the node table, and links out. Everything longer moved to the wiki
-- **The wiki is published to GitHub**: a workflow copies `wiki/` into the repository's GitHub wiki on every push that touches it, rewriting repo-relative image and file links so they resolve there
 - **Screenshots taken from a real ComfyUI** rather than described in prose, captured against a generated demo LoRA folder so no personal library appears
-- **A `wiki/`**: [Home](wiki/Home.md), [Usage](wiki/Usage.md), [Nodes](wiki/Nodes.md), [API](wiki/API.md), [Architecture](wiki/Architecture.md), [Development](wiki/Development.md) and [Troubleshooting](wiki/Troubleshooting.md). The README is the shop window; the detail lives here
+- **[WIKI.md](WIKI.md)**: getting started, usage, a node reference, the HTTP API, architecture, development and troubleshooting, in one file. The README is the shop window; the detail lives there
 - **The Civitai Updater relationship, written down**: which sidecar field feeds which feature, and exactly what stops working without one. Only the AutoV2 hash has a fallback
 - **A new example workflow**: two model configurations, Krea 2 and Z-Image Turbo, each with its own Warp, switched into one shared pipeline. The generated image carries both the workflow and the Civitai `parameters` block it was saved with
 - **Assets restructured** into `assets/registry/` (sized and quantised for the listing - the banner went from 4.8 MB to 487 KB), `assets/docs/` (screenshots, 352 KB for six) and `assets/source/` (the originals)

@@ -36,8 +36,8 @@ Press `/` to complete against your library inline, `Tab` to take it, `Tab` again
 on a tag for that LoRA's trigger words. Weight, ordering and switching a LoRA off
 are ordinary text edits, so undo covers all of them.
 
-→ [Writing a prompt](wiki/Usage.md#writing-a-prompt) ·
-[the browser](wiki/Usage.md#the-browser) · [all the keys](wiki/Usage.md#keys)
+→ [Writing a prompt](WIKI.md#writing-a-prompt) ·
+[the browser](WIKI.md#the-browser) · [all the keys](WIKI.md#keys)
 
 ## One wire
 
@@ -47,7 +47,7 @@ Everything on the left goes into a **Warp**. One link crosses the canvas. An
 **Unwarp** gives it all back. Warps chain, so a second one downstream carries
 everything the first did and adds to it.
 
-→ [Bundling a generation](wiki/Usage.md#bundling-a-generation)
+→ [Bundling a generation](WIKI.md#bundling-a-generation)
 
 ## Works with Civitai Updater
 
@@ -57,7 +57,7 @@ writes: trigger words, base models, titles, Civitai links and the AutoV2 hash
 Civitai matches on. Only the hash has a fallback — the rest simply are not there
 without a sidecar, and the features built on them go quiet.
 
-→ [What the sidecars give you](wiki/Usage.md#what-the-sidecars-give-you)
+→ [What the sidecars give you](WIKI.md#what-the-sidecars-give-you)
 
 ## The nodes
 
@@ -73,7 +73,7 @@ without a sidecar, and the features built on them go quiet.
 
 Every node carries its own help inside ComfyUI, behind the `?` on the node.
 
-→ [Every input and output](wiki/Nodes.md)
+→ [Every input and output](WIKI.md#node-reference)
 
 ## Example workflow
 
@@ -103,17 +103,14 @@ Or download the [workflow JSON](examples/workflow_example.json).
 
 ## Documentation
 
-| | |
-| --- | --- |
-| [Home](wiki/Home.md) | Start here |
-| [Usage](wiki/Usage.md) | Prompts, bundling, saving for Civitai |
-| [Nodes](wiki/Nodes.md) | Every input and output |
-| [API](wiki/API.md) | The HTTP routes the frontend uses |
-| [Architecture](wiki/Architecture.md) | How the pieces fit, and why |
-| [Development](wiki/Development.md) | Tests, lint, releasing |
-| [Troubleshooting](wiki/Troubleshooting.md) | When something does not appear |
-
-Also published as the [GitHub wiki](https://github.com/gregory-richard/ComfyUI-WarpPipe/wiki).
+Everything else is in **[WIKI.md](WIKI.md)**:
+[getting started](WIKI.md#getting-started) ·
+[usage](WIKI.md#usage) ·
+[node reference](WIKI.md#node-reference) ·
+[HTTP API](WIKI.md#http-api) ·
+[architecture](WIKI.md#architecture) ·
+[development](WIKI.md#development) ·
+[troubleshooting](WIKI.md#troubleshooting)
 
 ## Credits
 
