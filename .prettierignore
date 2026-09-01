@@ -1,0 +1,3 @@
+# The node documentation is prose, laid out by hand for reading. Prettier would
+# rewrap it and change nothing that matters.
+web/docs/

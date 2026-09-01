@@ -57,7 +57,11 @@ class _Schema:
 
 
 class _ComfyNode:
-    hidden = types.SimpleNamespace(unique_id="test-node")
+    hidden = types.SimpleNamespace(
+        unique_id="test-node",
+        prompt=None,
+        extra_pnginfo=None,
+    )
 
     @classmethod
     def GET_SCHEMA(cls):
@@ -84,7 +88,7 @@ def _fake_io_module():
     io.ComfyNode = _ComfyNode
     io.Schema = _Schema
     io.NodeOutput = _NodeOutput
-    io.Hidden = types.SimpleNamespace(unique_id=object())
+    io.Hidden = types.SimpleNamespace(unique_id=object(), prompt=object(), extra_pnginfo=object())
     io.Custom = _type_factory
 
     for name, io_type in (

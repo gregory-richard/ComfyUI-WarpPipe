@@ -205,8 +205,8 @@ never inserted wholesale. The suggestion after Tab offers all of them first,
 then one at a time; the strip offers the first six as buttons. Either way you
 pick, and they land on a line of their own.
 
-The node's **Trigger words** setting is the other way round: it adds them for
-you at generation time, without touching the prompt you wrote.
+None of them are ever added for you. The section on trigger words below says
+why that is deliberate rather than unfinished.
 
 ## How the prompt is laid out
 
@@ -274,7 +274,7 @@ weights, encoding first would silently drop them.
 
 - **model** — The model with every resolved LoRA applied.
 - **clip** — The CLIP with every resolved LoRA applied.
-- **prompt** — The prompt with the tags and notes removed and the trigger words
+- **prompt** — The prompt with the tags and the notes removed, and nothing
   added, ready for a text encoder.
 
 ## Wiring it

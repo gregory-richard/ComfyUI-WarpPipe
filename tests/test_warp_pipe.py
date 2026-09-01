@@ -1,18 +1,26 @@
 import asyncio
+import fnmatch
 import hashlib
 import inspect
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 import types
 
 import pytest
 
-V3_NODE_IDS = {"Warp", "Unwarp", "Warp Provider", "FD Scheduler Adapter", "Dead End"}
-# The Civitai save node is currently registered on the legacy path only.
-NODE_IDS = V3_NODE_IDS | {"Save Image Civitai", "Warp Lora Prompt"}
+NODE_IDS = {
+    "Warp",
+    "Unwarp",
+    "Warp Provider",
+    "FD Scheduler Adapter",
+    "Dead End",
+    "Save Image Civitai",
+    "Warp Lora Prompt",
+}
 
 
 def test_legacy_registration_and_node_contracts(warp_pipe):
@@ -143,7 +151,9 @@ def test_v3_entrypoint_schemas_and_execution(warp_pipe_loader):
     nodes = asyncio.run(extension.get_node_list())
     schemas = [node.GET_SCHEMA() for node in nodes]
 
-    assert {schema.node_id for schema in schemas} == V3_NODE_IDS
+    # Every node, not a subset: registering only some of them under V3 means a
+    # saved workflow using one of the others silently fails to open.
+    assert {schema.node_id for schema in schemas} == NODE_IDS
     combo_outputs = [
         output for schema in schemas for output in schema.outputs if output.io_type == "COMBO"
     ]
@@ -332,7 +342,11 @@ def test_saving_writes_only_what_was_asked_for(warp_pipe, monkeypatch, tmp_path)
     folder_paths = types.ModuleType("folder_paths")
     folder_paths.get_output_directory = lambda: str(tmp_path)
     folder_paths.get_save_image_path = lambda prefix, out, w, h: (
-        str(tmp_path), "img", 1, "", prefix
+        str(tmp_path),
+        "img",
+        1,
+        "",
+        prefix,
     )
     pil = types.ModuleType("PIL")
     pil_image = types.ModuleType("PIL.Image")
@@ -364,7 +378,9 @@ def test_saving_writes_only_what_was_asked_for(warp_pipe, monkeypatch, tmp_path)
     node.save_images(images=[FakeTensor()], embed_metadata=True, embed_workflow=True, prompt=graph)
     node.save_images(images=[FakeTensor()], embed_metadata=True, embed_workflow=False, prompt=graph)
     node.save_images(images=[FakeTensor()], embed_metadata=False, embed_workflow=True, prompt=graph)
-    node.save_images(images=[FakeTensor()], embed_metadata=False, embed_workflow=False, prompt=graph)
+    node.save_images(
+        images=[FakeTensor()], embed_metadata=False, embed_workflow=False, prompt=graph
+    )
 
     assert [w["keys"] for w in written] == [
         ["parameters", "prompt"],
@@ -384,7 +400,13 @@ def test_jpeg_keeps_the_generation_info_but_cannot_keep_the_workflow(
 
     folder_paths = types.ModuleType("folder_paths")
     folder_paths.get_output_directory = lambda: str(tmp_path)
-    folder_paths.get_save_image_path = lambda prefix, out, w, h: (str(tmp_path), "img", 1, "", prefix)
+    folder_paths.get_save_image_path = lambda prefix, out, w, h: (
+        str(tmp_path),
+        "img",
+        1,
+        "",
+        prefix,
+    )
     folder_paths.get_filename_list = lambda folder: []
     monkeypatch.setitem(sys.modules, "folder_paths", folder_paths)
 
@@ -399,8 +421,11 @@ def test_jpeg_keeps_the_generation_info_but_cannot_keep_the_workflow(
 
     warp = warp_pipe.Warp().warp(prompt_positive="a portrait", seed=123, steps_1=30)[0]
     result = warp_pipe.SaveImageCivitai().save_images(
-        images=[FakeTensor()], warp=warp, file_format="jpeg",
-        embed_metadata=True, embed_workflow=True,
+        images=[FakeTensor()],
+        warp=warp,
+        file_format="jpeg",
+        embed_metadata=True,
+        embed_workflow=True,
     )
 
     saved = result["ui"]["images"][0]["filename"]
@@ -417,9 +442,7 @@ def test_jpeg_keeps_the_generation_info_but_cannot_keep_the_workflow(
     assert "nowhere to keep a ComfyUI workflow" in result["ui"]["warppipe_note"][0]
 
 
-def test_the_preview_can_be_turned_off_without_affecting_the_save(
-    warp_pipe, monkeypatch, tmp_path
-):
+def test_the_preview_can_be_turned_off_without_affecting_the_save(warp_pipe, monkeypatch, tmp_path):
     saved = []
 
     class Saved:
@@ -435,7 +458,13 @@ def test_the_preview_can_be_turned_off_without_affecting_the_save(
 
     folder_paths = types.ModuleType("folder_paths")
     folder_paths.get_output_directory = lambda: str(tmp_path)
-    folder_paths.get_save_image_path = lambda prefix, out, w, h: (str(tmp_path), "img", 1, "", prefix)
+    folder_paths.get_save_image_path = lambda prefix, out, w, h: (
+        str(tmp_path),
+        "img",
+        1,
+        "",
+        prefix,
+    )
     folder_paths.get_filename_list = lambda folder: []
     pil = types.ModuleType("PIL")
     pil_image = types.ModuleType("PIL.Image")
@@ -648,7 +677,10 @@ def test_a_name_fed_in_from_another_node_is_found(warp_pipe, monkeypatch):
     [
         (
             "ComfyUI's own loader",
-            {"class_type": "LoraLoader", "inputs": {"lora_name": "a.safetensors", "strength_model": 0.8}},
+            {
+                "class_type": "LoraLoader",
+                "inputs": {"lora_name": "a.safetensors", "strength_model": 0.8},
+            },
             [("a.safetensors", 0.8)],
         ),
         (
@@ -872,9 +904,7 @@ def test_trigger_words_already_written_are_left_alone(warp_pipe, lora_folder):
 
 
 def test_a_switched_off_lora_is_not_applied(warp_pipe, lora_folder):
-    resolved, _ = warp_pipe.WarpLoraPrompt().plan(
-        "a portrait\n// <lora:detail tweaker:0.8>"
-    )
+    resolved, _ = warp_pipe.WarpLoraPrompt().plan("a portrait\n// <lora:detail tweaker:0.8>")
 
     assert resolved == []
 
@@ -1200,18 +1230,19 @@ def test_blank_lines_the_writer_put_there_survive(warp_pipe):
     # A long prompt is kept readable with blank lines between its sections.
     # Losing them ran every section together; keeping every one of them would
     # space the prompt out differently each time a tag moved.
-    prompt = \
-        "// overview\n"\
-        "a candid photo\n"\
-        "\n"\
-        "// subject\n"\
-        "18 years old\n"\
-        "\n"\
-        "\n"\
-        "// tags\n"\
-        "<lora:a:1.0>\n"\
-        "\n"\
+    prompt = (
+        "// overview\n"
+        "a candid photo\n"
+        "\n"
+        "// subject\n"
+        "18 years old\n"
+        "\n"
+        "\n"
+        "// tags\n"
+        "<lora:a:1.0>\n"
+        "\n"
         "<lora:b:1.0> keyword"
+    )
 
     assert warp_pipe.clean_prompt(prompt) == "a candid photo\n\n18 years old\n\nkeyword"
 
@@ -1354,3 +1385,147 @@ def test_a_file_with_no_sidecar_has_no_title_or_link(warp_pipe, lora_folder):
 
     assert other["title"] is None
     assert other["url"] is None
+
+
+# --- regressions ------------------------------------------------------------
+
+
+def test_both_registration_paths_cover_every_node(warp_pipe_loader):
+    """V3 mode once registered five of the seven nodes.
+
+    Nothing said so: a workflow using Save Image (Civitai) simply failed to
+    open. Both paths are built from NODE_DEFINITIONS now, and this is what
+    holds them there.
+    """
+    legacy = warp_pipe_loader(enable_v3=False)
+    assert set(legacy.NODE_CLASS_MAPPINGS) == set(legacy.NODE_DEFINITIONS)
+    assert set(legacy.NODE_DISPLAY_NAME_MAPPINGS) == set(legacy.NODE_DEFINITIONS)
+
+    v3 = warp_pipe_loader(enable_v3=True)
+    nodes = asyncio.run(asyncio.run(v3.comfy_entrypoint()).get_node_list())
+    assert {node.GET_SCHEMA().node_id for node in nodes} == set(v3.NODE_DEFINITIONS)
+
+
+def test_the_v3_save_node_writes_the_same_ui_payload(warp_pipe_loader):
+    warp_pipe = warp_pipe_loader(enable_v3=True)
+
+    # No images is the bypassed-branch case, which reports rather than fails.
+    output = warp_pipe.SaveImageCivitaiV3.execute(images=None, filename_prefix="x")
+
+    assert output.metadata["ui"]["images"] == []
+    assert "warppipe_note" in output.metadata["ui"]
+
+
+def test_the_v3_prompt_node_strips_tags_and_notes_like_the_legacy_one(warp_pipe_loader):
+    warp_pipe = warp_pipe_loader(enable_v3=True)
+
+    text = "a portrait // try 0.6\n<lora:nothing here:0.8>\ndramatic lighting"
+    assert tuple(warp_pipe.WarpLoraPromptV3.execute(text=text)) == tuple(
+        warp_pipe.WarpLoraPrompt().apply(text=text)
+    )
+
+
+def test_the_nearest_model_wins_and_ties_keep_graph_order(warp_pipe):
+    """min() over whole tuples broke ties on the filename, not on the graph.
+
+    With no start_id every node sits at distance 0, so a two-checkpoint
+    workflow credited whichever name sorted first rather than the first one
+    the graph listed.
+    """
+    graph = {
+        "9": {"inputs": {"ckpt_name": "zeta.safetensors"}},
+        "1": {"inputs": {"ckpt_name": "alpha.safetensors"}},
+    }
+    assert warp_pipe.collect_graph_resources(graph)[0] == "zeta.safetensors"
+
+    # With distances to compare, the nearest still wins over the graph order.
+    nearer = {
+        "1": {"inputs": {"ckpt_name": "far.safetensors"}},
+        "2": {"inputs": {"model": ["1", 0]}},
+        "3": {"inputs": {"ckpt_name": "near.safetensors"}},
+        "4": {"inputs": {"a": ["2", 0], "b": ["3", 0]}},
+    }
+    assert warp_pipe.collect_graph_resources(nearer, start_id="4")[0] == "near.safetensors"
+
+
+def test_the_safe_lists_do_not_track_later_additions_by_other_packs(warp_pipe):
+    """They were the very lists other packs append to, not copies of them.
+
+    coerce_scheduler exists to keep an unknown name out of a workflow, and it
+    cannot do that while its allowlist grows behind it.
+    """
+    import comfy.samplers
+
+    comfy.samplers.KSampler.SCHEDULERS.append("added_by_another_pack")
+    comfy.samplers.KSampler.SAMPLERS.append("also_added_later")
+
+    assert "added_by_another_pack" not in warp_pipe.SAFE_SCHEDULERS
+    assert warp_pipe.coerce_scheduler("added_by_another_pack") == "karras"
+    assert warp_pipe.coerce_sampler("also_added_later") == "euler"
+
+
+def test_trigger_words_come_from_a_sidecar_already_read(warp_pipe):
+    """Indexing a library read every sidecar twice: once for the payload and
+    once more inside civitai_trigger_words."""
+    payload = {"trainedWords": ["one, two", "three", 4]}
+
+    assert warp_pipe.trigger_words_in(payload) == ["one", "two", "three"]
+    assert warp_pipe.trigger_words_in(None) == []
+
+
+def test_the_library_index_reads_each_sidecar_once(warp_pipe, lora_folder, monkeypatch):
+    opened = []
+    real_open = warp_pipe.read_civitai_sidecar
+
+    def counted(path):
+        opened.append(path)
+        return real_open(path)
+
+    monkeypatch.setattr(warp_pipe, "read_civitai_sidecar", counted)
+    warp_pipe.lora_index()
+
+    assert len(opened) == len(set(opened))
+
+
+def test_a_cache_write_that_fails_leaves_no_partial_file(warp_pipe, tmp_path):
+    target = str(tmp_path / "cache.json")
+
+    def explode(temporary):
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write("half a fi")
+        raise OSError("disk full")
+
+    assert warp_pipe._write_atomically(target, explode) is False
+    assert not os.path.exists(target)
+    # And nothing is left behind to be picked up as a stray file either.
+    assert list(tmp_path.iterdir()) == []
+
+    def succeed(temporary):
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write('{"ok": true}')
+
+    assert warp_pipe._write_atomically(target, succeed) is True
+    assert json.loads(pathlib.Path(target).read_text(encoding="utf-8")) == {"ok": True}
+
+
+def test_the_package_ships_every_file_the_frontend_needs():
+    """WEB_DIRECTORY points ComfyUI at ./web, and the wheel once carried only
+    the documentation in it - no JavaScript at all, so an installed copy had no
+    prompt UI, no library browser and no save-node labels."""
+    root = pathlib.Path(__file__).resolve().parents[1]
+    declared = re.search(
+        r"^warppipe = \[(.*?)\]", (root / "pyproject.toml").read_text(encoding="utf-8"), re.M
+    )
+    assert declared, "package-data for warppipe not found in pyproject.toml"
+    globs = re.findall(r'"([^"]+)"', declared.group(1))
+
+    shipped = [
+        path.relative_to(root).as_posix() for path in (root / "web").rglob("*") if path.is_file()
+    ]
+    assert shipped, "no files under web/ to check"
+
+    for path in shipped:
+        assert any(fnmatch.fnmatch(path, pattern) for pattern in globs), (
+            f"{path} is in web/ but no package-data glob matches it, "
+            f"so it will be missing from the built wheel"
+        )

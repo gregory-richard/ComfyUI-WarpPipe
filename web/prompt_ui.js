@@ -1,5 +1,7 @@
 import { app } from "../../scripts/app.js";
+import { everything } from "./library.js";
 import { connectedBase, connectedModelName, sameBase } from "./model_base.js";
+import { escapeAttr, escapeHTML, stemOf } from "./text.js";
 import { keepWidgetValuesByName } from "./widget_values.js";
 
 // The prompt box, made legible.
@@ -176,22 +178,10 @@ const STYLE = `
 
 // --- library ---------------------------------------------------------------
 
-let libraryCache = null;
-async function library() {
-  if (libraryCache) return libraryCache;
-  const [loras, embeddings] = await Promise.all([
-    fetch("/warppipe/loras").then((r) => r.json()).catch(() => ({ loras: [] })),
-    fetch("/warppipe/embeddings").then((r) => r.json()).catch(() => ({ embeddings: [] })),
-  ]);
-  libraryCache = [...(loras.loras || []), ...(embeddings.embeddings || [])];
-  return libraryCache;
-}
-
-const stemOf = (id) => id.replace(/\\/g, "/").split("/").pop().replace(/\.[^.]+$/, "");
-const escapeHTML = (s) =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-// A reason names real files and real base models, so it can carry a quote.
-const escapeAttr = (s) => escapeHTML(s).replace(/"/g, "&quot;");
+// Shared with the browser, so the index is fetched once rather than per view.
+// A failure here leaves tags uncoloured, which is what should happen: the
+// prompt is still perfectly editable without knowing what is on disk.
+const library = () => everything().catch(() => []);
 
 // --- the text ---------------------------------------------------------------
 
@@ -361,10 +351,25 @@ function highlight(text, status, triggers, ghost) {
 // Every property that decides where a glyph lands, copied from the textarea
 // onto the layer, so the two agree character for character.
 const COPIED_STYLES = [
-  "fontFamily", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing",
-  "textIndent", "textTransform", "paddingTop", "paddingRight", "paddingBottom",
-  "paddingLeft", "borderTopWidth", "borderRightWidth", "borderBottomWidth",
-  "borderLeftWidth", "boxSizing", "tabSize", "textAlign",
+  "fontFamily",
+  "fontSize",
+  "fontWeight",
+  "fontStyle",
+  "lineHeight",
+  "letterSpacing",
+  "textIndent",
+  "textTransform",
+  "paddingTop",
+  "paddingRight",
+  "paddingBottom",
+  "paddingLeft",
+  "borderTopWidth",
+  "borderRightWidth",
+  "borderBottomWidth",
+  "borderLeftWidth",
+  "boxSizing",
+  "tabSize",
+  "textAlign",
 ];
 
 /** The textarea being typed into, under either node renderer.
@@ -430,8 +435,7 @@ function light(textarea) {
     // Without matching that, every line wraps in a different place and the
     // colouring slides off the words. Whatever the gutter costs is added to
     // the layer's right padding.
-    const borders =
-      parseFloat(cs.borderLeftWidth || "0") + parseFloat(cs.borderRightWidth || "0");
+    const borders = parseFloat(cs.borderLeftWidth || "0") + parseFloat(cs.borderRightWidth || "0");
     const gutter = Math.max(0, textarea.offsetWidth - textarea.clientWidth - borders);
     layer.style.paddingRight = `${parseFloat(cs.paddingRight || "0") + gutter}px`;
 
@@ -566,9 +570,7 @@ function editVerbs(textarea, commit) {
       e.preventDefault();
       e.stopPropagation();
 
-      const other = up
-        ? lineBounds(value, here.start - 1)
-        : lineBounds(value, here.end + 1);
+      const other = up ? lineBounds(value, here.start - 1) : lineBounds(value, here.end + 1);
       const from = Math.min(here.start, other.start);
       const to = Math.max(here.end, other.end);
       const line = value.slice(here.start, here.end);
@@ -602,7 +604,7 @@ function editVerbs(textarea, commit) {
  * and any disagreement puts the menu on what is being typed. Grey text needs no
  * estimating; the same layer draws it, from the same string.
  */
-function inlineCompletion(node, textarea, commit, lit, lookup, say, baseOf) {
+function inlineCompletion(textarea, commit, lit, lookup, say, baseOf) {
   // { kind: "lora", at, query, matches, index } | { kind: "trigger", at, options, index }
   let session = null;
   let run = 0; // so a slow lookup cannot overwrite a newer one
@@ -630,7 +632,9 @@ function inlineCompletion(node, textarea, commit, lit, lookup, say, baseOf) {
     if (!session.matches.length) return lit?.setGhost(null);
     const stem = stemOf(session.matches[session.index].id);
     const q = session.query;
-    const shown = stem.toLowerCase().startsWith(q.toLowerCase()) ? stem.slice(q.length) : ` ${stem}`;
+    const shown = stem.toLowerCase().startsWith(q.toLowerCase())
+      ? stem.slice(q.length)
+      : ` ${stem}`;
     const nth =
       session.matches.length > 1 ? ` ${session.index + 1}/${session.matches.length} ↑↓` : "";
     lit?.setGhost({
@@ -655,12 +659,13 @@ function inlineCompletion(node, textarea, commit, lit, lookup, say, baseOf) {
 
     // A LoRA for another base model does not work on the model that is wired
     // in, so suggesting it is a waste of the list. Only what is *known* not to
-    // fit is dropped: a file with no sidecar declares no base model, and
-    // guessing it does not fit would hide a working LoRA - in one real
-    // collection 163 of 761 files say nothing about their base. Those sort
-    // after the ones that match, so the first suggestion is always a fit when
-    // a fit exists.
-    const fit = (e) => (sameBase(e.base_model, base) ? 0 : e.base_model ? 2 : 1);
+    // fit is dropped by the filter below: a file with no sidecar declares no
+    // base model, and guessing it does not fit would hide a working LoRA - in
+    // one real collection 163 of 761 files say nothing about their base.
+    //
+    // So only two ranks reach here, a match and an unknown, and the unknowns
+    // sort last: the first suggestion is always a fit when a fit exists.
+    const fit = (e) => (sameBase(e.base_model, base) ? 0 : 1);
 
     session.matches = entries
       .filter((e) => {
@@ -938,7 +943,7 @@ function openDetails(entry, promptText, insertWords) {
  * which is where the flickering and the caret-hiding came from. Only one LoRA
  * can be under the caret, so only one line is ever needed.
  */
-function makeStrip(node) {
+function makeStrip() {
   const el = document.createElement("div");
   el.className = "wps";
 
@@ -1078,7 +1083,7 @@ app.registerExtension({
 
     let lit = null;
     const getEl = () => lit?.textarea ?? findTextarea(node);
-    const strip = makeStrip(node);
+    const strip = makeStrip();
 
     /** Put the strip along the bottom of the field the prompt already sits in.
      *
@@ -1152,7 +1157,10 @@ app.registerExtension({
       if (!el || !listWidget) return;
       // The old field is already one tag per line, // and all - which is the
       // shape the prompt wants, so it is appended as it stands.
-      const lines = (listWidget.value || "").split("\n").map((l) => l.trim()).filter(Boolean);
+      const lines = (listWidget.value || "")
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
       if (!lines.length) return;
       const value = el.value || "";
       const joined = lines.join("\n");
@@ -1203,7 +1211,8 @@ app.registerExtension({
         return;
       }
       const entry = lookup(tag.name);
-      const fits = entry?.base_model && baseSeen.base ? sameBase(entry.base_model, baseSeen.base) : null;
+      const fits =
+        entry?.base_model && baseSeen.base ? sameBase(entry.base_model, baseSeen.base) : null;
       strip.show(
         tag,
         entry,
@@ -1268,7 +1277,7 @@ app.registerExtension({
         setTimeout(updateStrip, 0);
       });
       editVerbs(el, commit);
-      inlineCompletion(node, el, commit, lit, lookup, say, baseOf);
+      inlineCompletion(el, commit, lit, lookup, say, baseOf);
       attachStrip();
       commit();
     };
@@ -1328,27 +1337,53 @@ app.registerExtension({
         );
       });
 
+    // Everything started here has to be stoppable. light() runs a 100ms timer
+    // for as long as it is attached, and without this the timer outlived the
+    // node: deleting it, or loading another workflow, left one reflowing a
+    // layer that was no longer on the page - ten times a second, for the rest
+    // of the session, holding the textarea and this whole closure alive.
+    const started = [];
+    const every = (ms, work) => {
+      const id = setInterval(work, ms);
+      started.push(() => clearInterval(id));
+      return id;
+    };
+
+    const teardown = () => {
+      for (const stop of started.splice(0)) stop();
+      lit?.detach();
+      lit = null;
+      strip.el.remove();
+    };
+
     let tries = 0;
-    const timer = setInterval(() => {
+    const timer = every(100, () => {
       if (ensure() || ++tries > 150) clearInterval(timer);
-    }, 100);
+    });
 
     const root = document.querySelector(`[data-node-id="${node.id}"]`);
     if (root) {
-      new MutationObserver((records) => {
+      const observer = new MutationObserver((records) => {
         if (!isOurs(records)) ensure();
-      }).observe(root, { childList: true, subtree: true });
+      });
+      observer.observe(root, { childList: true, subtree: true });
+      started.push(() => observer.disconnect());
     } else {
       // No subtree to watch under the canvas renderer: one cheap look every
       // half second is enough to notice the overlay being replaced.
-      const recheck = setInterval(() => {
-        if (!node.graph) {
-          clearInterval(recheck);
-          return;
-        }
-        ensure();
-      }, 500);
+      every(500, () => {
+        if (!node.graph) teardown();
+        else ensure();
+      });
     }
+
+    // Removal is the one moment a node is told it is going away. Both renderers
+    // call this, and it fires for a graph being cleared as well as for a delete.
+    const priorRemoved = node.onRemoved;
+    node.onRemoved = function () {
+      teardown();
+      return priorRemoved?.apply(this, arguments);
+    };
 
     node._warppipeGetText = () => getEl()?.value || "";
     node._warppipeSetText = (value) => {

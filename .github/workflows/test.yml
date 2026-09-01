@@ -37,3 +37,25 @@ jobs:
         run: python -m pytest -q
       - name: Build package
         run: python -m build
+
+  web:
+    # The frontend is a third of this pack by volume and had no checks at all,
+    # which is how two unused arguments and an unescaped innerHTML survived.
+    # Its own job, because it shares nothing with the Python matrix.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      # ci, not install: the lockfile is committed so a red build means the
+      # code changed, the same reason the Python tools above are pinned.
+      - name: Install web tooling
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Check formatting
+        run: npm run format:check

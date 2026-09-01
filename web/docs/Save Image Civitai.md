@@ -35,8 +35,10 @@ covers checkpoint, diffusion/UNet and GGUF loaders alike. It also reads
 LoRAs node and power-prompt nodes from other packs, and the stacked slot format
 used by rgthree's Power Lora Loader, honouring each slot's on/off switch.
 
-When a warp from the Prompt + LoRAs node is connected, the LoRAs it recorded are
-used directly instead, since that node knows exactly what it applied.
+The Prompt + LoRAs node needs no special case: its tags live in a text widget,
+which the scan above reads like any other. A tag switched off with `//` is
+skipped there too, so a LoRA parked behind a comment is not credited for an
+image it never touched.
 
 ## Inputs
 

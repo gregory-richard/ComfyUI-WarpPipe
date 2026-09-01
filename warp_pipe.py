@@ -93,24 +93,40 @@ def _register_res4lyf_scheduler_fallbacks() -> None:
         ksampler_schedulers = list(ksampler_schedulers or ())
         comfy.samplers.KSampler.SCHEDULERS = ksampler_schedulers
 
+    stood_in = []
     for scheduler_name in RES4LYF_SCHEDULERS:
-        handlers.setdefault(scheduler_name, handlers["karras"])
+        if handlers.setdefault(scheduler_name, handlers["karras"]) is handlers["karras"]:
+            stood_in.append(scheduler_name)
         if scheduler_name not in scheduler_names:
             scheduler_names.append(scheduler_name)
         if scheduler_name not in ksampler_schedulers:
             ksampler_schedulers.append(scheduler_name)
 
+    # These names now appear in every scheduler dropdown in ComfyUI, and until
+    # RES4LYF loads they are karras wearing another label. Choosing one then
+    # samples with karras sigmas, which is a quiet thing to do without saying
+    # so: the point is that FaceDetailer accepts a workflow built around them,
+    # not that WarpPipe implements them.
+    if stood_in:
+        logger.info(
+            "Registered %s as karras stand-ins so other nodes accept them. "
+            "Install RES4LYF for the real schedulers.",
+            ", ".join(stood_in),
+        )
+
 
 _register_res4lyf_scheduler_fallbacks()
 
-# Safe scheduler/sampler lists for compatibility (pulled dynamically from Comfy).
-SAFE_SAMPLERS = getattr(comfy.samplers.KSampler, "SAMPLERS", [])
-if not isinstance(SAFE_SAMPLERS, list):
-    SAFE_SAMPLERS = list(SAFE_SAMPLERS)
-
-SAFE_SCHEDULERS = getattr(comfy.samplers.KSampler, "SCHEDULERS", [])
-if not isinstance(SAFE_SCHEDULERS, list):
-    SAFE_SCHEDULERS = list(SAFE_SCHEDULERS)
+# Safe scheduler/sampler lists, read from Comfy once at import.
+#
+# Copied rather than referenced. ComfyUI's KSampler.SAMPLERS and .SCHEDULERS are
+# the very lists other packs append to, so holding a reference would make these
+# live views: whatever anyone added later would silently widen the combo boxes
+# below and, worse, walk straight through coerce_scheduler untouched - which is
+# the one thing it exists to prevent. A snapshot means "safe" keeps meaning the
+# set ComfyUI itself shipped, plus the RES4LYF names registered just above.
+SAFE_SAMPLERS = list(getattr(comfy.samplers.KSampler, "SAMPLERS", []))
+SAFE_SCHEDULERS = list(getattr(comfy.samplers.KSampler, "SCHEDULERS", []))
 
 # Compatibility mappings for exotic schedulers
 SCHEDULER_ALIASES = {
@@ -227,7 +243,13 @@ def _validate_linked_input_types(
     return True
 
 
-# Global storage for warp data; keys are unique per Warp instance
+# Global storage for warp data; keys are unique per Warp instance.
+#
+# A bundle holds whatever was warped into it, models and CLIPs included, so an
+# entry keeps those objects alive and their memory unreclaimable for as long as
+# it lasts. That is what the age limit and the cap below are for: an abandoned
+# workflow's models are released within the hour rather than for the lifetime of
+# the process.
 warp_storage: dict[str, dict[str, Any]] = {}
 _storage_timestamps: dict[str, float] = {}  # Track last-access time per warp ID
 _storage_lock = threading.Lock()
@@ -268,6 +290,15 @@ def cleanup_warp_storage() -> None:
 
 
 def _fingerprint_inputs(kwargs: dict[str, Any]) -> str:
+    """A cache key for a node's inputs.
+
+    repr() is identity for a MODEL, CLIP or VAE - "<ModelPatcher object at 0x..>"
+    - so those are keyed on which object arrived rather than on its weights.
+    That is the right answer here: ComfyUI hands back the same patcher for as
+    long as a checkpoint stays loaded, and a reload is exactly the change this
+    should notice. Hashing weights instead would cost more than the execution
+    it saves.
+    """
     h = hashlib.sha256()
     for key in sorted(kwargs.keys()):
         if kwargs[key] is not None:
@@ -280,6 +311,10 @@ def _get_v3_node_id(cls, fallback_prefix: str) -> str:
     if unique_id:
         return f"v3:{unique_id}"
     return f"{fallback_prefix}:{uuid.uuid4().hex}"
+
+
+# SD1.5/SDXL latents. See _create_empty_latent.
+LATENT_CHANNELS = 4
 
 
 def _create_empty_latent(width: int, height: int, batch_size: int):
@@ -298,9 +333,14 @@ def _create_empty_latent(width: int, height: int, batch_size: int):
 
     import torch
 
+    # Four channels and an eighth of the size: the SD1.5/SDXL latent shape, and
+    # the same one ComfyUI's own EmptyLatentImage produces. Architectures with a
+    # wider latent - Flux, SD3, and anything else on 16 channels - need their
+    # own empty-latent node instead; the resolution presets below are SDXL's
+    # anyway, so this node does not pretend to cover them.
     latent_width = width // 8
     latent_height = height // 8
-    latent = torch.zeros([batch_size, 4, latent_height, latent_width])
+    latent = torch.zeros([batch_size, LATENT_CHANNELS, latent_height, latent_width])
     return {"samples": latent}
 
 
@@ -868,15 +908,40 @@ def _load_hash_cache() -> None:
         logger.debug("Could not read hash cache: %s", exc)
 
 
+def _write_atomically(path: str, write) -> bool:
+    """Write through a temporary file in the same directory, then rename.
+
+    Writing straight to the destination leaves a half-finished file behind if
+    anything interrupts it - a crash, a full disk, ComfyUI being closed - and
+    the next reader finds truncated JSON or a torn image rather than nothing at
+    all. os.replace is atomic within a filesystem, so a reader sees either the
+    old file or the new one and never the middle of a write.
+    """
+    directory = os.path.dirname(path) or "."
+    temporary = os.path.join(directory, f".{os.path.basename(path)}.{uuid.uuid4().hex}.tmp")
+    try:
+        write(temporary)
+        os.replace(temporary, path)
+        return True
+    except Exception as exc:
+        logger.debug("Could not write %s: %s", path, exc)
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        return False
+
+
 def _persist_hash_cache() -> None:
     path = _hash_cache_path()
     if not path:
         return
-    try:
-        with open(path, "w", encoding="utf-8") as handle:
+
+    def write(temporary: str) -> None:
+        with open(temporary, "w", encoding="utf-8") as handle:
             json.dump(_hash_cache, handle)
-    except OSError as exc:
-        logger.debug("Could not write hash cache: %s", exc)
+
+    _write_atomically(path, write)
 
 
 def _cache_key(file_path: str) -> Optional[str]:
@@ -1000,29 +1065,6 @@ MODEL_INPUT_KEYS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # the input it arrived in does not.
 MODEL_FOLDER_KEYS: tuple[str, ...] = ("checkpoints", "diffusion_models", "unet")
 
-# What a saved file can be. PNG carries text chunks, which is where both the
-# generation info and the workflow go. JPEG has no such thing: the generation
-# info goes in EXIF, which Civitai reads too, and the workflow has nowhere to
-# live at all.
-FILE_FORMATS: dict[str, dict[str, Any]] = {
-    "png": {"suffix": "png", "pillow": "PNG", "carries_workflow": True},
-    "jpeg": {"suffix": "jpg", "pillow": "JPEG", "carries_workflow": False},
-}
-JPEG_QUALITY = 95
-
-
-def exif_with_parameters(parameters: str) -> bytes:
-    """EXIF holding the generation info the way A1111 writes it.
-
-    UserComment is an UNDEFINED field: an eight-byte encoding name, then the
-    text. A1111 uses UNICODE, meaning UTF-16 big-endian, and that is what every
-    reader of these files expects to find - Civitai included.
-    """
-    from PIL import Image
-
-    exif = Image.Exif()
-    exif[0x9286] = b"UNICODE\0" + parameters.encode("utf-16-be")
-    return exif.tobytes()
 MODEL_SUFFIXES: tuple[str, ...] = (
     ".safetensors",
     ".ckpt",
@@ -1251,8 +1293,11 @@ def collect_graph_resources(
             seen.add(name)
             deduped.append((name, weight))
 
-    # Nearest first; ties fall to whichever the graph listed first.
-    model_name = min(found_models)[1] if found_models else None
+    # Nearest first; ties fall to whichever the graph listed first. Keying on
+    # the distance alone is what makes that true - min() is stable, whereas
+    # comparing whole tuples would break ties on the filename and credit
+    # whichever model happens to sort first.
+    model_name = min(found_models, key=lambda found: found[0])[1] if found_models else None
     return model_name, deduped
 
 
@@ -1343,11 +1388,12 @@ def build_civitai_parameters(
     return "\n".join(lines)
 
 
-def civitai_trigger_words(file_path: Optional[str]) -> list[str]:
-    """Trigger words for a model, from its .civitai.info sidecar."""
-    if not file_path:
-        return []
-    payload = read_civitai_sidecar(file_path)
+def trigger_words_in(payload: Optional[dict[str, Any]]) -> list[str]:
+    """Trigger words out of a sidecar that has already been read.
+
+    Split from the reading so a caller holding the payload does not open and
+    parse the same file a second time. Indexing a library is thousands of these.
+    """
     if not payload:
         return []
 
@@ -1358,6 +1404,13 @@ def civitai_trigger_words(file_path: Optional[str]) -> list[str]:
         # Civitai often packs several comma-separated words into one entry.
         words.extend(part.strip() for part in entry.split(",") if part.strip())
     return words
+
+
+def civitai_trigger_words(file_path: Optional[str]) -> list[str]:
+    """Trigger words for a model, from its .civitai.info sidecar."""
+    if not file_path:
+        return []
+    return trigger_words_in(read_civitai_sidecar(file_path))
 
 
 def available_loras() -> list[str]:
@@ -1392,6 +1445,8 @@ def resolve_lora_name(
 
     With strict=True an unresolvable tag raises instead of returning None, so a
     typo fails the run rather than silently producing an image without the LoRA.
+    An empty library is the exception: "there is no such file" cannot be told
+    from "I could not look", and failing a run over the second would be wrong.
     """
     if not query or not query.strip():
         return None
@@ -1878,11 +1933,18 @@ def thumbnail_for(preview_path: str) -> Optional[str]:
     try:
         with Image.open(preview_path) as image:
             image.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE))
-            image.convert("RGB").save(cached, "WEBP", quality=THUMBNAIL_QUALITY)
+            small = image.convert("RGB")
     except Exception as exc:
         logger.warning("Could not thumbnail %s: %s", preview_path, exc)
         return None
-    return cached
+
+    # A grid of cards asks for every uncached thumbnail at once, so two requests
+    # for the same one arrive together routinely. Writing in place would let one
+    # of them serve the half-written file the other is still saving.
+    def write(temporary: str) -> None:
+        small.save(temporary, "WEBP", quality=THUMBNAIL_QUALITY)
+
+    return cached if _write_atomically(cached, write) else None
 
 
 def available_models(folder_key: str) -> list[str]:
@@ -1935,7 +1997,10 @@ def model_index(folder_key: str = "loras") -> list[dict[str, Any]]:
                 # filename convention is not.
                 "title": _sidecar_title(payload),
                 "url": _civitai_url(payload),
-                "triggers": civitai_trigger_words(path) if path else [],
+                # Read from the payload already in hand. Calling
+                # civitai_trigger_words here re-opened and re-parsed the same
+                # sidecar, doubling the file reads for the whole library.
+                "triggers": trigger_words_in(payload),
                 "has_preview": has_preview,
                 # The server owns URL construction; the client just uses it.
                 "kind": folder_key,
@@ -2013,6 +2078,31 @@ try:
     _register_routes()
 except Exception as exc:
     logger.warning("Could not register WarpPipe library routes: %s", exc)
+
+
+# What a saved file can be. PNG carries text chunks, which is where both the
+# generation info and the workflow go. JPEG has no such thing: the generation
+# info goes in EXIF, which Civitai reads too, and the workflow has nowhere to
+# live at all.
+FILE_FORMATS: dict[str, dict[str, Any]] = {
+    "png": {"suffix": "png", "pillow": "PNG", "carries_workflow": True},
+    "jpeg": {"suffix": "jpg", "pillow": "JPEG", "carries_workflow": False},
+}
+JPEG_QUALITY = 95
+
+
+def exif_with_parameters(parameters: str) -> bytes:
+    """EXIF holding the generation info the way A1111 writes it.
+
+    UserComment is an UNDEFINED field: an eight-byte encoding name, then the
+    text. A1111 uses UNICODE, meaning UTF-16 big-endian, and that is what every
+    reader of these files expects to find - Civitai included.
+    """
+    from PIL import Image
+
+    exif = Image.Exif()
+    exif[0x9286] = b"UNICODE\0" + parameters.encode("utf-16-be")
+    return exif.tobytes()
 
 
 class SaveImageCivitai:
@@ -2127,44 +2217,36 @@ class SaveImageCivitai:
         positive = values.get("prompt_positive") or ""
         negative = values.get("prompt_negative") or ""
 
-        # A Prompt + LoRAs node records exactly what it applied, which beats
-        # rediscovering it from the graph. Fall back to the graph otherwise.
-        recorded = values.get("loras")
-        if isinstance(recorded, list) and recorded:
-            loras = [
-                (str(entry.get("name")), _as_float(entry.get("weight")), entry.get("hash"))
-                for entry in recorded
-                if isinstance(entry, dict) and entry.get("name")
-            ]
-        else:
-            tagged = extract_lora_tags(positive)
-            combined = list(graph_loras)
-            known = {name.lower() for name, _ in combined}
-            combined.extend((n, w) for n, w in tagged if n.lower() not in known)
+        # Every LoRA comes from the graph. Prompt + LoRAs needs no special case:
+        # its tags live in a text widget, which the scan reads like any other.
+        tagged = extract_lora_tags(positive)
+        combined = list(graph_loras)
+        known = {name.lower() for name, _ in combined}
+        combined.extend((n, w) for n, w in tagged if n.lower() not in known)
 
-            loras = []
-            candidates = available_loras()
-            # An empty listing means the library could not be read at all, and
-            # "this file is missing" cannot be told from "I cannot look". Only
-            # when the library did answer is an unresolvable name really absent.
-            library_answered = bool(candidates)
-            for name, weight in combined:
-                # A tag may hold a fragment rather than a full filename.
-                resolved = resolve_lora_name(name, candidates) or name
-                path = _resolve_model_path("loras", resolved)
-                if path is None and library_answered:
-                    # A workflow can name a file that is not there - a folder
-                    # renamed, a version replaced - and the loader will not have
-                    # applied it. Recording it anyway credits a resource this
-                    # picture never saw, which is worse than leaving it out.
-                    logger.warning(
-                        "Save Image (Civitai): the workflow names %s, which is not in "
-                        "the LoRA folder, so it was not applied and is left out of the "
-                        "metadata.",
-                        name,
-                    )
-                    continue
-                loras.append((_lora_display_name(resolved), weight, model_autov2(path)))
+        loras = []
+        candidates = available_loras()
+        # An empty listing means the library could not be read at all, and
+        # "this file is missing" cannot be told from "I cannot look". Only
+        # when the library did answer is an unresolvable name really absent.
+        library_answered = bool(candidates)
+        for name, weight in combined:
+            # A tag may hold a fragment rather than a full filename.
+            resolved = resolve_lora_name(name, candidates) or name
+            path = _resolve_model_path("loras", resolved)
+            if path is None and library_answered:
+                # A workflow can name a file that is not there - a folder
+                # renamed, a version replaced - and the loader will not have
+                # applied it. Recording it anyway credits a resource this
+                # picture never saw, which is worse than leaving it out.
+                logger.warning(
+                    "Save Image (Civitai): the workflow names %s, which is not in "
+                    "the LoRA folder, so it was not applied and is left out of the "
+                    "metadata.",
+                    name,
+                )
+                continue
+            loras.append((_lora_display_name(resolved), weight, model_autov2(path)))
 
         checkpoint_hash = model_autov2(resolve_model_file(graph_model))
 
@@ -2284,6 +2366,22 @@ class SaveImageCivitai:
         return {"ui": ui}
 
 
+# The node ids this pack registers, with the name each one shows. Both
+# registration paths below are built from this table rather than from their own
+# list: keeping two lists in step by hand is what let V3 mode ship five of these
+# seven nodes, so any workflow using the other two failed to load and nothing
+# said why.
+NODE_DEFINITIONS: dict[str, tuple[str, type]] = {
+    "Warp": ("🌀 Warp", Warp),
+    "Unwarp": ("🌀 Unwarp", Unwarp),
+    "Warp Provider": ("🌀 Warp Provider", WarpProvider),
+    "FD Scheduler Adapter": ("🌀 Scheduler Adapter for FaceDetailer", FDSchedulerAdapter),
+    "Dead End": ("🚫 Dead End", DeadEnd),
+    "Save Image Civitai": ("🌀 Save Image (Civitai)", SaveImageCivitai),
+    "Warp Lora Prompt": ("🌀 Prompt + LoRAs", WarpLoraPrompt),
+}
+
+
 if ENABLE_V3_NODES:
     WARPPIPE_TYPE = io.Custom("WARPPIPE")
     ANY_TYPE = getattr(io, "AnyType", io.Custom("*"))
@@ -2313,6 +2411,13 @@ if ENABLE_V3_NODES:
 
     def _combo_output(output_id: str, options: list[str], display_name: str):
         return io.Combo.Output(output_id, display_name=display_name, options=options)
+
+    def _hidden(*names: str) -> list:
+        """The hidden inputs this build of the V3 API actually knows about."""
+        return [getattr(io.Hidden, name) for name in names if hasattr(io.Hidden, name)]
+
+    def _hidden_value(cls, name: str):
+        return getattr(getattr(cls, "hidden", None), name, None)
 
     class WarpV3(io.ComfyNode):
         @classmethod
@@ -2531,15 +2636,139 @@ if ENABLE_V3_NODES:
         def execute(cls, input=None) -> io.NodeOutput:
             return io.NodeOutput()
 
+    class SaveImageCivitaiV3(io.ComfyNode):
+        @classmethod
+        def define_schema(cls) -> io.Schema:
+            required = SaveImageCivitai.INPUT_TYPES()["required"]
+            return io.Schema(
+                node_id="Save Image Civitai",
+                display_name="🌀 Save Image (Civitai)",
+                category=SaveImageCivitai.CATEGORY,
+                description=SaveImageCivitai.DESCRIPTION,
+                is_output_node=True,
+                hidden=_hidden("prompt", "extra_pnginfo", "unique_id"),
+                inputs=[
+                    io.String.Input(
+                        "filename_prefix",
+                        default="WarpPipe",
+                        tooltip=required["filename_prefix"][1]["tooltip"],
+                    ),
+                    io.Boolean.Input(
+                        "embed_metadata",
+                        default=True,
+                        label_on="generation info",
+                        label_off="no generation info",
+                        tooltip=required["embed_metadata"][1]["tooltip"],
+                    ),
+                    io.Boolean.Input(
+                        "embed_workflow",
+                        default=True,
+                        label_on="workflow",
+                        label_off="no workflow",
+                        tooltip=required["embed_workflow"][1]["tooltip"],
+                    ),
+                    _combo_input(
+                        "file_format",
+                        list(FILE_FORMATS),
+                        default="png",
+                        tooltip=required["file_format"][1]["tooltip"],
+                    ),
+                    io.Boolean.Input(
+                        "preview",
+                        default=True,
+                        label_on="show the images",
+                        label_off="save quietly",
+                        tooltip=required["preview"][1]["tooltip"],
+                    ),
+                    _io_type("IMAGE").Input("images", optional=True),
+                    WARPPIPE_TYPE.Input("warp", optional=True),
+                ],
+                outputs=[],
+            )
+
+        @classmethod
+        def execute(cls, **kwargs) -> io.NodeOutput:
+            result = SaveImageCivitai().save_images(
+                prompt=_hidden_value(cls, "prompt"),
+                extra_pnginfo=_hidden_value(cls, "extra_pnginfo"),
+                unique_id=_hidden_value(cls, "unique_id"),
+                **kwargs,
+            )
+            return io.NodeOutput(ui=result["ui"])
+
+    class WarpLoraPromptV3(io.ComfyNode):
+        @classmethod
+        def define_schema(cls) -> io.Schema:
+            schema = WarpLoraPrompt.INPUT_TYPES()
+            text = schema["required"]["text"][1]
+            return io.Schema(
+                node_id="Warp Lora Prompt",
+                display_name="🌀 Prompt + LoRAs",
+                category=WarpLoraPrompt.CATEGORY,
+                description=WarpLoraPrompt.DESCRIPTION,
+                inputs=[
+                    io.String.Input(
+                        "text",
+                        multiline=True,
+                        default="",
+                        placeholder=text["placeholder"],
+                        tooltip=text["tooltip"],
+                    ),
+                    io.Boolean.Input(
+                        "apply_to_clip",
+                        default=True,
+                        label_on="model + CLIP",
+                        label_off="model only",
+                    ),
+                    io.String.Input("loras", optional=True, default="", multiline=False),
+                    _io_type("MODEL").Input("model", optional=True),
+                    _io_type("CLIP").Input("clip", optional=True),
+                ],
+                # Output ids differ from the input ids they mirror because a
+                # schema's field ids share one namespace; the display names are
+                # what the node shows, and those match the legacy node exactly.
+                outputs=[
+                    _io_type("MODEL").Output("model_out", display_name="model"),
+                    _io_type("CLIP").Output("clip_out", display_name="clip"),
+                    io.String.Output("prompt", display_name="prompt"),
+                ],
+            )
+
+        @classmethod
+        def fingerprint_inputs(cls, **kwargs):
+            return _fingerprint_inputs(kwargs)
+
+        @classmethod
+        def execute(cls, **kwargs) -> io.NodeOutput:
+            return io.NodeOutput(*WarpLoraPrompt().apply(**kwargs))
+
+    # Keyed by the same node ids as NODE_DEFINITIONS, and checked against it
+    # below, so the two paths cannot drift apart again in silence.
+    V3_NODE_CLASSES: dict[str, type] = {
+        "Warp": WarpV3,
+        "Unwarp": UnwarpV3,
+        "Warp Provider": WarpProviderV3,
+        "FD Scheduler Adapter": FDSchedulerAdapterV3,
+        "Dead End": DeadEndV3,
+        "Save Image Civitai": SaveImageCivitaiV3,
+        "Warp Lora Prompt": WarpLoraPromptV3,
+    }
+
+    _unschemad = sorted(set(NODE_DEFINITIONS) - set(V3_NODE_CLASSES))
+    if _unschemad:
+        logger.error(
+            "WARPPIPE_ENABLE_V3 is set but %s ha%s no V3 schema, so %s will not load and "
+            "workflows using %s will fail to open. Unset WARPPIPE_ENABLE_V3 to register "
+            "every node through the legacy path.",
+            ", ".join(_unschemad),
+            "s" if len(_unschemad) == 1 else "ve",
+            "it" if len(_unschemad) == 1 else "they",
+            "it" if len(_unschemad) == 1 else "them",
+        )
+
     class WarpPipeExtension(ComfyExtension):
         async def get_node_list(self) -> list[type[io.ComfyNode]]:
-            return [
-                WarpV3,
-                UnwarpV3,
-                WarpProviderV3,
-                FDSchedulerAdapterV3,
-                DeadEndV3,
-            ]
+            return list(V3_NODE_CLASSES.values())
 
     async def comfy_entrypoint() -> WarpPipeExtension:
         return WarpPipeExtension()
@@ -2549,23 +2778,11 @@ if ENABLE_V3_NODES:
 # the same node IDs exclusively through comfy_entrypoint().
 if not ENABLE_V3_NODES:
     NODE_CLASS_MAPPINGS = {
-        "Warp": Warp,
-        "Unwarp": Unwarp,
-        "Warp Provider": WarpProvider,
-        "FD Scheduler Adapter": FDSchedulerAdapter,
-        "Dead End": DeadEnd,
-        "Save Image Civitai": SaveImageCivitai,
-        "Warp Lora Prompt": WarpLoraPrompt,
+        node_id: node_class for node_id, (_display, node_class) in NODE_DEFINITIONS.items()
     }
 
     NODE_DISPLAY_NAME_MAPPINGS = {
-        "Warp": "🌀 Warp",
-        "Unwarp": "🌀 Unwarp",
-        "Warp Provider": "🌀 Warp Provider",
-        "FD Scheduler Adapter": "🌀 Scheduler Adapter for FaceDetailer",
-        "Dead End": "🚫 Dead End",
-        "Save Image Civitai": "🌀 Save Image (Civitai)",
-        "Warp Lora Prompt": "🌀 Prompt + LoRAs",
+        node_id: display for node_id, (display, _node_class) in NODE_DEFINITIONS.items()
     }
 
 # Optional: Web directory for custom UI files (if you add them later)

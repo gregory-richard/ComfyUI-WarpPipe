@@ -1,5 +1,7 @@
 import { app } from "../../scripts/app.js";
+import { loras } from "./library.js";
 import { connectedBase, groupOf } from "./model_base.js";
+import { escapeHTML, stemOf } from "./text.js";
 
 // The library browser for the Prompt + LoRAs node.
 //
@@ -9,7 +11,6 @@ import { connectedBase, groupOf } from "./model_base.js";
 
 const NODE_ID = "Warp Lora Prompt";
 const TEXT_WIDGET = "text";
-const INDEX_URL = "/warppipe/loras";
 
 const STYLE = `
 .wp-backdrop {
@@ -120,31 +121,30 @@ const STYLE = `
 @media (prefers-reduced-motion: reduce) { .wp-card, .wp-rail-row { transition: none; } }
 `;
 
-let indexCache = null;
+// How many cards are built at once. Past this the grid costs more to lay out
+// than anyone can read down, and the search is the way through a large library.
+const PAGE = 400;
 
-async function loadIndex() {
-  if (indexCache) return indexCache;
-  const res = await fetch(INDEX_URL);
-  if (!res.ok) throw new Error(`library unavailable (${res.status})`);
-  indexCache = (await res.json()).loras || [];
-  return indexCache;
-}
+// The same cache the prompt colours its tags from, so the two views can never
+// be listing different libraries - and the server indexes the folder once.
+const loadIndex = () => loras();
 
 function insertTag(node, entry) {
   const widget = (node.widgets || []).find((w) => w.name === TEXT_WIDGET);
   if (!widget) return;
 
   // The bare filename resolves uniquely and keeps the prompt readable.
-  const stem = entry.id.replace(/\\/g, "/").split("/").pop().replace(/\.[^.]+$/, "");
-  const tag = `<lora:${stem}:1.0>`;
-
+  const stem = stemOf(entry.id);
   // The prompt owns it: this lands on a line of its own, like typing would.
+  // This is the path taken whenever the prompt UI is loaded, which is always;
+  // everything below is the fallback for a browser opened without it.
   if (typeof node._warppipeAddLora === "function") {
     node._warppipeAddLora(stem);
     node.setDirtyCanvas?.(true, true);
     return;
   }
 
+  const tag = `<lora:${stem}:1.0>`;
   const el = widget.inputEl;
   const current = widget.value || "";
   if (el && typeof el.selectionStart === "number") {
@@ -221,7 +221,7 @@ function openBrowser(node) {
       grid.appendChild(empty);
     }
 
-    for (const entry of visible.slice(0, 400)) {
+    for (const entry of visible.slice(0, PAGE)) {
       const card = document.createElement("div");
       card.className = "wp-card";
       card.setAttribute("role", "button");
@@ -257,8 +257,11 @@ function openBrowser(node) {
       const tail = document.createElement("div");
       tail.className = "wp-tail";
       // Only claim a version when the filename actually carried one.
+      // Filenames and sidecars are not ours to trust: a base model called
+      // "<img onerror=...>" is a string Civitai served, so it is escaped like
+      // any other untrusted text rather than pasted straight into markup.
       const version = entry.structured && entry.version ? `${entry.version} · ` : "";
-      tail.innerHTML = `${version}<b>${groupOf(entry)}</b>`;
+      tail.innerHTML = `${escapeHTML(version)}<b>${escapeHTML(groupOf(entry))}</b>`;
       meta.appendChild(tail);
 
       if (entry.triggers?.length) {
@@ -283,8 +286,8 @@ function openBrowser(node) {
       grid.appendChild(card);
     }
 
-    const shown = Math.min(visible.length, 400);
-    const capped = visible.length > 400 ? ` (showing ${shown})` : "";
+    const shown = Math.min(visible.length, PAGE);
+    const capped = visible.length > PAGE ? ` (showing ${shown})` : "";
     const why = connected ? ` · ${connected} connected` : "";
     count.textContent = `${visible.length} of ${entries.length}${capped}${why}`;
   }
@@ -299,7 +302,9 @@ function openBrowser(node) {
     all.className = "wp-rail-row";
     all.type = "button";
     all.setAttribute("aria-pressed", String(folder === null));
-    all.innerHTML = `<span class="wp-rail-name">All families</span><span class="wp-rail-count">${entries.length}</span>`;
+    all.innerHTML =
+      `<span class="wp-rail-name">All families</span>` +
+      `<span class="wp-rail-count">${entries.length}</span>`;
     all.addEventListener("click", () => {
       folder = null;
       renderRail();
@@ -315,7 +320,9 @@ function openBrowser(node) {
       // Families that cannot apply to the connected model stay visible but quiet.
       if (connected && name !== connected) row.classList.add("is-dim");
       const pin = connected && name === connected ? '<span class="wp-pin">●</span>' : "";
-      row.innerHTML = `${pin}<span class="wp-rail-name">${name || "(root)"}</span><span class="wp-rail-count">${n}</span>`;
+      row.innerHTML =
+        `${pin}<span class="wp-rail-name">${escapeHTML(name || "(root)")}</span>` +
+        `<span class="wp-rail-count">${n}</span>`;
       row.addEventListener("click", () => {
         folder = folder === name ? null : name;
         renderRail();

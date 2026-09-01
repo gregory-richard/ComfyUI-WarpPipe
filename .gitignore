@@ -76,3 +76,6 @@ models/
 # Local development
 .local/
 *.log
+
+# Frontend tooling
+node_modules/

@@ -1,0 +1,18 @@
+{
+  "name": "comfyui-warppipe-web",
+  "private": true,
+  "type": "module",
+  "description": "Lint and format checks for the WarpPipe frontend. Not published; the node pack ships as a Python package.",
+  "scripts": {
+    "lint": "eslint web",
+    "format": "prettier --write \"web/**/*.js\"",
+    "format:check": "prettier --check \"web/**/*.js\"",
+    "check": "npm run lint && npm run format:check"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.1",
+    "eslint": "9.39.1",
+    "globals": "16.5.0",
+    "prettier": "3.6.2"
+  }
+}
