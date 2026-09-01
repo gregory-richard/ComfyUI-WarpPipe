@@ -84,6 +84,13 @@ upstream of it holds. Only nodes upstream count, so an unrelated branch of a
 large workflow cannot contribute the wrong model, and the **nearest** loader
 wins — a refiner in front of a base is the one that made the picture.
 
+A switch is followed down the branch it actually took. Switches wire every
+branch and run one, so walking into the others would credit the image with
+models it never went through — in one real workflow a single 13-input switch
+pulled in five LoRAs from Z-Image pipelines that never ran. When the selector
+cannot be read the walk keeps following everything, since guessing wrong would
+drop resources that were really used.
+
 A node is not identified by its class name, so a loader from any pack works:
 
 - The usual input names — `ckpt_name`, `unet_name`, `model_name` — are read

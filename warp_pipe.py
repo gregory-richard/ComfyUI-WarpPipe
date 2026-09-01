@@ -1058,6 +1058,57 @@ def model_named_by(inputs: dict[str, Any]) -> Optional[str]:
     return None
 
 
+_SWITCH_INPUT_RE = re.compile(r"input(\d+)$")
+
+
+def _literal_int(graph: dict[str, Any], value: Any) -> Optional[int]:
+    """An integer written on the graph, directly or one link away.
+
+    A switch's selector is usually not a number sitting on the switch: it is
+    fed from a small constant node, so the link has to be followed to read it.
+    Only an unambiguous source counts - one number and no other - because
+    guessing which of several is the selector would be worse than not knowing.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, list) and value and isinstance(value[0], (str, int)):
+        source = graph.get(str(value[0]))
+        if isinstance(source, dict):
+            numbers = [
+                v
+                for v in (source.get("inputs") or {}).values()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            ]
+            if len(numbers) == 1:
+                return int(numbers[0])
+    return None
+
+
+def switch_choice(graph: dict[str, Any], node: dict[str, Any]) -> Optional[str]:
+    """For a node that picks one of its inputs at run time, the one it picks.
+
+    A switch names its inputs input1..inputN and carries a `select` saying which
+    is used. Every other branch is wired but never runs, so walking into them
+    collects models the picture never went through - which is how an upload ends
+    up credited with LoRAs from a pipeline that was switched off.
+
+    Returns None when the choice cannot be read, and the caller then follows
+    everything, as it always did. A wrong guess here would drop real resources,
+    so not knowing has to stay the safe answer.
+    """
+    inputs = node.get("inputs") or {}
+    numbered = [key for key in inputs if _SWITCH_INPUT_RE.fullmatch(key)]
+    if not numbered or "select" not in inputs:
+        return None
+    chosen = _literal_int(graph, inputs.get("select"))
+    if chosen is None:
+        return None
+    name = f"input{chosen}"
+    return name if name in inputs else None
+
+
 def trace_upstream(graph: dict[str, Any], start_id: Optional[str]) -> Optional[dict[str, int]]:
     """Node ids that feed the given node, mapped to how far back each one is.
 
@@ -1084,7 +1135,11 @@ def trace_upstream(graph: dict[str, Any], start_id: Optional[str]) -> Optional[d
         node = graph.get(node_id)
         if not isinstance(node, dict):
             continue
-        for value in (node.get("inputs") or {}).values():
+        taken = switch_choice(graph, node)
+        for key, value in (node.get("inputs") or {}).items():
+            # The branches a switch did not take were never run.
+            if taken and _SWITCH_INPUT_RE.fullmatch(key) and key != taken:
+                continue
             # A link is encoded as [source_node_id, output_index].
             if isinstance(value, list) and value and isinstance(value[0], (str, int)):
                 feeder = str(value[0])

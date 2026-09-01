@@ -643,6 +643,56 @@ def test_a_name_fed_in_from_another_node_is_found(warp_pipe, monkeypatch):
     assert model == "sdxl/base.safetensors"
 
 
+def test_a_switch_contributes_only_the_branch_it_took(warp_pipe):
+    # A switch wires every branch and runs one. Walking into the others credits
+    # an image with LoRAs from a pipeline it never went through - which is how
+    # an upload ends up listing models that are not in the prompt at all.
+    graph = {
+        "1": {"class_type": "INTConstant", "inputs": {"value": 2}},
+        "10": {
+            "class_type": "Power Lora Loader (rgthree)",
+            "inputs": {"lora_1": {"on": True, "lora": "branch one.safetensors", "strength": 1}},
+        },
+        "20": {
+            "class_type": "Power Lora Loader (rgthree)",
+            "inputs": {"lora_1": {"on": True, "lora": "branch two.safetensors", "strength": 0.5}},
+        },
+        "30": {
+            "class_type": "ImpactSwitch",
+            "inputs": {"select": ["1", 0], "input1": ["10", 0], "input2": ["20", 0]},
+        },
+        "9": {"class_type": "SaveImageCivitai", "inputs": {"images": ["30", 0]}},
+    }
+
+    _, loras = warp_pipe.collect_graph_resources(graph, start_id="9")
+
+    assert [name for name, _ in loras] == ["branch two.safetensors"]
+
+
+def test_an_unreadable_switch_still_contributes_everything(warp_pipe):
+    # The selector cannot be resolved here, and guessing would drop resources
+    # that were really used, so every branch is kept as it always was.
+    graph = {
+        "10": {
+            "class_type": "Power Lora Loader (rgthree)",
+            "inputs": {"lora_1": {"on": True, "lora": "one.safetensors", "strength": 1}},
+        },
+        "20": {
+            "class_type": "Power Lora Loader (rgthree)",
+            "inputs": {"lora_1": {"on": True, "lora": "two.safetensors", "strength": 1}},
+        },
+        "30": {
+            "class_type": "ImpactSwitch",
+            "inputs": {"select": ["99", 0], "input1": ["10", 0], "input2": ["20", 0]},
+        },
+        "9": {"class_type": "SaveImageCivitai", "inputs": {"images": ["30", 0]}},
+    }
+
+    _, loras = warp_pipe.collect_graph_resources(graph, start_id="9")
+
+    assert sorted(name for name, _ in loras) == ["one.safetensors", "two.safetensors"]
+
+
 def test_the_nearest_loader_is_the_one_recorded(warp_pipe):
     # A refiner in front of a base: the picture came out of the refiner.
     graph = {
