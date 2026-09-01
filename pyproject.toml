@@ -74,5 +74,5 @@ ignore = [
 [tool.comfy]
 PublisherId = "gregrichrd"
 DisplayName = "WarpPipe Nodes"
-Icon = "https://raw.githubusercontent.com/gregory-richard/ComfyUI-WarpPipe/main/icon.png"
-Banner = "https://raw.githubusercontent.com/gregory-richard/ComfyUI-WarpPipe/main/banner.png"
+Icon = "https://raw.githubusercontent.com/gregory-richard/ComfyUI-WarpPipe/main/assets/registry/icon.png"
+Banner = "https://raw.githubusercontent.com/gregory-richard/ComfyUI-WarpPipe/main/assets/registry/banner.png"
