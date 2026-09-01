@@ -112,10 +112,21 @@ def _fake_io_module():
     return io
 
 
+def _fake_numpy():
+    numpy_module = types.ModuleType("numpy")
+    numpy_module.uint8 = "uint8"
+    numpy_module.clip = lambda value, _lo, _hi: value
+    return numpy_module
+
+
 def _install_fake_runtime(monkeypatch):
     torch_module = types.ModuleType("torch")
     torch_module.zeros = lambda shape: FakeTensor(shape)
     monkeypatch.setitem(sys.modules, "torch", torch_module)
+
+    # numpy is not a dependency of this pack - it arrives with ComfyUI - so CI
+    # does not install it and the save tests cannot import the real one.
+    monkeypatch.setitem(sys.modules, "numpy", _fake_numpy())
 
     samplers_module = types.ModuleType("comfy.samplers")
     samplers_module.SAMPLER_NAMES = ["euler", "heun"]

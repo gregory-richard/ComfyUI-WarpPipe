@@ -23,6 +23,60 @@ NODE_IDS = {
 }
 
 
+class _Pixels:
+    """Just enough array to carry an image through save_images.
+
+    warp_pipe does `np.clip(255.0 * image.cpu().numpy(), 0, 255).astype(np.uint8)`
+    and hands the result to Pillow, which these tests fake. Nothing here computes
+    anything: it exists so the arithmetic resolves, the same way conftest's numpy
+    stub exists so the import does.
+    """
+
+    def __init__(self, shape):
+        self.shape = tuple(shape)
+
+    def __rmul__(self, _other):
+        return self
+
+    __mul__ = __rmul__
+
+    def astype(self, _dtype):
+        return self
+
+    def tobytes(self):
+        height, width, channels = self.shape
+        return bytes(height * width * channels)
+
+    @property
+    def __array_interface__(self):
+        # One test writes a real JPEG with real Pillow to read its EXIF back.
+        # This is the protocol Image.fromarray consumes, so it works without
+        # numpy: unsigned bytes, in the shape a black image would have. Strides
+        # are given because that is what makes Pillow take the tobytes() route
+        # rather than expecting a buffer object.
+        _height, width, channels = self.shape
+        return {
+            "shape": self.shape,
+            "typestr": "|u1",
+            "strides": (width * channels, channels, 1),
+            "data": self.tobytes(),
+            "version": 3,
+        }
+
+
+class ImageTensor:
+    """What an IMAGE input looks like to the save node: HxWxC, .cpu().numpy()."""
+
+    def __init__(self, shape=(8, 8, 3)):
+        self.shape = tuple(shape)
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return _Pixels(self.shape)
+
+
 def test_legacy_registration_and_node_contracts(warp_pipe):
     assert set(warp_pipe.NODE_CLASS_MAPPINGS) == NODE_IDS
     assert set(warp_pipe.NODE_DISPLAY_NAME_MAPPINGS) == NODE_IDS
@@ -318,8 +372,6 @@ def test_the_two_embeds_are_separate_switches(warp_pipe):
 
 
 def test_saving_writes_only_what_was_asked_for(warp_pipe, monkeypatch, tmp_path):
-    import numpy as np
-
     written = []
 
     class FakePngInfo:
@@ -363,23 +415,18 @@ def test_saving_writes_only_what_was_asked_for(warp_pipe, monkeypatch, tmp_path)
     }.items():
         monkeypatch.setitem(sys.modules, name, module)
 
-    class FakeTensor:
-        shape = (8, 8, 3)
-
-        def cpu(self):
-            return self
-
-        def numpy(self):
-            return np.zeros((8, 8, 3), dtype=float)
-
     node = warp_pipe.SaveImageCivitai()
     graph = {"1": {"class_type": "SaveImageCivitai", "inputs": {}}}
 
-    node.save_images(images=[FakeTensor()], embed_metadata=True, embed_workflow=True, prompt=graph)
-    node.save_images(images=[FakeTensor()], embed_metadata=True, embed_workflow=False, prompt=graph)
-    node.save_images(images=[FakeTensor()], embed_metadata=False, embed_workflow=True, prompt=graph)
+    node.save_images(images=[ImageTensor()], embed_metadata=True, embed_workflow=True, prompt=graph)
     node.save_images(
-        images=[FakeTensor()], embed_metadata=False, embed_workflow=False, prompt=graph
+        images=[ImageTensor()], embed_metadata=True, embed_workflow=False, prompt=graph
+    )
+    node.save_images(
+        images=[ImageTensor()], embed_metadata=False, embed_workflow=True, prompt=graph
+    )
+    node.save_images(
+        images=[ImageTensor()], embed_metadata=False, embed_workflow=False, prompt=graph
     )
 
     assert [w["keys"] for w in written] == [
@@ -395,7 +442,6 @@ def test_jpeg_keeps_the_generation_info_but_cannot_keep_the_workflow(
     warp_pipe, monkeypatch, tmp_path
 ):
     # A real file, read back the way anything else would read it.
-    import numpy as np
     from PIL import Image
 
     folder_paths = types.ModuleType("folder_paths")
@@ -410,18 +456,9 @@ def test_jpeg_keeps_the_generation_info_but_cannot_keep_the_workflow(
     folder_paths.get_filename_list = lambda folder: []
     monkeypatch.setitem(sys.modules, "folder_paths", folder_paths)
 
-    class FakeTensor:
-        shape = (8, 8, 3)
-
-        def cpu(self):
-            return self
-
-        def numpy(self):
-            return np.zeros((8, 8, 3), dtype=float)
-
     warp = warp_pipe.Warp().warp(prompt_positive="a portrait", seed=123, steps_1=30)[0]
     result = warp_pipe.SaveImageCivitai().save_images(
-        images=[FakeTensor()],
+        images=[ImageTensor()],
         warp=warp,
         file_format="jpeg",
         embed_metadata=True,
@@ -479,20 +516,9 @@ def test_the_preview_can_be_turned_off_without_affecting_the_save(warp_pipe, mon
     }.items():
         monkeypatch.setitem(sys.modules, name, module)
 
-    import numpy as np
-
-    class FakeTensor:
-        shape = (8, 8, 3)
-
-        def cpu(self):
-            return self
-
-        def numpy(self):
-            return np.zeros((8, 8, 3), dtype=float)
-
     node = warp_pipe.SaveImageCivitai()
-    shown = node.save_images(images=[FakeTensor()], preview=True)
-    quiet = node.save_images(images=[FakeTensor()], preview=False)
+    shown = node.save_images(images=[ImageTensor()], preview=True)
+    quiet = node.save_images(images=[ImageTensor()], preview=False)
 
     assert len(shown["ui"]["images"]) == 1
     assert quiet["ui"]["images"] == []
