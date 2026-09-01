@@ -1174,7 +1174,15 @@ app.registerExtension({
         if (count) return strip.offerMove(count, moveOldList);
       }
       const value = el.value || "";
-      const tag = tagAt(value, el.selectionStart);
+      // The strip describes what the caret is on, so with the caret gone there
+      // is nothing for it to describe: leaving the last tag up made it look
+      // like the state of the node rather than the state of the cursor.
+      //
+      // Asked of the document rather than tracked from focus and blur. A flag
+      // is only ever as right as the last event that reached it, and this is
+      // repainted from a timer and from every edit as well.
+      const hasCaret = document.activeElement === el;
+      const tag = hasCaret ? tagAt(value, el.selectionStart) : null;
       if (!tag) {
         const total = parseTags(value).filter((t) => !inComment(value, t.start)).length;
         // Naming the base model here is the only place the reader can find out
@@ -1240,9 +1248,18 @@ app.registerExtension({
       lit = light(el);
       el.addEventListener("input", commit);
       // The strip follows the caret, which moves for reasons other than typing.
-      for (const event of ["keyup", "click", "select", "focus"]) {
+      for (const event of ["keyup", "click", "select"]) {
         el.addEventListener(event, updateStrip);
       }
+      el.addEventListener("focus", updateStrip);
+      el.addEventListener("blur", (e) => {
+        // Focus moving into the strip is still work on this tag - its trigger
+        // words and its preview are buttons in there, and clearing on the way
+        // to one would take it away as it was being clicked. The repaint is
+        // deferred so the document has settled on where focus went.
+        if (strip.el.contains(e.relatedTarget)) return;
+        setTimeout(updateStrip, 0);
+      });
       editVerbs(el, commit);
       inlineCompletion(node, el, commit, lit, lookup, say, baseOf);
       attachStrip();

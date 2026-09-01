@@ -158,7 +158,9 @@ creator from the `.civitai.info` sidecar, the base model, the weight, its first
 few trigger words as buttons that insert them, and **↗** to open its Civitai
 page. A tag naming a file that is not there says so.
 
-With the caret anywhere else it just counts what is loaded.
+With the caret anywhere else — or with the prompt not being edited at all —
+it stands by and just counts what is loaded. It describes where the cursor
+is, not what the node holds, so it empties when you click away.
 
 It replaced a card per LoRA. The cards repeated what the text already said and
 needed a scrolling panel and a draggable split to hold them, which is where the
