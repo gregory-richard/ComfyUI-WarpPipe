@@ -1467,11 +1467,14 @@ def resolve_lora_name(
 # Everything from // to the end of the line is a note to yourself.
 _COMMENT_RE = re.compile(r"//[^\n]*")
 # Tidy-ups applied after removing tags and comments, in order.
+# Every pattern here is deliberately newline-blind: blank lines are part of how
+# a prompt was laid out, and a rule written with \s would eat them whenever the
+# next line happened to start with a comma.
 _TIDY = (
     (re.compile(r"[ \t]+"), " "),  # runs of spaces
-    (re.compile(r"\s+([,.;:!?])"), r"\1"),  # space stranded before punctuation
-    (re.compile(r"(,\s*){2,}"), ", "),  # commas left adjacent by a removal
-    (re.compile(r"\n{3,}"), "\n\n"),  # more than one blank line
+    (re.compile(r"[ \t]+([,.;:!?])"), r"\1"),  # space stranded before punctuation
+    (re.compile(r"(,[ \t]*){2,}"), ", "),  # commas left adjacent by a removal
+    (re.compile(r"\n{3,}"), "\n\n"),  # never more than one blank line
     (re.compile(r"^[\s,]+|[\s,]+$"), ""),  # leading and trailing debris
 )
 
@@ -1499,9 +1502,21 @@ def clean_prompt(text: Optional[str]) -> str:
     if not isinstance(text, str):
         return ""
     cleaned = strip_lora_tags(strip_comments(text))
-    # A line holding only a note, or only a tag, should not survive as a blank.
-    lines = [line.strip() for line in cleaned.splitlines()]
-    cleaned = "\n".join(line for line in lines if line)
+    # Blank lines are how a long prompt is kept readable, so the ones that were
+    # written stay - at most one in a row. A line that held only a note or only
+    # a tag was never blank, and must not become one: the prompt would then be
+    # spaced out differently every time a tag was added or moved.
+    #
+    # Neither strip removes a newline, so the two still line up and can be read
+    # side by side to tell those cases apart.
+    kept: list[str] = []
+    for original, line in zip(text.splitlines(), cleaned.splitlines()):
+        body = line.strip()
+        if body:
+            kept.append(body)
+        elif not original.strip() and kept and kept[-1] != "":
+            kept.append("")
+    cleaned = "\n".join(kept)
     for pattern, replacement in _TIDY:
         cleaned = pattern.sub(replacement, cleaned)
     return cleaned.strip()

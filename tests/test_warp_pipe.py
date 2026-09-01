@@ -1194,6 +1194,26 @@ def test_a_tag_inside_a_note_is_not_loaded(warp_pipe, lora_folder):
     assert resolved == []
 
 
+def test_blank_lines_the_writer_put_there_survive(warp_pipe):
+    # A long prompt is kept readable with blank lines between its sections.
+    # Losing them ran every section together; keeping every one of them would
+    # space the prompt out differently each time a tag moved.
+    prompt = \
+        "// overview\n"\
+        "a candid photo\n"\
+        "\n"\
+        "// subject\n"\
+        "18 years old\n"\
+        "\n"\
+        "\n"\
+        "// tags\n"\
+        "<lora:a:1.0>\n"\
+        "\n"\
+        "<lora:b:1.0> keyword"
+
+    assert warp_pipe.clean_prompt(prompt) == "a candid photo\n\n18 years old\n\nkeyword"
+
+
 def test_the_node_sends_the_cleaned_prompt(warp_pipe, lora_folder):
     _, _, prompt = warp_pipe.WarpLoraPrompt().apply(
         text="a portrait <lora:detail tweaker:0.8>, lit // remember to try 0.6"

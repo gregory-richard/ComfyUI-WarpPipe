@@ -197,6 +197,15 @@ pick, and they land on a line of their own.
 The node's **Trigger words** setting is the other way round: it adds them for
 you at generation time, without touching the prompt you wrote.
 
+## How the prompt is laid out
+
+Blank lines you write are kept, so a long prompt can be broken into sections and
+still reach the model that way. More than one blank line in a row becomes one.
+
+A line that held only a note or only a LoRA tag is removed rather than left
+behind as a blank — it was never a blank line, and turning it into one would
+space the prompt out differently every time a tag was added or moved.
+
 ## Notes in the prompt
 
 Anything after `//` to the end of the line is a note for you, not for the model.
