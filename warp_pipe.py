@@ -1149,6 +1149,33 @@ def trace_upstream(graph: dict[str, Any], start_id: Optional[str]) -> Optional[d
     return depth
 
 
+# What a loader might call the strength beside a lora_name. Order matters only
+# in that the first one present wins; a loader naming none of them gets 1.0.
+LORA_STRENGTH_KEYS: tuple[str, ...] = (
+    "strength_model",
+    "lora_model_strength",
+    "model_strength",
+    "model_str",
+    "strength",
+    "weight",
+)
+
+
+def _lora_strength(inputs: dict[str, Any], suffix: str = "") -> float:
+    """The model strength sitting beside a lora_name input.
+
+    Every pack spells it differently - strength_model, lora_model_strength,
+    model_str - and a stacker numbers them to match its slots. Reading only one
+    spelling records the right LoRA at the wrong weight, which is a quieter kind
+    of wrong than missing it.
+    """
+    for key in LORA_STRENGTH_KEYS:
+        value = inputs.get(key + suffix)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return 1.0
+
+
 def collect_graph_resources(
     prompt_graph: Optional[dict[str, Any]],
     start_id: Optional[str] = None,
@@ -1183,9 +1210,17 @@ def collect_graph_resources(
         if named is not None:
             found_models.append((distance.get(str(node_id), 0), named))
 
-        name = inputs.get("lora_name")
-        if isinstance(name, str) and name and name.lower() != "none":
-            loras.append((name, _as_float(inputs.get("strength_model"))))
+        # One LoRA per loader, or several numbered ones per stacker: the
+        # Efficiency-style nodes name them lora_name_1, lora_name_2 and put the
+        # matching strength at model_str_1 and so on. Reading only the unnumbered
+        # spelling found nothing at all in those.
+        for key, name in inputs.items():
+            if key != "lora_name" and not key.startswith("lora_name_"):
+                continue
+            if not isinstance(name, str) or not name or name.lower() == "none":
+                continue
+            suffix = key[len("lora_name") :]
+            loras.append((name, _lora_strength(inputs, suffix)))
 
         # Nodes that take LoRAs as <lora:name:weight> in their text - this pack's
         # Prompt + LoRAs node, and power-prompt nodes from other packs - keep the

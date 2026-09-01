@@ -643,6 +643,62 @@ def test_a_name_fed_in_from_another_node_is_found(warp_pipe, monkeypatch):
     assert model == "sdxl/base.safetensors"
 
 
+@pytest.mark.parametrize(
+    ("label", "node", "expected"),
+    [
+        (
+            "ComfyUI's own loader",
+            {"class_type": "LoraLoader", "inputs": {"lora_name": "a.safetensors", "strength_model": 0.8}},
+            [("a.safetensors", 0.8)],
+        ),
+        (
+            "a stacker numbering its slots",
+            {
+                "class_type": "LoRA Stacker",
+                "inputs": {
+                    "lora_name_1": "c.safetensors",
+                    "model_str_1": 0.9,
+                    "lora_name_2": "d.safetensors",
+                    "model_str_2": 0.5,
+                    "lora_name_3": "None",
+                },
+            },
+            [("c.safetensors", 0.9), ("d.safetensors", 0.5)],
+        ),
+        (
+            "a loader spelling strength its own way",
+            {
+                "class_type": "Lora Loader (WAS)",
+                "inputs": {"lora_name": "g.safetensors", "lora_model_strength": 1.2},
+            },
+            [("g.safetensors", 1.2)],
+        ),
+        (
+            "a stacked loader with a slot switched off",
+            {
+                "class_type": "Power Lora Loader (rgthree)",
+                "inputs": {
+                    "lora_1": {"on": True, "lora": "e.safetensors", "strength": 0.6},
+                    "lora_2": {"on": False, "lora": "off.safetensors", "strength": 1},
+                },
+            },
+            [("e.safetensors", 0.6)],
+        ),
+        (
+            "tags in someone else's prompt node",
+            {"class_type": "Power Prompt (rgthree)", "inputs": {"prompt": "a cat <lora:f:0.4>"}},
+            [("f", 0.4)],
+        ),
+    ],
+)
+def test_loras_are_found_however_the_pack_spells_them(warp_pipe, label, node, expected):
+    graph = {"1": node, "9": {"class_type": "SaveImageCivitai", "inputs": {"images": ["1", 0]}}}
+
+    _, loras = warp_pipe.collect_graph_resources(graph, start_id="9")
+
+    assert loras == expected, label
+
+
 def test_a_switch_contributes_only_the_branch_it_took(warp_pipe):
     # A switch wires every branch and runs one. Walking into the others credits
     # an image with LoRAs from a pipeline it never went through - which is how

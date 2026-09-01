@@ -112,6 +112,32 @@ What it cannot find is a model that was never a file: a merge built in the
 graph, or a loader that records no filename at all. Then no `Model:` is written,
 because there is nothing true to write.
 
+## Which LoRA loaders it understands
+
+Loaders are recognised by the shape of what they hold, not by their class name,
+so a pack this was never written against still works:
+
+| | |
+| --- | --- |
+| `lora_name` | ComfyUI's own loaders, and most others |
+| `lora_name_1`, `lora_name_2`, … | stackers that number their slots |
+| `{"lora": …, "on": …, "strength": …}` | stacked loaders like rgthree's |
+| `<lora:name:weight>` in any text input | power-prompt nodes, and this pack's |
+
+The strength is read from whichever of `strength_model`, `lora_model_strength`,
+`model_strength`, `model_str`, `strength` or `weight` the node happens to use —
+numbered to match the slot on a stacker. A loader naming none of them records
+the LoRA at 1.0 rather than dropping it.
+
+A slot switched off, or a tag behind a `//`, is not recorded: it did not load.
+
+**The known limit** is a switch whose choice cannot be read from the graph.
+Impact-style switches carry a `select` naming the branch, and only that branch is
+followed. A switch that picks the first non-empty input instead — rgthree's Any
+Switch — decides at run time, so every branch is followed and a LoRA from an
+unused one can be credited. In practice the unused branches of those are usually
+muted, which removes them from the graph entirely.
+
 ## How resources get credited
 
 Civitai links a model or a LoRA by its AutoV2 hash — the first ten characters of
