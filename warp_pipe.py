@@ -1816,13 +1816,21 @@ def _sidecar_title(payload: Optional[dict[str, Any]]) -> Optional[str]:
     return name if isinstance(name, str) and name.strip() else None
 
 
+# Where a model's page lives. Adult models are on civitai.red, and a link to
+# .com for one of those does not arrive anywhere useful. The .red domain serves
+# everything else too - checked against a model flagged as safe - so one host
+# covers both rather than guessing from a sidecar's maturity flag, which 136 of
+# 1884 files in a real collection do not carry at all.
+CIVITAI_SITE = "https://civitai.red"
+
+
 def _civitai_url(payload: Optional[dict[str, Any]]) -> Optional[str]:
     """The page this file came from, so a row can link back to it."""
     model_id = (payload or {}).get("modelId")
     version_id = (payload or {}).get("id")
     if not isinstance(model_id, int):
         return None
-    url = f"https://civitai.com/models/{model_id}"
+    url = f"{CIVITAI_SITE}/models/{model_id}"
     return f"{url}?modelVersionId={version_id}" if isinstance(version_id, int) else url
 
 

@@ -179,6 +179,11 @@ caret is in.
 Both the link and the title come from the `.civitai.info` sidecar. Without one
 there is no link, and the name falls back to the filename.
 
+Links go to **civitai.red**, where adult models live — a `.com` link to one of
+those does not arrive anywhere useful. That host serves the rest as well, so it
+is used for every model rather than guessing from a sidecar's maturity flag,
+which not every sidecar carries.
+
 ## How a tag names a file
 
 Either the bare name - `<lora:creator - thing - v1 (base):1.00>` - or the path

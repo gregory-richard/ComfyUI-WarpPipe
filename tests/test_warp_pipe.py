@@ -1345,7 +1345,8 @@ def test_index_carries_the_civitai_title_and_link(warp_pipe, monkeypatch, tmp_pa
     entry = warp_pipe.lora_index()[0]
 
     assert entry["title"] == "Proper Title"
-    assert entry["url"] == "https://civitai.com/models/2237913?modelVersionId=2951752"
+    # Adult models live on civitai.red, and that host serves the rest as well.
+    assert entry["url"] == "https://civitai.red/models/2237913?modelVersionId=2951752"
 
 
 def test_a_file_with_no_sidecar_has_no_title_or_link(warp_pipe, lora_folder):
