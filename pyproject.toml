@@ -4,17 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "warppipe"
-version = "3.3.0"
-description = "WarpPipe - A data bundling and transfer system for ComfyUI workflows"
+version = "4.0.0"
+description = "WarpPipe - bundle a whole generation into one wire, and write prompts with their LoRAs inline"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
     {name = "gregory-richard"}
 ]
-keywords = ["comfyui", "custom-nodes", "workflow", "data-transfer"]
+keywords = ["comfyui", "custom-nodes", "workflow", "data-transfer", "lora", "civitai", "prompt"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
