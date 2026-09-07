@@ -45,6 +45,11 @@ export function connectedModelName(node) {
 // same checkpoint stays connected for as long as anyone keeps typing.
 const asked = new Map();
 
+/** Forget the answers, so a sidecar written since is read again. */
+export function forgetBases() {
+  asked.clear();
+}
+
 /** The base model of the file wired into this node, asked of the server. */
 export async function connectedBase(node) {
   const name = connectedModelName(node);
