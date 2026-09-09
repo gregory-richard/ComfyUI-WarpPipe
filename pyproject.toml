@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "warppipe"
-version = "4.0.1"
+version = "4.0.2"
 description = "WarpPipe - bundle a whole generation into one wire, and write prompts with their LoRAs inline"
 readme = "README.md"
 requires-python = ">=3.9"
