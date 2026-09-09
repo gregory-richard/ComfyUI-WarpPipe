@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Refreshing node definitions now refreshes the LoRA library too**: pressing `r`, or using the menu, reloaded every other node's model lists but not ours. The library is cached in the browser, so a LoRA added since the tab was opened stayed unknown - its tag read red and completion never offered it. The prompt box and the browser share one cache and both pick it up now, along with any `.civitai.info` written since
+
 ## [4.0.1] - 2026-09-01
 
 ### Fixed

@@ -763,6 +763,20 @@ only delivers while the page renders: a node resized in a background tab came
 back with the layer at its old size. The timer, the observer and the strip are
 all torn down on `onRemoved`.
 
+### Refreshing
+
+The library index is fetched once and shared by the prompt box and the browser,
+because reading a sidecar per file is the expensive call on the server. A cache
+that is never dropped goes stale, though: a LoRA added after the tab was opened
+would keep reading as unknown.
+
+ComfyUI invokes `refreshComboInNodes` on every extension when node definitions
+are reloaded - the `r` key, or the menu - which is the same moment every other
+node's model lists update. WarpPipe uses it to drop three things: the shared
+library, the base model asked of the server per checkpoint, and each node's own
+memo of what it had resolved. Nodes register themselves in a set while they
+live, because walking the root graph would miss any inside a subgraph.
+
 ### Widget values
 
 ComfyUI serialises widget values positionally. Anything that changes widget
@@ -988,6 +1002,17 @@ downloads them; so do most model managers.
 If the files are there but the cards are blank, the thumbnail cache has nowhere
 to write. It goes next to ComfyUI's user directory; check that is writable, and
 that Pillow is importable in ComfyUI's Python.
+
+### A LoRA I just added does not show up
+
+The library is read once and cached in the browser, so a file added since the
+tab was opened is not there yet. Press `r`, or pick **Refresh Node Definitions**
+from the menu — the same thing that reloads every other node's model lists now
+drops WarpPipe's cache as well. The prompt box recolours and the browser lists
+it without a page reload.
+
+The same applies to a `.civitai.info` written since: refresh and the trigger
+words, base model and link appear.
 
 ### No trigger words anywhere
 

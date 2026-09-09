@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
-import { everything } from "./library.js";
-import { connectedBase, connectedModelName, sameBase } from "./model_base.js";
+import { everything, forget } from "./library.js";
+import { connectedBase, connectedModelName, forgetBases, sameBase } from "./model_base.js";
 import { escapeAttr, escapeHTML, stemOf } from "./text.js";
 import { keepWidgetValuesByName } from "./widget_values.js";
 
@@ -23,6 +23,11 @@ const LIST_WIDGET = "loras";
 // which put the LoRA list into apply_to_clip and lost it. Nothing about the
 // saved node changes this way.
 const STRIP_H = 24;
+
+// The nodes currently on the canvas. ComfyUI's refresh hook has no node to work
+// from, and walking the root graph would miss anything inside a subgraph, so
+// each node adds itself here while it lives.
+const live = new Set();
 
 const TAG_RE = /<lora:([^:>]+):(-?[0-9]*\.?[0-9]+)([^>]*)>/gi;
 const COMMENT_RE = /\/\/[^\n]*/g;
@@ -1063,6 +1068,16 @@ app.registerExtension({
     style.textContent = STYLE;
     document.head.appendChild(style);
   },
+  // ComfyUI calls this when node definitions are reloaded - the r key, or the
+  // menu. Every other node's model lists update at that moment; ours did not,
+  // because the library is cached in the browser and went on describing the
+  // folder as it was when the tab was opened. A LoRA added since then read as
+  // red, and completion never offered it.
+  async refreshComboInNodes() {
+    forget();
+    forgetBases();
+    await Promise.all([...live].map((node) => node._warppipeRefresh?.()));
+  },
   async nodeCreated(node) {
     if (node.comfyClass !== NODE_ID) return;
 
@@ -1070,6 +1085,7 @@ app.registerExtension({
       if (FRIENDLY_LABELS[widget.name]) widget.label = FRIENDLY_LABELS[widget.name];
     }
     if (!(node.widgets || []).some((w) => w.name === TEXT_WIDGET)) return;
+    live.add(node);
 
     // Kept in the schema so older workflows still load and still run - the
     // backend reads tags from both - but no longer shown or written to.
@@ -1246,6 +1262,9 @@ app.registerExtension({
     // Asked again whenever the wired-in model changes, and not otherwise: the
     // answer is a file read on the server and the checkpoint rarely moves.
     let baseSeen = { name: undefined, base: null };
+    const forgetBase = () => {
+      baseSeen = { name: undefined, base: null };
+    };
     const baseOf = async () => {
       const name = connectedModelName(node);
       if (name === baseSeen.name) return baseSeen.base;
@@ -1256,8 +1275,9 @@ app.registerExtension({
 
     const commit = () => {
       lit?.paint();
-      refreshVocabulary();
+      const done = refreshVocabulary();
       node.setDirtyCanvas?.(true, true);
+      return done;
     };
 
     const wire = (el) => {
@@ -1350,6 +1370,7 @@ app.registerExtension({
     };
 
     const teardown = () => {
+      live.delete(node);
       for (const stop of started.splice(0)) stop();
       lit?.detach();
       lit = null;
@@ -1403,6 +1424,11 @@ app.registerExtension({
       edit(el, plan.from, plan.to, plan.text, plan.caret);
       commit();
     };
-    node._warppipeRefresh = commit;
+    // Re-read everything this node has memoised, then repaint. Called by the
+    // refresh hook below, where the library on the server has just changed.
+    node._warppipeRefresh = () => {
+      forgetBase();
+      return commit();
+    };
   },
 });
