@@ -18,9 +18,10 @@ inside ComfyUI, behind the `?` on the node.
 
 Two things, in one node pack.
 
-**A prompt box that owns its LoRAs.** Write `<lora:name:weight>` inline, the way
-A1111 does, and the tags *are* the loader. The text is the only state: colouring,
-completion, weights, ordering and switching a LoRA off are all edits to it.
+**A prompt box that owns its LoRAs.** Write `<lora:name:weight>` in the list
+under the prompt, the way A1111 does, and the tags *are* the loader. The text is
+the only state: colouring, completion, weights, ordering and switching a LoRA
+off are all edits to it.
 
 **One wire instead of twenty.** A Warp bundles everything a generation needs;
 an Unwarp gives it back. Whole model setups become a single connection you move.
@@ -92,24 +93,42 @@ and [Development](#development) for how releases are cut.
 
 ### Writing a prompt
 
-The **Prompt + LoRAs** node is a text box that understands what is in it.
+The **Prompt + LoRAs** node is a pair of text boxes that understand what is in
+them: the prose above, and the LoRAs it uses below.
 
 ![The prompt box, with every colour state showing](assets/docs/prompt-node.webp)
 
-LoRAs go inline, A1111 style:
+The prompt is prose. The LoRAs go in the short box under it, A1111 style, one
+tag to a line:
 
 ```
-a portrait in a sunlit kitchen, golden hour, soft bokeh
-highly detailed, 35mm film      // pushed up from 0.6
+Prompt   a portrait in a sunlit kitchen, golden hour, soft bokeh
+         highly detailed, 35mm film      // pushed up from 0.6
 
-<lora:atelier - Detail Tweaker - v2.0 (SDXL):0.80>
-<lora:northlight - Golden Hour Portrait - v3.1 (SDXL):0.65>
-// <lora:atelier - Film Photography - v1.4 (SDXL):0.40>   parked for now
+LoRAs    <lora:atelier - Detail Tweaker - v2.0 (SDXL):0.80>
+         <lora:northlight - Golden Hour Portrait - v3.1 (SDXL):0.65>
+         // <lora:atelier - Film Photography - v1.4 (SDXL):0.40>   parked
 ```
+
+A tag written into the prompt itself still loads — that is how an A1111 prompt
+arrives — and the strip offers to move those down into the list; clicking
+anywhere on that line does it.
+
+A list grows with what it holds, up to six lines. For more room, drag the short
+bar at the middle of its bottom edge — the whole edge is the handle — and the
+node grows by what you take rather than the prompt being squeezed. The height
+is kept with the node and is one step of undo; double-click the band to have
+the box fit the list again. Resizing the node itself gives the room to the
+prompt instead.
 
 The node's **model** and **clip** outputs come out patched with every tag it
 resolved. Its **prompt** output is what you wrote with the tags and the notes
 taken out — and nothing added.
+
+Switching **Model 2** to *its own LoRAs* opens a second list for the second
+pass of a two-model sampler — base then turbo, high noise then low. It feeds
+the **model_2** output, the two lists are read independently, and while the
+switch is off the second list is not read at all.
 
 #### What the colours mean
 
@@ -120,11 +139,16 @@ taken out — and nothing added.
 | orange, dotted underline | a real file, but built for another base model |
 | amber | an embedding |
 | green | a trigger word belonging to one of the LoRAs in use |
+| dim green | a trigger word whose LoRA is not loaded — switched off with `//`, at weight 0, or in the second list while it is off |
 | grey italic | a note after `//`, which is not sent to the model |
 
 Red and orange are different complaints. Red will not load at all. Orange loads
 perfectly well and usually does nothing useful — you may know something the
 sidecar does not. Hover either for the reason.
+
+Dim green is still sent — it is prompt text like any other — but nothing it was
+written for is loaded to answer it. A word two LoRAs declare stays bright while
+either of them is loaded.
 
 With nothing wired into **model**, or for a file whose sidecar declares no base,
 nothing can be judged and nothing goes orange.
@@ -180,12 +204,21 @@ itself. It also means the browser's own undo understands all of them.
 #### Trigger words
 
 Nothing is added to your prompt. `Tab` on a tag offers that LoRA's words, and
-the strip lists the first six as buttons; either way you pick, and they land on a
-line of their own as ordinary prompt text.
+the strip lists the first six as buttons; either way you pick, and they land in
+the prompt, at the end of the line the caret was last on, as ordinary prompt
+text. The grey offer is drawn there too, so it is shown where it will land.
 
 That is the point of choosing. Appending them silently would send words you never
 saw, and creators do not always put a keyword in `trainedWords` — in one real
 collection the longest entry ran to 655 characters.
+
+Once they are in, any of them says whose it is. **Hover** a green word for the
+LoRA it belongs to — and, with two lists, which model it is on. **Put the caret
+in one** and the strip shows that LoRA as it would for its tag, led by the word,
+with `off` when it is not loaded and `+1` when another LoRA declares the same
+word. While the caret is in a word or a tag, that LoRA's tag and all of its
+words are picked out with a soft background in every box, so either one shows
+where the other went.
 
 #### The browser
 
@@ -196,7 +229,8 @@ collection the longest entry ran to 655 characters.
 The rail groups by family with counts. The family of the model you have
 connected is pinned and marked; the rest stay visible but dimmed, because you
 may have a reason. Search matches creator, name, version and family. Clicking a
-card writes its tag where the caret was.
+card writes its tag into the LoRAs list, or wherever the caret is if it is in
+one of the boxes at the time.
 
 ### Bundling a generation
 
@@ -282,7 +316,7 @@ writes and keeps current.
 
 | Field | Used for | Without it |
 | --- | --- | --- |
-| `trainedWords` | trigger words: `Tab`, the strip, green colouring | no trigger words at all |
+| `trainedWords` | trigger words: `Tab`, the strip, green colouring and whose word it is | no trigger words at all |
 | `baseModel` | family grouping, the orange warning, filtering `/` | grouped by folder instead |
 | `model.name` | the real model name on cards and in the strip | the filename |
 | `modelId`, `id` | the ↗ link to its page on Civitai | no link |
@@ -408,21 +442,38 @@ producing a latent nothing can sample.
 
 ### 🌀 Prompt + LoRAs
 
-The prompt and its LoRAs in one text box. Full walkthrough in
+The prompt and its LoRAs on one node. Full walkthrough in
 [Usage → Writing a prompt](#writing-a-prompt).
 
 | Input | Type | Notes |
 | --- | --- | --- |
-| `text` | `STRING` | multiline. The prompt, with `<lora:name:weight>` tags inline and `//` notes |
+| `text` | `STRING` | multiline. The prompt. Tags written in here still load |
+| `loras` | `STRING` | multiline. The LoRAs applied to `model`, one `<lora:name:weight>` a line |
+| `loras_2_on` | `BOOLEAN` | default off. Give `model_2` a list of its own, and show it |
+| `loras_2` | `STRING` | multiline. The LoRAs applied to `model_2` |
 | `apply_to_clip` | `BOOLEAN` | default on. Patch the text encoder as well as the model |
 | `model` | `MODEL` | optional |
+| `model_2` | `MODEL` | optional. The second pass of a two-model sampler |
 | `clip` | `CLIP` | optional |
 
-**Outputs:** `model`, `clip`, `prompt`.
+**Outputs:** `model`, `clip`, `prompt`, `model_2`.
 
 `prompt` is what you wrote with tags and notes removed and nothing added. Blank
 lines you wrote are kept — at most one in a row — but a line that held only a
 tag or only a note is removed rather than left behind as a blank.
+
+**The second list** is for a sampler that runs two models over one picture —
+base then turbo, high noise then low. Each pass gets its own files at its own
+weights, so the lists are read independently and an empty one applies nothing
+rather than "the same again". With `loras_2_on` off the second list is not read
+at all and `model_2` passes through untouched, so a box that is not on screen
+can never be loading anything. `model_2` is the last output because outputs are
+restored by position: in front of the other three it would land every link in a
+workflow saved before it on the wrong socket.
+
+The text encoder is patched by the first list only: one CLIP is encoded once
+and shared by both passes, so patching it with two stacks would describe
+neither.
 
 **`apply_to_clip`** decides whether the text encoder is patched too. Whether it
 matters depends entirely on the LoRA: in a survey of 761 files, every Krea2,
@@ -433,9 +484,8 @@ discards half of what the LoRA does. Leave it on unless you have a reason.
 Encode the prompt **after** the LoRAs are applied — take this node's `clip`
 output into your text encoder, not the CLIP straight from the loader.
 
-There is also a hidden `loras` input, kept so workflows saved before the tags
-moved into the prompt still load. The strip offers to move its contents into the
-prompt; nothing writes to it any more.
+`loras` is the same input older workflows kept their list in, so one saved
+before the box was shown finds its LoRAs already where they belong.
 
 ---
 

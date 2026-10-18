@@ -28,13 +28,18 @@ dependencies.
 ![The Prompt + LoRAs node, with tags, notes and trigger words coloured](assets/docs/prompt-node.webp)
 
 Colour says what will happen before you run anything: cyan resolves, red matches
-nothing, orange is built for another base model, green is a trigger word, grey
-is a `//` note that never reaches the model. The line underneath describes
-whichever tag the caret is in.
+nothing, orange is built for another base model, green is a trigger word — a
+dimmer green when its LoRA is switched off — and grey is a `//` note that never
+reaches the model. The line underneath describes whichever tag the caret is in,
+or, from a trigger word, the LoRA it belongs to.
 
-Press `/` to complete against your library inline, `Tab` to take it, `Tab` again
-on a tag for that LoRA's trigger words. Weight, ordering and switching a LoRA off
-are ordinary text edits, so undo covers all of them.
+The prose goes in the prompt box and the LoRAs in the short list under it, one
+tag to a line. Press `/` to complete against your library inline, `Tab` to take
+it, `Tab` again on a tag for that LoRA's trigger words. Weight, ordering and
+switching a LoRA off are ordinary text edits, so undo covers all of them.
+
+A second list, switched on, gives `model_2` a stack of its own for a two-pass
+sampler — base then turbo, high noise then low.
 
 → [Writing a prompt](WIKI.md#writing-a-prompt) ·
 [the browser](WIKI.md#the-browser) · [all the keys](WIKI.md#keys)

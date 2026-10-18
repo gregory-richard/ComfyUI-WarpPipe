@@ -916,13 +916,13 @@ def test_the_node_adds_nothing_to_the_prompt(warp_pipe, lora_folder):
     # in is the writer's own move - Tab on a tag, or the strip - so that they
     # can be read and placed. Some creators write whole sentences there, and
     # sending one nobody chose is not a small addition.
-    _, _, prompt = warp_pipe.WarpLoraPrompt().apply(text="a portrait <lora:detail tweaker:0.8>")
+    _, _, prompt, _ = warp_pipe.WarpLoraPrompt().apply(text="a portrait <lora:detail tweaker:0.8>")
 
     assert prompt == "a portrait"
 
 
 def test_trigger_words_already_written_are_left_alone(warp_pipe, lora_folder):
-    _, _, prompt = warp_pipe.WarpLoraPrompt().apply(
+    _, _, prompt, _ = warp_pipe.WarpLoraPrompt().apply(
         text="a portrait, sharp focus <lora:detail tweaker:0.8>"
     )
 
@@ -1078,7 +1078,7 @@ def test_model_only_leaves_the_clip_untouched(warp_pipe, lora_folder, monkeypatc
     monkeypatch.setitem(sys.modules, "comfy.sd", comfy_sd)
     monkeypatch.setitem(sys.modules, "comfy.utils", comfy_utils)
 
-    model, clip, _ = warp_pipe.WarpLoraPrompt().apply(
+    model, clip, _, _ = warp_pipe.WarpLoraPrompt().apply(
         text="x <lora:detail tweaker:0.8>",
         apply_to_clip=False,
         model="a-model",
@@ -1274,7 +1274,7 @@ def test_blank_lines_the_writer_put_there_survive(warp_pipe):
 
 
 def test_the_node_sends_the_cleaned_prompt(warp_pipe, lora_folder):
-    _, _, prompt = warp_pipe.WarpLoraPrompt().apply(
+    _, _, prompt, _ = warp_pipe.WarpLoraPrompt().apply(
         text="a portrait <lora:detail tweaker:0.8>, lit // remember to try 0.6"
     )
 
@@ -1347,7 +1347,7 @@ def test_loras_input_is_applied_alongside_the_prompt(warp_pipe, lora_folder):
 
 
 def test_the_prompt_is_unchanged_by_the_loras_input(warp_pipe, lora_folder):
-    _, _, prompt = warp_pipe.WarpLoraPrompt().apply(
+    _, _, prompt, _ = warp_pipe.WarpLoraPrompt().apply(
         text="a photo in a kitchen", loras="<lora:detail tweaker:0.8>"
     )
 
@@ -1383,6 +1383,109 @@ def test_every_line_of_the_list_is_read(warp_pipe, lora_folder):
 
     # The unknown one is skipped with a warning; the known one still applies.
     assert [r["weight"] for r in resolved] == [0.8]
+
+
+@pytest.fixture
+def lora_calls(monkeypatch):
+    """Record what would be patched, instead of loading any weights."""
+    calls = []
+
+    def fake_load(model, clip, lora, s_model, s_clip, lora_metadata=None):
+        calls.append({"model": model, "clip": clip, "strength": s_model, "strength_clip": s_clip})
+        return f"{model}+lora", None if clip is None else f"{clip}+lora"
+
+    comfy_sd = types.ModuleType("comfy.sd")
+    comfy_sd.load_lora_for_models = fake_load
+    comfy_utils = types.ModuleType("comfy.utils")
+    comfy_utils.load_torch_file = lambda p, safe_load=True, return_metadata=True: ({}, None)
+    # "import comfy.sd" resolves through the parent package, so it needs one.
+    comfy_pkg = types.ModuleType("comfy")
+    comfy_pkg.__path__ = []
+    comfy_pkg.sd = comfy_sd
+    comfy_pkg.utils = comfy_utils
+    monkeypatch.setitem(sys.modules, "comfy", comfy_pkg)
+    monkeypatch.setitem(sys.modules, "comfy.sd", comfy_sd)
+    monkeypatch.setitem(sys.modules, "comfy.utils", comfy_utils)
+    return calls
+
+
+def test_each_list_patches_its_own_model(warp_pipe, lora_folder, lora_calls):
+    # A two-pass sampler - base then turbo, high noise then low - runs each
+    # pass on its own files at its own weights. The same LoRA at two weights
+    # is the ordinary case here, not an edge one.
+    model, _, _, model_2 = warp_pipe.WarpLoraPrompt().apply(
+        text="a portrait",
+        loras="<lora:detail tweaker:1.0>",
+        loras_2_on=True,
+        loras_2="<lora:detail tweaker:0.4>",
+        model="zib",
+        model_2="zit",
+        clip="clip",
+    )
+
+    assert [(c["model"], c["strength"]) for c in lora_calls] == [("zib", 1.0), ("zit", 0.4)]
+    assert model == "zib+lora"
+    assert model_2 == "zit+lora"
+
+
+def test_only_the_first_list_patches_the_clip(warp_pipe, lora_folder, lora_calls):
+    # One CLIP is encoded once and shared by both passes, so patching it with
+    # both stacks would describe neither of them.
+    _, clip, _, _ = warp_pipe.WarpLoraPrompt().apply(
+        text="a portrait",
+        loras="<lora:detail tweaker:1.0>",
+        loras_2_on=True,
+        loras_2="<lora:detail tweaker:0.4>",
+        model="zib",
+        model_2="zit",
+        clip="clip",
+    )
+
+    assert [c["clip"] for c in lora_calls] == ["clip", None]
+    assert clip == "clip+lora"
+
+
+def test_an_empty_second_list_applies_nothing(warp_pipe, lora_folder, lora_calls):
+    _, _, _, model_2 = warp_pipe.WarpLoraPrompt().apply(
+        text="a portrait",
+        loras="<lora:detail tweaker:1.0>",
+        loras_2_on=True,
+        model="zib",
+        model_2="zit",
+    )
+
+    # Not "the same again": a pass gets what its own box says, and that box is
+    # on screen beside the first, so an empty one is a visible decision.
+    assert model_2 == "zit"
+    assert len(lora_calls) == 1
+
+
+def test_a_switched_off_second_list_is_not_read(warp_pipe, lora_folder, lora_calls):
+    # The box is hidden while the switch is off, and a hidden box that still
+    # loaded LoRAs would be the one thing this node exists to prevent.
+    _, _, _, model_2 = warp_pipe.WarpLoraPrompt().apply(
+        text="a portrait",
+        loras_2="<lora:detail tweaker:0.4>",
+        model="zib",
+        model_2="zit",
+    )
+
+    assert model_2 == "zit"
+    assert lora_calls == []
+
+
+def test_the_second_list_leaves_the_prompt_alone(warp_pipe, lora_folder):
+    _, _, prompt, _ = warp_pipe.WarpLoraPrompt().apply(
+        text="a photo in a kitchen", loras_2_on=True, loras_2="<lora:detail tweaker:0.4>"
+    )
+
+    assert prompt == "a photo in a kitchen"
+
+
+def test_model_2_is_the_last_output(warp_pipe):
+    # Outputs are restored by position. In front of the existing three, model_2
+    # would land every link in a workflow saved before it on the wrong socket.
+    assert warp_pipe.WarpLoraPrompt.RETURN_NAMES == ("model", "clip", "prompt", "model_2")
 
 
 def test_index_carries_the_civitai_title_and_link(warp_pipe, monkeypatch, tmp_path):
