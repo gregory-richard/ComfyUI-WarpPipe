@@ -1,18 +1,24 @@
 # Prompt + LoRAs
 
-Write the prompt and the LoRAs it uses in one text box.
+Write the prompt and the LoRAs it uses on one node.
 
 ## Overview
 
 The **Prompt + LoRAs** node keeps a prompt and its LoRAs together instead of
-splitting them between a text node and a loader. LoRAs are written inline using
-the same `<lora:name:weight>` syntax A1111 uses:
+splitting them between a text node and a loader. The prose goes in the prompt
+box; the LoRAs go in the short box under it, one to a line, in the same
+`<lora:name:weight>` syntax A1111 uses:
 
 ```
-a portrait, dramatic lighting <lora:detail tweaker:0.8>
+Prompt   a portrait, dramatic lighting, sharp focus
+LoRAs    <lora:detail tweaker:0.8>
 ```
 
 Switching a LoRA becomes an edit to the text rather than a rewire.
+
+A tag written into the prompt itself still loads — that is how an A1111 prompt
+arrives, and how every workflow saved before the list existed reads. The strip
+offers to move those down into the list when the list is empty.
 
 ## Filenames it does not recognise
 
@@ -48,9 +54,9 @@ message naming what it matched. That is deliberate: generating an image without
 a LoRA the prompt asked for gives you a wrong picture and wrong metadata, and a
 console warning is too easy to miss.
 
-## Colours in the prompt
+## Colours in the text
 
-The prompt box colours what it finds, so the text says what it will do:
+Every box colours what it finds, so the text says what it will do:
 
 | | |
 | --- | --- |
@@ -59,6 +65,7 @@ The prompt box colours what it finds, so the text says what it will do:
 | orange, dotted underline | a real file, but made for another base model |
 | amber | an embedding |
 | green | a trigger word belonging to one of the LoRAs in use |
+| dim green | a trigger word whose LoRA is not loaded - switched off, at weight 0, or in the second list while it is off |
 | grey italic | a note, which is not sent |
 
 Red and orange are different complaints. Red will not load at all. Orange loads
@@ -70,38 +77,83 @@ a file whose sidecar names no base, nothing can be judged and nothing is orange.
 A tag inside a note is coloured as a note, because that is what happens to it:
 it does not load.
 
+A trigger word is still coloured when its LoRA is not loaded, because it is
+still that LoRA's word and the prompt still sends it - but in a dimmer green, so
+a word nothing will answer does not look like one that something will. A word
+two LoRAs declare stays bright while either of them is loaded. Hover any of them
+to see whose it is.
+
 Selecting text keeps all of it. The colouring is drawn behind the box you type
 in, so a selection that painted its own opaque text would hide it — the
 selection is a tint instead, and the notes stay italic while highlighted.
 
 ## Where the LoRAs live
 
-In the prompt, as text, each tag on a line of its own:
+In the box under the prompt, as text, one tag to a line:
 
-    a photo in a sunlit kitchen,
-    <lora:bolero537 - boxer panties - v1.0 (anima):0.80>
-    boxer panties
-    warm light
+    Prompt   a photo in a sunlit kitchen, boxer panties, warm light
+    LoRAs    <lora:bolero537 - boxer panties - v1.0 (anima):0.80>
 
-They are not gathered at the top or the bottom - a tag belongs where you were
-writing when you reached for it. The line to itself is what makes the rest work:
-every LoRA verb below is an ordinary edit to one line, so commenting, moving or
-deleting that line means exactly one LoRA and nothing else.
+The box is two lines tall and grows with what it holds, up to six, so a node
+that uses one LoRA is barely taller than a prompt. The prose stays prose: what
+goes to the model is what you can read in the prompt box, with nothing to skip
+over.
 
-There is no separate list any more. Older workflows that kept one still run -
-the backend reads both - and the strip under the prompt offers to move them in.
+**Drag the bottom edge of a list to set its height** — the short bar in the
+middle of it marks the handle, though the whole edge works, and the node grows
+by what you take rather than squeezing the prompt. The height is kept with the
+node, so it is there next time the workflow opens, and Ctrl+Z takes it back
+like any other change. Resizing the node itself gives the room to the prompt
+instead. **Double-click** the same band to hand the height back to the box and
+have it fit the list again.
+
+When the prompt has tags in it and the list is empty, the strip offers to move
+them down: **click anywhere on that line**, and it says how many it moved.
+
+The line to itself is what makes the rest work: every LoRA verb below is an
+ordinary edit to one line, so commenting, moving or deleting that line means
+exactly one LoRA and nothing else.
+
+Order is the order they are applied in, which is why a line can be moved.
+
+## A second list, for a second pass
+
+A two-model sampler runs the picture twice - base then turbo, high noise then
+low - and each pass wants its own LoRAs at its own weights. The same file at
+1.00 on the first pass and 0.40 on the second is the ordinary case there, not
+an edge one.
+
+Switch **Model 2** to *its own LoRAs* and a second box appears for exactly that.
+It feeds the **model_2** output, the first list feeds **model**, and the two
+lists are read independently: a tag in one says nothing about the other.
+
+    LoRAs           <lora:some speed lora:1.00>
+                    <lora:a style (high noise):0.20>
+    LoRAs · model 2 <lora:some speed lora:1.00>
+                    <lora:a style (low noise):0.20>
+
+Switched off, the second list is not read at all and **model_2** passes through
+untouched — a box that is not on screen cannot be loading anything.
+
+The text encoder is patched by the first list only. There is one CLIP, encoded
+once and shared by both passes, so patching it with two different stacks would
+describe neither of them. Most LoRAs for these architectures carry no
+text-encoder weights at all.
 
 ## Adding a LoRA without typing its name
 
-Type **/** in the prompt followed by a few letters. The best match appears in
+Type **/** in the LoRAs box followed by a few letters. The best match appears in
 grey at the end of that line - press **Tab** to take it, or **arrow up/down** to
 walk the other matches. **Escape**, or clicking elsewhere, drops the suggestion.
-An embedding is written where you typed it, as `embedding:name`.
+The same **/** works in the prompt, where an embedding belongs: it is written
+where you typed it, as `embedding:name`.
 
 If the LoRA declares trigger words, they are offered straight away as a second
-suggestion: **Tab** again puts them on the line under the tag, and the arrows
-choose between all of them and one at a time. Adding a LoRA and saying its word
-is Tab twice.
+suggestion: **Tab** again writes them into the **prompt**, where the caret last
+was, and the arrows choose between all of them and one at a time. Adding a LoRA
+and saying its word is Tab twice. The grey text is drawn in the prompt box
+while you are still in the list, so the offer is shown where it will land, and
+typing carries on where it was.
 
 That offer is not a moment you can miss. Put the caret in any tag and press
 **Tab** and its trigger words are offered again, however long ago it went in.
@@ -142,7 +194,7 @@ With the caret in a tag:
 | --- | --- |
 | **Ctrl+↑ / Ctrl+↓** | weight, in steps of 0.1 |
 | **Ctrl+/** | switch it off and on |
-| **Alt+↑ / Alt+↓** | move the line - LoRAs apply down the prompt |
+| **Alt+↑ / Alt+↓** | move the line - LoRAs apply down the list |
 | select the line, delete | remove it |
 
 Ctrl+↑/↓ is the same key ComfyUI uses for `(word:1.1)` emphasis. Outside a LoRA
@@ -157,14 +209,23 @@ like any other typing.
 
 ## The strip under the prompt
 
-One line, showing whichever tag the caret is in: its preview, the title and
-creator from the `.civitai.info` sidecar, the base model, the weight, its first
-few trigger words as buttons that insert them, and **↗** to open its Civitai
-page. A tag naming a file that is not there says so.
+One line, showing whichever tag the caret is in — in either list, or in the
+prompt: its preview, the title and creator from the `.civitai.info` sidecar,
+the base model, the weight, its first few trigger words as buttons that insert
+them into the prompt, and **↗** to open its Civitai page. A tag naming a file
+that is not there says so.
 
-With the caret anywhere else — or with the prompt not being edited at all —
-it stands by and just counts what is loaded. It describes where the cursor
-is, not what the node holds, so it empties when you click away.
+With the caret in a coloured trigger word, it shows the LoRA that word belongs
+to, led by the word itself: `neon rain from Neon Rain`. It adds `off` when that
+LoRA is not loaded, `model 2` when it is in the second list, and `+1` when
+another LoRA declares the same word too - hover that for the name. Whichever it
+is showing, that LoRA's tag and every one of its words get a soft background in
+all the boxes, so a word in the prompt and its tag two boxes down are found
+together.
+
+With the caret anywhere else — or with nothing being edited at all — it stands
+by and just counts what is loaded. It describes where the cursor is, not what
+the node holds, so it empties when you click away.
 
 It replaced a card per LoRA. The cards repeated what the text already said and
 needed a scrolling panel and a draggable split to hold them, which is where the
@@ -203,7 +264,8 @@ Creators sometimes declare a single word and sometimes several paragraphs - in
 one collection of 761 files the longest ran to 655 characters - so they are
 never inserted wholesale. The suggestion after Tab offers all of them first,
 then one at a time; the strip offers the first six as buttons. Either way you
-pick, and they land on a line of their own.
+pick, and they land in the prompt, at the end of the line the caret was last
+on, separated by commas. They are prose, and prose is what the prompt is for.
 
 None of them are ever added for you. The section on trigger words below says
 why that is deliberate rather than unfinished.
@@ -265,22 +327,33 @@ weights, encoding first would silently drop them.
 
 ## Inputs
 
-- **text** — The prompt, with any `<lora:name:weight>` tags inline.
+- **text** — The prompt. Tags written in here still load.
+- **loras** — The LoRAs applied to **model**, one `<lora:name:weight>` a line.
+- **loras_2_on** — Give **model_2** a list of its own, and show it.
+- **loras_2** — The LoRAs applied to **model_2**, for a second pass.
 - **apply_to_clip** — Patch the text encoder as well as the model.
-- **model** (optional) — The model the LoRAs are applied to.
-- **clip** (optional) — The CLIP the LoRAs are applied to.
+- **model** (optional) — The model the first list is applied to.
+- **model_2** (optional) — The model the second list is applied to.
+- **clip** (optional) — The CLIP the first list is applied to.
 
 ## Outputs
 
-- **model** — The model with every resolved LoRA applied.
-- **clip** — The CLIP with every resolved LoRA applied.
+- **model** — The model with every LoRA in the first list applied.
+- **clip** — The CLIP with the first list applied, if **apply_to_clip** is on.
 - **prompt** — The prompt with the tags and the notes removed, and nothing
   added, ready for a text encoder.
+- **model_2** — The second model with the second list applied, or untouched
+  when the switch is off. It sits last because outputs are restored by
+  position: in front of the other three it would land every link in a workflow
+  saved before it on the wrong socket.
 
 ## Wiring it
 
 Connect **model** and **clip** from your loader, and send the **model**,
-**clip** and **prompt** outputs on to your sampler and text encoder.
+**clip** and **prompt** outputs on to your sampler and text encoder. For a
+two-pass sampler, take the second model in through **model_2** and out again
+into the pass that uses it — the **Warp** node's `model_1` and `model_2` are
+the same two.
 
 This node builds no warp of its own. To record the generation in a saved image,
 send its **prompt**, **model** and **clip** into a **Warp** node along with the

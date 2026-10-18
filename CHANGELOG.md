@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **The LoRAs have a box of their own**: the prompt is prose again, and the tags live in a short list under it - two lines tall, growing with what it holds, up to six. Everything the prompt box does the list does too: colouring, `/` completion, `Ctrl+↑`/`Ctrl+↓` weights, `Ctrl+/` off, `Alt+↑`/`Alt+↓` order. Tags written into the prompt still load, because that is how an A1111 prompt arrives, and the strip offers to move them down into the list
+- **A list can be given a height by hand**: drag the band along its bottom edge - a short bar in the middle marks it - and the node grows by what you take, rather than the prompt above it being squeezed. The height is kept in the node's properties, so it survives a save, and it is one step of undo; double-clicking the band hands it back and the box fits the list again
+- **A second LoRA list, for a second pass**: switching **Model 2** to *its own LoRAs* opens a list that feeds the new `model_2` output, for a sampler that runs two models over one picture - base then turbo, high noise then low. Each pass takes its own files at its own weights, which is what those setups actually need: the same LoRA at 1.00 on the base and 0.40 on the turbo, or a high-noise file on one pass and its low-noise twin on the other. One prompt above both says what the picture is
+- **`model_2` input and output**: the second model the second list is applied to, named to match the `model_1` and `model_2` a Warp already carries. It is the last output, because outputs are restored by position and anything in front of the existing three would move every link in a workflow saved before it
+- **A trigger word says whose it is**: hover a green word for the LoRA that declares it, and which model it is on when there are two lists. With the caret in one, the strip shows that LoRA the way it shows a tag, led by the word - `neon rain from Neon Rain` - with `off` when it is not loaded and `+1` when another LoRA declares the same word. Words had all been one green, so in a prompt with five LoRAs there was no telling which word was whose without opening each one
+- **One LoRA, picked out everywhere**: with the caret in a tag or in one of its words, that LoRA's tag and every one of its words get a soft background in all the boxes - the word in the prose and its tag two boxes down light up together
+
+### Changed
+
+- **Trigger words go in the prompt**: `Tab` on a tag, and the strip's word buttons, write the words into the prompt at the end of the line the caret was last on - they are prose, and the prompt is where prose goes. The grey offer is drawn there too, so it is shown where it will land, and typing carries on in the box that asked. A tag written inline in the prompt still takes its words on its own line, after it
+- **Browse LoRAs writes into the list** rather than wherever the caret last was, unless the caret is in one of the boxes at the time
+- **Trigger words of a LoRA that is not loaded are a dimmer green**: switched off with `//`, at weight 0, or in the second list while it is off. They were coloured exactly like the words of a LoRA in use, which said the opposite of what would happen. They are still coloured, because they are still that LoRA's words and the prompt still sends them; a word two LoRAs declare stays bright while either is loaded
+- **The strip's offer takes a click anywhere on its line**, not only on the chip at the end of it. The chip is 15px tall before the canvas scales it, so on a node zoomed out to fit it was a few pixels of target, and the words beside it read as part of the same control. It also says how many tags it moved, because on a tall node the whole change can happen off the part of it you are looking at
+
+### Fixed
+
+- **The prompt no longer jumps a line at the bottom**: with the box scrolled to the end, the coloured text could shift a line and back every half second, in time with the caret. The layer behind the textarea was being laid out halfway through re-measuring, without the scrollbar's width, and its scroll was clamped short until the next sync
+- **A trigger word is only coloured as a whole word**: a LoRA declaring `red` coloured the middle of *cluttered*, and one declaring `art` the middle of *party*. Words are matched up to the edge of a word in any script, so `(masterpiece)` and `über` still match as written. The details window dims a word as already written by the same rule, where `red` used to count as written because the prompt said *cluttered*
+- **Hovering a red or orange tag gives the reason, as the docs said it did**: the reason was written onto the coloured layer, which sits under the textarea and takes no pointer events, so it was never shown. The textarea now takes the title of whatever coloured text is under the pointer. Under Nodes 2.0 the box's own tooltip stands aside while it does, rather than the two stacking
+- **The strip opens a LoRA's details again**: clicking the name or the thumbnail did nothing. ComfyUI blurs every text widget on any mousedown outside it, the strip clears when the box loses its caret, and so the name was gone before the button came back up. A press on the strip now leaves the caret where it was
+
 ## [4.0.2] - 2026-09-09
 
 ### Fixed

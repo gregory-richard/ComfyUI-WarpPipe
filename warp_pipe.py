@@ -1610,11 +1610,55 @@ class WarpLoraPrompt:
                 ),
             },
             "optional": {
-                # Written by the node's interface rather than by hand: keeping
-                # the LoRA list out of the prompt means the prompt stays prose.
-                # Tags typed directly into the prompt still work.
-                "loras": ("STRING", {"default": "", "multiline": False}),
+                # The LoRAs, one tag per line, kept out of the prose so the
+                # prompt reads as a prompt. Tags typed into the prompt itself
+                # still work - that is how an A1111 prompt arrives.
+                "loras": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "placeholder": "<lora:detail tweaker:0.8>",
+                        "tooltip": (
+                            "The LoRAs applied to model, one <lora:name:weight> "
+                            "per line. // switches a line off."
+                        ),
+                    },
+                ),
+                # Off unless asked for: one model is the ordinary case, and a
+                # box for a pass most graphs do not have is a box in the way.
+                # It gates the list as well as showing it, so a list left in a
+                # hidden box applies nothing - what the node shows is what the
+                # run gets.
+                "loras_2_on": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "label_on": "its own LoRAs",
+                        "label_off": "no LoRAs",
+                        "tooltip": (
+                            "Give model_2 a LoRA list of its own, for the second "
+                            "pass of a two-model sampler."
+                        ),
+                    },
+                ),
+                # A second stack for a second pass. Base then turbo, high noise
+                # then low: each pass wants its own files at its own weights, so
+                # this is a list of its own rather than a copy of the first.
+                "loras_2": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "placeholder": "<lora:detail tweaker:0.4>",
+                        "tooltip": (
+                            "The LoRAs applied to model_2, for the second pass "
+                            "of a two-model sampler. Empty applies none."
+                        ),
+                    },
+                ),
                 "model": ("MODEL", {}),
+                "model_2": ("MODEL", {}),
                 "clip": ("CLIP", {}),
             },
         }
@@ -1622,8 +1666,11 @@ class WarpLoraPrompt:
     # No warp of its own. Assembling one is what the Warp node is for, and it
     # takes this node's model, clip and prompt like anything else's - one place
     # that builds warps rather than two that disagree about what is in them.
-    RETURN_TYPES = ("MODEL", "CLIP", "STRING")
-    RETURN_NAMES = ("model", "clip", "prompt")
+    # model_2 comes last rather than beside model: outputs are restored by
+    # position, so anything put in front of the existing three would land every
+    # link in a workflow saved before it on the wrong socket.
+    RETURN_TYPES = ("MODEL", "CLIP", "STRING", "MODEL")
+    RETURN_NAMES = ("model", "clip", "prompt", "model_2")
 
     @classmethod
     def IS_CHANGED(cls, **kwargs) -> str:
@@ -1671,25 +1718,13 @@ class WarpLoraPrompt:
 
         return resolved, trigger_words
 
-    def apply(
-        self,
-        text: str = "",
-        apply_to_clip: bool = True,
-        loras: str = "",
-        model: Optional[Any] = None,
-        clip: Optional[Any] = None,
-    ) -> tuple:
-        # A tag that cannot be resolved fails the run: generating without a
-        # LoRA the prompt asked for produces a wrong image and wrong metadata.
-        resolved, _ = self.plan(text, strict=True, loras=loras)
+    @staticmethod
+    def patch(model: Optional[Any], clip: Optional[Any], resolved: list[dict[str, Any]]) -> tuple:
+        """Apply one stack of LoRAs to one model, and to the clip if given.
 
-        # Nothing is added to the prompt. Trigger words are put in by hand, with
-        # Tab on a tag or from the strip, where they can be read, placed and
-        # edited like the rest of the prompt. Appending them here as well would
-        # send words the writer never saw - and some creators put whole
-        # sentences in trainedWords, so that is not a small addition.
-        prompt = clean_prompt(text)
-
+        Passing clip=None patches the model alone and returns None for the clip,
+        so the caller keeps the one it had.
+        """
         for entry in resolved:
             if entry["path"] is None:
                 continue
@@ -1702,14 +1737,12 @@ class WarpLoraPrompt:
                 lora, metadata = comfy.utils.load_torch_file(
                     entry["path"], safe_load=True, return_metadata=True
                 )
-                # Passing clip=None patches the model alone and returns None for
-                # the clip, so the untouched one is kept.
                 patched_model, patched_clip = comfy.sd.load_lora_for_models(
                     model,
-                    clip if apply_to_clip else None,
+                    clip,
                     lora,
                     entry["weight"],
-                    entry["weight"] if apply_to_clip else 0.0,
+                    entry["weight"] if clip is not None else 0.0,
                     lora_metadata=metadata,
                 )
                 model = patched_model
@@ -1717,8 +1750,48 @@ class WarpLoraPrompt:
                     clip = patched_clip
             except Exception as exc:
                 logger.warning("Could not apply LoRA %s: %s", entry["name"], exc)
+        return model, clip
 
-        return (model, clip, prompt)
+    def apply(
+        self,
+        text: str = "",
+        apply_to_clip: bool = True,
+        loras: str = "",
+        loras_2_on: bool = False,
+        loras_2: str = "",
+        model: Optional[Any] = None,
+        model_2: Optional[Any] = None,
+        clip: Optional[Any] = None,
+    ) -> tuple:
+        # A tag that cannot be resolved fails the run: generating without a
+        # LoRA the prompt asked for produces a wrong image and wrong metadata.
+        resolved, _ = self.plan(text, strict=True, loras=loras)
+        # The second list stands alone. A two-pass sampler - base then turbo,
+        # high noise then low - runs each pass on its own files at its own
+        # weights, so an empty list means nothing is applied to model_2 rather
+        # than "the same again": what the box says is what the pass gets.
+        #
+        # Switched off, it is not read at all. The box is hidden then, and a
+        # hidden box that still loaded LoRAs would be the one thing this node
+        # exists to prevent.
+        resolved_2, _ = self.plan("", strict=True, loras=loras_2) if loras_2_on else ([], [])
+
+        # Nothing is added to the prompt. Trigger words are put in by hand, with
+        # Tab on a tag or from the strip, where they can be read, placed and
+        # edited like the rest of the prompt. Appending them here as well would
+        # send words the writer never saw - and some creators put whole
+        # sentences in trainedWords, so that is not a small addition.
+        prompt = clean_prompt(text)
+
+        model, patched_clip = self.patch(model, clip if apply_to_clip else None, resolved)
+        if patched_clip is not None:
+            clip = patched_clip
+        # The text encoder is patched by the first list only. It is encoded once
+        # and shared by both passes, so patching it twice with two different
+        # stacks would describe neither of them.
+        model_2, _ = self.patch(model_2, None, resolved_2)
+
+        return (model, clip, prompt, model_2)
 
 
 # ComfyUI's server expands %year%, %month% and friends, but the %date:FORMAT%
@@ -2701,6 +2774,9 @@ if ENABLE_V3_NODES:
         def define_schema(cls) -> io.Schema:
             schema = WarpLoraPrompt.INPUT_TYPES()
             text = schema["required"]["text"][1]
+            loras = schema["optional"]["loras"][1]
+            loras_2 = schema["optional"]["loras_2"][1]
+            loras_2_on = schema["optional"]["loras_2_on"][1]
             return io.Schema(
                 node_id="Warp Lora Prompt",
                 display_name="🌀 Prompt + LoRAs",
@@ -2720,8 +2796,32 @@ if ENABLE_V3_NODES:
                         label_on="model + CLIP",
                         label_off="model only",
                     ),
-                    io.String.Input("loras", optional=True, default="", multiline=False),
+                    io.String.Input(
+                        "loras",
+                        optional=True,
+                        default="",
+                        multiline=True,
+                        placeholder=loras["placeholder"],
+                        tooltip=loras["tooltip"],
+                    ),
+                    io.Boolean.Input(
+                        "loras_2_on",
+                        optional=True,
+                        default=False,
+                        label_on=loras_2_on["label_on"],
+                        label_off=loras_2_on["label_off"],
+                        tooltip=loras_2_on["tooltip"],
+                    ),
+                    io.String.Input(
+                        "loras_2",
+                        optional=True,
+                        default="",
+                        multiline=True,
+                        placeholder=loras_2["placeholder"],
+                        tooltip=loras_2["tooltip"],
+                    ),
                     _io_type("MODEL").Input("model", optional=True),
+                    _io_type("MODEL").Input("model_2", optional=True),
                     _io_type("CLIP").Input("clip", optional=True),
                 ],
                 # Output ids differ from the input ids they mirror because a
@@ -2731,6 +2831,7 @@ if ENABLE_V3_NODES:
                     _io_type("MODEL").Output("model_out", display_name="model"),
                     _io_type("CLIP").Output("clip_out", display_name="clip"),
                     io.String.Output("prompt", display_name="prompt"),
+                    _io_type("MODEL").Output("model_2_out", display_name="model_2"),
                 ],
             )
 
