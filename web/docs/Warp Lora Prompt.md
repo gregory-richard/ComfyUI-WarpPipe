@@ -74,6 +74,11 @@ an error — you may know something the sidecar does not. Hover either for the
 reason; orange names both base models. With nothing wired into **model**, or for
 a file whose sidecar names no base, nothing can be judged and nothing is orange.
 
+A Turbo counts as the model it was distilled from: Civitai files a Krea 2 Turbo
+finetune under a base of its own, but it runs Krea 2 LoRAs, so they are not
+orange on it and **/** still suggests them. `ZImageTurbo` and `ZImageBase` match
+the same way.
+
 A tag inside a note is coloured as a note, because that is what happens to it:
 it does not load.
 

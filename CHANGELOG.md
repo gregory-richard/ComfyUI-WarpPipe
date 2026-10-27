@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **A Turbo model takes its base's LoRAs**: Civitai files a Turbo finetune under a base of its own, so on a Krea 2 Turbo checkpoint every Krea 2 LoRA read orange, `/` suggested none of them and the browser dimmed the whole family - 191 LoRAs in one real collection, all of which load and apply. A Turbo is the same model distilled to fewer steps, so it now counts as its base: `Krea 2 Turbo` is `Krea 2`, and `ZImageTurbo` and `ZImageBase` meet at `ZImage`
+
 ## [4.1.0] - 2026-10-18
 
 ### Added

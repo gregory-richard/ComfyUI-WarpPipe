@@ -1316,6 +1316,18 @@ def test_base_model_normalisation_folds_only_trivial_variants(warp_pipe):
     assert warp_pipe.normalise_base_model("") is None
 
 
+def test_a_turbo_is_the_same_base_as_the_model_it_was_distilled_from(warp_pipe):
+    normalise = warp_pipe.normalise_base_model
+    # Civitai files a Krea 2 Turbo finetune under its own base; its LoRAs are Krea 2.
+    assert normalise("Krea 2 Turbo") == normalise("Krea 2") == "Krea 2"
+    # Written without a separator, and meeting the -base spelling of the same model.
+    assert normalise("ZImageTurbo") == normalise("ZImageBase") == "ZImage"
+    assert normalise("Krea 2 turbo") == "Krea 2"
+    # Only as the last word: anything else is a different name, not a variant.
+    assert normalise("Turbo Diffusion XL") == "Turbo Diffusion XL"
+    assert normalise("Turbo") is None
+
+
 def test_a_filename_without_the_convention_keeps_its_whole_name(warp_pipe):
     for name in ["myLoRA.safetensors", "style/some_lora_v2.safetensors", "AAA_BBB-CCC.safetensors"]:
         parsed = warp_pipe.parse_lora_filename(name)
