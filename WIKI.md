@@ -151,7 +151,8 @@ written for is loaded to answer it. A word two LoRAs declare stays bright while
 either of them is loaded.
 
 With nothing wired into **model**, or for a file whose sidecar declares no base,
-nothing can be judged and nothing goes orange.
+nothing can be judged and nothing goes orange. A Turbo counts as the model it
+was distilled from, so a Krea 2 LoRA is not orange on a Krea 2 Turbo checkpoint.
 
 #### Naming a LoRA
 
@@ -1087,6 +1088,11 @@ may know better than the sidecar — the warning does not stop anything.
 
 With nothing connected to `model`, nothing can be judged and nothing goes
 orange.
+
+Bases are compared after tidying: case, spacing and punctuation are ignored, and
+a trailing `-base` or `Turbo` is dropped, so `Krea 2 Turbo` matches `Krea 2` and
+`ZImageTurbo` matches `ZImageBase`. Anything else that differs is a different
+base — `Flux.2 Klein 4B` and `9B` stay apart.
 
 ### Civitai does not link the resources
 

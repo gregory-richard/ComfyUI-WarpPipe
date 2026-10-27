@@ -1902,11 +1902,16 @@ def normalise_base_model(value: Optional[str]) -> Optional[str]:
     The same base is written several ways ("Flux.2 Klein 9B" and
     "Flux.2 Klein 9B-base"), but neighbouring names are genuinely different
     models, so only trivial variants are folded together - never whole families.
+
+    A Turbo is folded into its base as well. It is the same model distilled to
+    fewer steps, and it runs the base's LoRAs: kept apart, every Krea 2 LoRA
+    read as made for another model on a Krea 2 Turbo checkpoint, and "/" hid
+    all of them. "ZImageTurbo" and "ZImageBase" meet at "ZImage" the same way.
     """
     if not isinstance(value, str) or not value.strip():
         return None
     cleaned = re.sub(r"\s+", " ", value.strip())
-    cleaned = re.sub(r"[-\s]*base$", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"[-\s]*(?:base|turbo)$", "", cleaned, flags=re.I)
     return cleaned or None
 
 
