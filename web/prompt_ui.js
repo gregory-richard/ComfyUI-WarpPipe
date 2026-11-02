@@ -72,7 +72,7 @@ const boxStyle = (el) => {
 // with the node, restored with it, and no slot in widgets_values.
 const ROWS_PROP = "warppipeListRows";
 // What a widget given no room to draw in returns, which is how both renderers
-// are told to leave it out: neither honours widget.hidden.
+// are told to leave it out: neither sizes by widget.hidden.
 const NO_ROOM = -4;
 
 // The strip is placed by hand rather than added as a widget. A widget of its
@@ -2055,6 +2055,10 @@ app.registerExtension({
       // what it wants to be plus what will be taken off it.
       const slot = hidden ? NO_ROOM : height + 2 * (widget.margin ?? 0);
       widget._wpeHidden = hidden;
+      // The layer of DOM widgets does read widget.hidden. Without it a box with
+      // no room keeps its container on the page, which then falls back to the
+      // full height of the canvas and takes every click over the nodes below.
+      widget.hidden = hidden;
       widget.computeSize = () => [0, slot];
       widget.computeLayoutSize = () => ({
         minHeight: Math.max(0, slot),
