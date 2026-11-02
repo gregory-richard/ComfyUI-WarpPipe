@@ -313,7 +313,7 @@ def _get_v3_node_id(cls, fallback_prefix: str) -> str:
     return f"{fallback_prefix}:{uuid.uuid4().hex}"
 
 
-# SD1.5/SDXL latents. See _create_empty_latent.
+# SD1.5/SDXL latents, which every model accepts. See _create_empty_latent.
 LATENT_CHANNELS = 4
 
 
@@ -334,26 +334,143 @@ def _create_empty_latent(width: int, height: int, batch_size: int):
     import torch
 
     # Four channels and an eighth of the size: the SD1.5/SDXL latent shape, and
-    # the same one ComfyUI's own EmptyLatentImage produces. Architectures with a
-    # wider latent - Flux, SD3, and anything else on 16 channels - need their
-    # own empty-latent node instead; the resolution presets below are SDXL's
-    # anyway, so this node does not pretend to cover them.
+    # the same one ComfyUI's own EmptyLatentImage produces - down to the ratio
+    # it is labelled with. The label is what makes it fit any model. A sampler
+    # handed an empty latent reshapes it to the model's own format, channels
+    # always, but the size only when it is told which ratio the latent was made
+    # at. Unlabelled, a model with a sixteenth-size latent - FLUX.2, MOSS-Image,
+    # Qwen-Image 2.1 - took the eighth-size grid for its own and rendered at
+    # twice the width and twice the height asked for.
     latent_width = width // 8
     latent_height = height // 8
     latent = torch.zeros([batch_size, LATENT_CHANNELS, latent_height, latent_width])
-    return {"samples": latent}
+    return {"samples": latent, "downscale_ratio_spacial": 8}
+
+
+# The sizes on offer: aspect ratio, width, height. Grouped from tallest to
+# widest, each group from small to large, and every side a multiple of 16 -
+# FLUX.2, MOSS-Image and Qwen-Image 2.1 work on a sixteenth-size latent, and
+# Qwen-Image, Z-Image, Krea 2 and Anima cut an eighth-size one into 2x2
+# patches, so anything else is rounded or padded on the way in. SDXL is happy
+# with any multiple of 8 and takes these as they are.
+#
+# What each family likes is a matter of pixel count, which is why every label
+# carries one. SDXL, Anima and Krea 2 Raw are trained around 1 MP; FLUX.2,
+# MOSS-Image, Z-Image and Krea 2 Turbo want 1-2 MP and go to 4; Qwen-Image 2.1
+# is native at about 4 MP and still fine at 1. A list per family would repeat
+# most of these sizes several times over, so the label says the size and the
+# tooltip says who it suits.
+_SIZE_TABLE = (
+    ("9:16", 576, 1024),
+    ("9:16", 720, 1280),
+    ("9:16", 1088, 1920),
+    ("9:16", 1152, 2048),
+    ("2:3", 832, 1248),
+    ("2:3", 1024, 1536),
+    ("2:3", 1360, 2048),
+    ("3:4", 768, 1024),
+    ("3:4", 864, 1152),
+    ("3:4", 1152, 1536),
+    ("3:4", 1536, 2048),
+    ("4:5", 816, 1024),
+    ("4:5", 1232, 1536),
+    ("4:5", 1632, 2048),
+    ("1:1", 768, 768),
+    ("1:1", 1024, 1024),
+    ("1:1", 1536, 1536),
+    ("1:1", 2048, 2048),
+    ("5:4", 1024, 816),
+    ("5:4", 1536, 1232),
+    ("5:4", 2048, 1632),
+    ("4:3", 1024, 768),
+    ("4:3", 1152, 864),
+    ("4:3", 1536, 1152),
+    ("4:3", 2048, 1536),
+    ("3:2", 1248, 832),
+    ("3:2", 1536, 1024),
+    ("3:2", 2048, 1360),
+    ("16:9", 1024, 576),
+    ("16:9", 1280, 720),
+    ("16:9", 1920, 1088),
+    ("16:9", 2048, 1152),
+)
+
+
+def _size_label(ratio: str, width: int, height: int) -> str:
+    # Short enough to read in a 280px combo. The old labels padded every column
+    # with runs of spaces to line up in a monospace font the widget never uses,
+    # so what showed was a use case and the start of a run of blanks.
+    return f"{ratio} · {width}×{height} · {width * height / 1_000_000:.1f} MP"
+
+
+SIZE_PRESETS = {_size_label(*row): (row[1], row[2]) for row in _SIZE_TABLE}
+CUSTOM_SIZE = "Custom"
+DEFAULT_SIZE_PRESET = _size_label("1:1", 1024, 1024)
+SIZE_PRESET_TOOLTIP = (
+    "Width × height and megapixels. About 1 MP suits SDXL, Anima and Krea 2 Raw; "
+    "1-2 MP suits FLUX.2, MOSS-Image, Z-Image and Krea 2 Turbo; Qwen-Image 2.1 is "
+    "native at about 4 MP. Custom uses the two boxes below."
+)
+CUSTOM_SIZE_TOOLTIP = (
+    "Used when the preset is Custom. Keep it a multiple of 16 for anything but "
+    "SDXL, or the model rounds it."
+)
+
+# What workflows saved by 4.1 and earlier hold, told apart by the use case in
+# front of the first bar - the rest of those labels was spacing.
+# Each one is the same size as before, except four that were not multiples of
+# 16 and have moved to the nearest size that is.
+_LEGACY_SIZES = {
+    "Mobile/Stories (small)": (576, 1024),
+    "Mobile/Stories (HD)": (720, 1280),
+    "Mobile/Stories (Full HD)": (1088, 1920),  # was 1080
+    "Mobile/Stories (max)": (1152, 2048),
+    "Portrait (classic)": (768, 1024),
+    "Portrait (high-res)": (1152, 1536),
+    "Portrait (max)": (1536, 2048),
+    "Photo portrait": (832, 1248),
+    "Photo portrait (high-res)": (1024, 1536),
+    "Photo portrait (max)": (1360, 2048),  # was 1368
+    "Instagram portrait": (816, 1024),
+    "Instagram portrait (hi-res)": (1232, 1536),  # was 1224
+    "Instagram portrait (max)": (1632, 2048),  # was 1640
+    "Square (small)": (768, 768),
+    "Square (SDXL native)": (1024, 1024),
+    "Square (high-res)": (1536, 1536),
+    "Square (max)": (2048, 2048),
+    "Instagram landscape": (1024, 816),
+    "Instagram landscape (hi-res)": (1536, 1232),
+    "Instagram landscape (max)": (2048, 1632),
+    "Photo landscape": (1248, 832),
+    "Photo landscape (high-res)": (1536, 1024),
+    "Photo landscape (max)": (2048, 1360),
+    "Landscape (classic)": (1024, 768),
+    "Landscape (high-res)": (1536, 1152),
+    "Landscape (max)": (2048, 1536),
+    "Widescreen (small)": (1024, 576),
+    "Widescreen (720p)": (1280, 720),
+    "Widescreen (1080p)": (1920, 1088),
+    "Widescreen (max)": (2048, 1152),
+}
+_LABEL_OF_SIZE = {size: label for label, size in SIZE_PRESETS.items()}
+
+
+def upgrade_size_preset(preset: Any) -> Any:
+    """Today's label for a preset an earlier version saved; anything else as is."""
+    if not isinstance(preset, str) or "|" not in preset:
+        return preset
+    size = _LEGACY_SIZES.get(preset.split("|", 1)[0].strip())
+    return _LABEL_OF_SIZE.get(size, preset)
 
 
 def _parse_size_preset(preset: str) -> tuple:
-    """
-    Parse resolution preset strings like:
-    "Square (SDXL native)        |  1:1   |  1024 x  1024  |  1.05 MP"
-    """
-    match = re.search(r"(\d+)\s*×\s*(\d+)", preset)
-    if match:
-        return int(match.group(1)), int(match.group(2))
+    """Width and height for a size preset, from this list or an earlier one."""
+    preset = upgrade_size_preset(preset)
+    if preset in SIZE_PRESETS:
+        return SIZE_PRESETS[preset]
 
-    match = re.search(r"(\d+)\s*x\s*(\d+)", preset, re.IGNORECASE)
+    # Anything else that says its size, which is what every label has ever done.
+    match = re.search(r"(\d+)\s*[×x]\s*(\d+)", preset, re.IGNORECASE)
     if match:
         return int(match.group(1)), int(match.group(2))
 
@@ -643,52 +760,7 @@ class WarpProvider:
 
     @classmethod
     def INPUT_TYPES(cls):
-        # Resolution presets: Use Case | Aspect Ratio | Width × Height | Megapixels
-        # Sorted by aspect ratio (increasing: 9:16 → 16:9), then by MP (increasing)
-        # All dimensions divisible by 8, small side up to 2048
-        size_presets = [
-            # 9:16 - Mobile/Stories (portrait)
-            "Mobile/Stories (small)      |  9:16  |   576 ×  1024  |  0.59 MP",
-            "Mobile/Stories (HD)         |  9:16  |   720 ×  1280  |  0.92 MP",
-            "Mobile/Stories (Full HD)    |  9:16  |  1080 ×  1920  |  2.07 MP",
-            "Mobile/Stories (max)        |  9:16  |  1152 ×  2048  |  2.36 MP",
-            # 3:4 - Portrait
-            "Portrait (classic)          |  3:4   |   768 ×  1024  |  0.79 MP",
-            "Portrait (high-res)         |  3:4   |  1152 ×  1536  |  1.77 MP",
-            "Portrait (max)              |  3:4   |  1536 ×  2048  |  3.15 MP",
-            # 2:3 - Photo portrait
-            "Photo portrait              |  2:3   |   832 ×  1248  |  1.04 MP",
-            "Photo portrait (high-res)   |  2:3   |  1024 ×  1536  |  1.57 MP",
-            "Photo portrait (max)        |  2:3   |  1368 ×  2048  |  2.80 MP",
-            # 4:5 - Instagram portrait
-            "Instagram portrait          |  4:5   |   816 ×  1024  |  0.84 MP",
-            "Instagram portrait (hi-res) |  4:5   |  1224 ×  1536  |  1.88 MP",
-            "Instagram portrait (max)    |  4:5   |  1640 ×  2048  |  3.36 MP",
-            # 1:1 - Square
-            "Square (small)              |  1:1   |   768 ×   768  |  0.59 MP",
-            "Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP",
-            "Square (high-res)           |  1:1   |  1536 ×  1536  |  2.36 MP",
-            "Square (max)                |  1:1   |  2048 ×  2048  |  4.19 MP",
-            # 5:4 - Instagram landscape
-            "Instagram landscape         |  5:4   |  1024 ×   816  |  0.84 MP",
-            "Instagram landscape (hi-res)|  5:4   |  1536 ×  1224  |  1.88 MP",
-            "Instagram landscape (max)   |  5:4   |  2048 ×  1640  |  3.36 MP",
-            # 3:2 - Photo landscape
-            "Photo landscape             |  3:2   |  1248 ×   832  |  1.04 MP",
-            "Photo landscape (high-res)  |  3:2   |  1536 ×  1024  |  1.57 MP",
-            "Photo landscape (max)       |  3:2   |  2048 ×  1368  |  2.80 MP",
-            # 4:3 - Landscape
-            "Landscape (classic)         |  4:3   |  1024 ×   768  |  0.79 MP",
-            "Landscape (high-res)        |  4:3   |  1536 ×  1152  |  1.77 MP",
-            "Landscape (max)             |  4:3   |  2048 ×  1536  |  3.15 MP",
-            # 16:9 - Widescreen
-            "Widescreen (small)          |  16:9  |  1024 ×   576  |  0.59 MP",
-            "Widescreen (720p)           |  16:9  |  1280 ×   720  |  0.92 MP",
-            "Widescreen (1080p)          |  16:9  |  1920 ×  1080  |  2.07 MP",
-            "Widescreen (max)            |  16:9  |  2048 ×  1152  |  2.36 MP",
-            # Custom option
-            "Custom",
-        ]
+        size_presets = [*SIZE_PRESETS, CUSTOM_SIZE]
 
         return {
             "optional": {
@@ -704,12 +776,44 @@ class WarpProvider:
                 # Image Size Parameters
                 "size_preset": (
                     size_presets,
-                    {"default": "Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP"},
+                    {"default": DEFAULT_SIZE_PRESET, "tooltip": SIZE_PRESET_TOOLTIP},
                 ),
-                "custom_width": ("INT", {"default": 1024, "min": 64, "max": 8192, "step": 8}),
-                "custom_height": ("INT", {"default": 1024, "min": 64, "max": 8192, "step": 8}),
+                "custom_width": (
+                    "INT",
+                    {
+                        "default": 1024,
+                        "min": 64,
+                        "max": 8192,
+                        "step": 8,
+                        "tooltip": CUSTOM_SIZE_TOOLTIP,
+                    },
+                ),
+                "custom_height": (
+                    "INT",
+                    {
+                        "default": 1024,
+                        "min": 64,
+                        "max": 8192,
+                        "step": 8,
+                        "tooltip": CUSTOM_SIZE_TOOLTIP,
+                    },
+                ),
             }
         }
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, size_preset=None):
+        """Take the preset labels earlier versions saved, as well as today's.
+
+        Naming size_preset here is what lets an old label past ComfyUI's own
+        check, which would refuse it as not in the list: a workflow saved with
+        "Portrait (high-res)         |  3:4   | ..." still runs, at that size.
+        """
+        if size_preset is None or size_preset == CUSTOM_SIZE:
+            return True
+        if upgrade_size_preset(size_preset) in SIZE_PRESETS:
+            return True
+        return f"unknown size preset {size_preset!r}"
 
     RETURN_TYPES = (
         "LATENT",
@@ -748,12 +852,12 @@ class WarpProvider:
         cfg: float = 7.0,
         sampler_name: str = "euler",
         scheduler: str = "normal",
-        size_preset: str = "Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP",
+        size_preset: str = DEFAULT_SIZE_PRESET,
         custom_width: int = 1024,
         custom_height: int = 1024,
     ) -> tuple:
         # Determine actual dimensions from preset or custom values
-        if size_preset == "Custom":
+        if size_preset == CUSTOM_SIZE:
             width, height = custom_width, custom_height
         else:
             width, height = _parse_size_preset(size_preset)
@@ -2621,10 +2725,25 @@ if ENABLE_V3_NODES:
                     _combo_input(
                         "size_preset",
                         size_presets,
-                        default="Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP",
+                        default=DEFAULT_SIZE_PRESET,
+                        tooltip=SIZE_PRESET_TOOLTIP,
                     ),
-                    io.Int.Input("custom_width", default=1024, min=64, max=8192, step=8),
-                    io.Int.Input("custom_height", default=1024, min=64, max=8192, step=8),
+                    io.Int.Input(
+                        "custom_width",
+                        default=1024,
+                        min=64,
+                        max=8192,
+                        step=8,
+                        tooltip=CUSTOM_SIZE_TOOLTIP,
+                    ),
+                    io.Int.Input(
+                        "custom_height",
+                        default=1024,
+                        min=64,
+                        max=8192,
+                        step=8,
+                        tooltip=CUSTOM_SIZE_TOOLTIP,
+                    ),
                 ],
                 outputs=[
                     _io_type("LATENT").Output("latent", display_name="latent"),
@@ -2642,6 +2761,10 @@ if ENABLE_V3_NODES:
             )
 
         @classmethod
+        def validate_inputs(cls, size_preset=None):
+            return WarpProvider.VALIDATE_INPUTS(size_preset)
+
+        @classmethod
         def execute(
             cls,
             batch_size: int = 1,
@@ -2652,7 +2775,7 @@ if ENABLE_V3_NODES:
             cfg: float = 7.0,
             sampler_name: str = "euler",
             scheduler: str = "normal",
-            size_preset: str = "Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP",
+            size_preset: str = DEFAULT_SIZE_PRESET,
             custom_width: int = 1024,
             custom_height: int = 1024,
         ) -> io.NodeOutput:

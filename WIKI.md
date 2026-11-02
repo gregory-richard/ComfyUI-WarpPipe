@@ -262,14 +262,35 @@ sampler, scheduler and size, and producing the empty latent to match.
 
 ![Warp Provider](assets/docs/warp-provider.webp)
 
-Thirty-odd presets cover every common aspect ratio from 9:16 to 16:9, each
-labelled with its use, ratio, pixel size and megapixels, sorted by ratio and
-then by size. Pick `Custom` to use the `custom_width` and `custom_height` boxes.
+Thirty-two presets cover every common aspect ratio from 9:16 to 16:9, sorted
+from tallest to widest and then by size. Each says only what it is —
+`3:4 · 1152×1536 · 1.8 MP` — so it can be read in a node 280 pixels wide. Pick
+`Custom` to use the `custom_width` and `custom_height` boxes.
 
-The latent it makes is the SD1.5/SDXL shape — four channels at an eighth scale,
-the same as ComfyUI's own Empty Latent Image. Architectures on a wider latent
-(Flux, SD3) need their own empty-latent node; the presets here are SDXL's
-anyway.
+Every side is a multiple of 16, which is what every family after SDXL needs:
+FLUX.2, MOSS-Image and Qwen-Image 2.1 work on a sixteenth-size latent, and
+Qwen-Image, Z-Image, Krea 2 and Anima cut an eighth-size one into 2×2 patches.
+What tells the families apart is the pixel count they were trained for, which
+is why every label ends with it:
+
+| Family | Comfortable at | Notes |
+| --- | --- | --- |
+| SDXL | ~1 MP | Trained on 1 MP buckets; above ~1.5 MP subjects start to double |
+| Anima | ~1 MP | Up to ~2.4 MP, weaker the higher it goes |
+| Krea 2 | ~1 MP (Raw), 1–2 MP (Turbo) | Turbo goes to 2048×2048 |
+| FLUX.2 | 1–2 MP | Up to 4 MP |
+| MOSS-Image | 1–2 MP | Up to 4 MP; Kromoss was tuned at 1 MP |
+| Z-Image | 1–2 MP | Anything from 512×512 to 2048×2048 in area |
+| Qwen-Image 2.1 | ~4 MP | Native at 2K; 1 MP still works |
+
+The latent is four channels at an eighth scale, labelled as such, exactly as
+ComfyUI's own Empty Latent Image makes it — and that label is what lets it feed
+any model. KSampler and SamplerCustomAdvanced reshape an empty latent to the
+model's own format: the channels always, and the size whenever the latent says
+which scale it was made at. So the same Provider drives SDXL, FLUX.2 and
+MOSS-Image alike, and each renders at the size the preset names. Samplers from
+other packs that skip that step (RES4LYF's, Impact Pack's) leave a sixteenth-size
+model at twice the size, exactly as they would with Empty Latent Image.
 
 ### Saving for Civitai
 
@@ -421,19 +442,30 @@ Sampling parameters and a matching empty latent, in one node.
 | `cfg` | `FLOAT` | 7.0 | 0.0–50.0 |
 | `sampler_name` | sampler enum | `euler` | |
 | `scheduler` | scheduler enum | `normal` | |
-| `size_preset` | 31 presets | Square (SDXL native) 1024×1024 | |
+| `size_preset` | 32 presets and `Custom` | `1:1 · 1024×1024 · 1.0 MP` | |
 | `custom_width`, `custom_height` | `INT` | 1024 | 64–8192, step 8 |
 
 **Outputs:** `latent`, `batch_size`, `seed`, `steps_1`, `steps_2`, `steps_3`,
 `cfg`, `sampler_name`, `scheduler`, `width`, `height`.
 
-Presets are labelled `use case | ratio | width × height | megapixels` and sorted
-by aspect ratio (9:16 up to 16:9), then by size. Every one is divisible by 8
-with the short side at most 2048. Choose `Custom` to use the two custom boxes.
+Presets are labelled `ratio · width×height · megapixels` and sorted by aspect
+ratio (9:16 up to 16:9), then by size. Every side is a multiple of 16, the long
+side at most 2048. Choose `Custom` to use the two custom boxes; keep those to
+multiples of 16 too unless the model is SDXL, or a sixteenth-size model rounds
+them.
 
-The latent is four channels at an eighth scale — the SD1.5/SDXL shape, matching
-ComfyUI's own Empty Latent Image. Wider-latent architectures need their own
-node.
+Workflows saved by 4.1 and earlier hold labels like
+`Portrait (high-res)         |  3:4   |  1152 ×  1536  |  1.77 MP`. They still
+load, run and validate, at the same size — except four that were not multiples
+of 16 and now give the nearest size that is: 1224→1232 and 1640→1632 wide
+(4:5), 1368→1360 (2:3), and 1080→1088 (9:16 and 16:9). Opened in the editor,
+an old Provider shows the new label straight away; queued as it was saved, over
+the API, the old label is accepted as it stands.
+
+The latent is four channels at an eighth scale with `downscale_ratio_spacial`
+set to 8, matching ComfyUI's own Empty Latent Image. KSampler and
+SamplerCustomAdvanced use that to resize an empty latent for a model on a
+sixteenth-size grid, so one Provider serves every architecture.
 
 Dimensions are validated before the tensor is made: a linked width that is not
 an integer, is out of range, or is not divisible by 8 raises rather than

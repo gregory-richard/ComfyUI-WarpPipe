@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Size presets you can read**: `3:4 · 1152×1536 · 1.8 MP` instead of `Portrait (high-res)         |  3:4   |  1152 ×  1536  |  1.77 MP`. The old labels padded each column with runs of spaces to line up in a monospace font the widget does not use, so a 280px combo showed a use case and the start of the blanks. The size and the megapixels are what tell the presets apart, so they are all a label says now; the tooltip says which model families like which pixel count
+- **Every preset is a multiple of 16**: FLUX.2, MOSS-Image and Qwen-Image 2.1 work on a sixteenth-size latent, and Qwen-Image, Z-Image, Krea 2 and Anima on 2×2 patches, so 1224, 1640, 1368 and 1080 were rounded or padded by the model. They are 1232, 1632, 1360 and 1088 now. A 3:4 and a 4:3 at 1 MP (864×1152, 1152×864) join the list, for SDXL, Anima and Krea 2 Raw
+- **Old presets still load**: a workflow saved with the old labels runs at the same size - those four aside - over the API as well as in the editor, where the Provider shows the new label as soon as it opens
+
+### Fixed
+
+- **The Provider's latent fits any model**: it now says it was made at an eighth of the size, as ComfyUI's own Empty Latent Image does, and KSampler and SamplerCustomAdvanced resize it for a model on a sixteenth-size grid. Unlabelled, FLUX.2 and MOSS-Image took it for their own grid and rendered at twice the width and twice the height asked for, which is why a MOSS-Image group needed an Empty Flux 2 Latent beside the Provider
+
 ## [4.1.1] - 2026-10-27
 
 ### Fixed
