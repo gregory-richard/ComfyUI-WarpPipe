@@ -168,6 +168,92 @@ def test_provider_parses_presets_and_builds_expected_latent(warp_pipe):
     assert result[-2:] == (1920, 1080)
 
 
+def test_the_latent_says_which_ratio_it_was_made_at(warp_pipe):
+    # ComfyUI's samplers resize an empty latent to the model's own grid only
+    # when it carries this - EmptyLatentImage sets the same 8. Without it a
+    # sixteenth-size model (FLUX.2, MOSS-Image) rendered at twice the size.
+    latent = warp_pipe.WarpProvider().provide(size_preset=warp_pipe.DEFAULT_SIZE_PRESET)[0]
+
+    assert latent["downscale_ratio_spacial"] == 8
+    assert latent["samples"].shape == (1, 4, 128, 128)
+
+
+def test_every_preset_suits_a_sixteenth_size_latent(warp_pipe):
+    options = warp_pipe.WarpProvider.INPUT_TYPES()["optional"]["size_preset"][0]
+
+    assert options[-1] == "Custom"
+    assert len(set(options)) == len(options)
+    for label in options[:-1]:
+        width, height = warp_pipe._parse_size_preset(label)
+        assert width % 16 == 0 and height % 16 == 0, label
+        assert f"{width}×{height}" in label
+
+
+def test_preset_labels_are_short_and_say_size_and_megapixels(warp_pipe):
+    for label in warp_pipe.SIZE_PRESETS:
+        # Readable in a 280px combo: no column padding, nothing but the size.
+        assert "  " not in label
+        assert len(label) <= 26, label
+        assert re.fullmatch(r"\d+:\d+ · \d+×\d+ · \d\.\d MP", label), label
+
+    assert warp_pipe.DEFAULT_SIZE_PRESET == "1:1 · 1024×1024 · 1.0 MP"
+    assert warp_pipe.DEFAULT_SIZE_PRESET in warp_pipe.SIZE_PRESETS
+
+
+@pytest.mark.parametrize(
+    ("saved", "expected"),
+    [
+        # Exactly as 4.1 wrote them, padding and all.
+        ("Portrait (high-res)         |  3:4   |  1152 ×  1536  |  1.77 MP", (1152, 1536)),
+        ("Photo portrait (high-res)   |  2:3   |  1024 ×  1536  |  1.57 MP", (1024, 1536)),
+        ("Square (SDXL native)        |  1:1   |  1024 ×  1024  |  1.05 MP", (1024, 1024)),
+        ("Instagram landscape (hi-res)|  5:4   |  1536 ×  1224  |  1.88 MP", (1536, 1232)),
+        # The four that were not multiples of 16 move to the nearest that is.
+        ("Instagram portrait (hi-res) |  4:5   |  1224 ×  1536  |  1.88 MP", (1232, 1536)),
+        ("Instagram portrait (max)    |  4:5   |  1640 ×  2048  |  3.36 MP", (1632, 2048)),
+        ("Photo portrait (max)        |  2:3   |  1368 ×  2048  |  2.80 MP", (1360, 2048)),
+        ("Mobile/Stories (Full HD)    |  9:16  |  1080 ×  1920  |  2.07 MP", (1088, 1920)),
+        ("Widescreen (1080p)          |  16:9  |  1920 ×  1080  |  2.07 MP", (1920, 1088)),
+    ],
+)
+def test_a_preset_saved_by_an_earlier_version_still_loads(warp_pipe, saved, expected):
+    upgraded = warp_pipe.upgrade_size_preset(saved)
+
+    assert upgraded in warp_pipe.SIZE_PRESETS
+    assert warp_pipe.SIZE_PRESETS[upgraded] == expected
+    assert warp_pipe._parse_size_preset(saved) == expected
+    assert warp_pipe.WarpProvider.VALIDATE_INPUTS(saved) is True
+    assert warp_pipe.WarpProvider().provide(size_preset=saved)[-2:] == expected
+
+
+def test_every_old_preset_has_a_place_in_the_new_list(warp_pipe):
+    for size in warp_pipe._LEGACY_SIZES.values():
+        assert size in warp_pipe.SIZE_PRESETS.values()
+
+
+def test_validation_refuses_a_preset_nobody_ever_offered(warp_pipe):
+    validate = warp_pipe.WarpProvider.VALIDATE_INPUTS
+
+    assert validate(warp_pipe.DEFAULT_SIZE_PRESET) is True
+    assert validate("Custom") is True
+    assert validate(None) is True  # linked from another node
+    assert "unknown size preset" in validate("Poster | 2:1 | 2048 × 1024")
+    # Today's labels are left alone, and so is anything unrecognised.
+    assert warp_pipe.upgrade_size_preset("3:4 · 1152×1536 · 1.8 MP") == "3:4 · 1152×1536 · 1.8 MP"
+    assert warp_pipe.upgrade_size_preset("Poster | 2:1") == "Poster | 2:1"
+
+
+def test_v3_provider_validates_like_the_legacy_one(warp_pipe_loader):
+    warp_pipe = warp_pipe_loader(enable_v3=True)
+    old = "Portrait (classic)          |  3:4   |   768 ×  1024  |  0.79 MP"
+
+    assert warp_pipe.WarpProviderV3.validate_inputs(old) is True
+    assert "unknown" in warp_pipe.WarpProviderV3.validate_inputs("nonsense")
+    latent = warp_pipe.WarpProviderV3.execute(size_preset=old)[0]
+    assert latent["downscale_ratio_spacial"] == 8
+    assert latent["samples"].shape == (1, 4, 128, 96)
+
+
 @pytest.mark.parametrize(
     ("width", "height", "batch_size", "exception"),
     [

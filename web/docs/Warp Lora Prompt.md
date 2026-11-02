@@ -79,6 +79,14 @@ finetune under a base of its own, but it runs Krea 2 LoRAs, so they are not
 orange on it and **/** still suggests them. `ZImageTurbo` and `ZImageBase` match
 the same way.
 
+A checkpoint with no sidecar - one from Hugging Face, say, that Civitai has
+never seen - is known only by the folder it sits in, `moss` for
+`Unet\moss\kromoss.safetensors`. A folder name is not a base model, so the LoRAs
+filed in the folder of the same name, `Lora\moss\`, count as made for it,
+whatever their sidecars call the base (`MOSS Image`). Any other LoRA is compared
+with the folder name as before, and the warning says the model is filed under
+`moss` rather than calling that its base.
+
 A tag inside a note is coloured as a note, because that is what happens to it:
 it does not load.
 
@@ -104,13 +112,19 @@ that uses one LoRA is barely taller than a prompt. The prose stays prose: what
 goes to the model is what you can read in the prompt box, with nothing to skip
 over.
 
-**Drag the bottom edge of a list to set its height** — the short bar in the
-middle of it marks the handle, though the whole edge works, and the node grows
-by what you take rather than squeezing the prompt. The height is kept with the
-node, so it is there next time the workflow opens, and Ctrl+Z takes it back
-like any other change. Resizing the node itself gives the room to the prompt
-instead. **Double-click** the same band to hand the height back to the box and
-have it fit the list again.
+**Drag the bottom edge of any box to set its height** — the prompt's runs along
+the bottom of the strip, and each list has its own. The short bar in the middle
+marks the handle, though the whole edge works. Each box is sized on its own:
+the boxes below move with the edge and the node grows or shrinks by what you
+take, so making the list taller never squeezes the prompt, and making the
+prompt taller never squeezes the list. The heights are kept with the node, so
+they are there next time the workflow opens, and Ctrl+Z takes a drag back like
+any other change. Resizing the node from its corner gives the room to the
+prompt.
+
+**Double-click** a list's band to hand the height back to the box and have it
+fit the list again. Double-click the prompt's band and the prompt becomes just
+tall enough for its text, up to forty lines.
 
 When the prompt has tags in it and the list is empty, the strip offers to move
 them down: **click anywhere on that line**, and it says how many it moved.

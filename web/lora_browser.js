@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
 import { loras } from "./library.js";
-import { connectedBase, groupOf } from "./model_base.js";
+import { connectedBase, fittingFamilies, groupOf } from "./model_base.js";
 import { escapeHTML, stemOf } from "./text.js";
 
 // The library browser for the Prompt + LoRAs node.
@@ -242,6 +242,10 @@ function openBrowser(node) {
   search.focus();
 
   let connected = null;
+  // The families with LoRAs made for the connected model. Usually the one
+  // named like its base; for a model known only by its folder, whatever the
+  // LoRAs filed in the folder of that name call themselves.
+  let fitting = new Map();
   let entries = [];
   let folder = null;
 
@@ -346,7 +350,7 @@ function openBrowser(node) {
 
     const shown = Math.min(visible.length, PAGE);
     const capped = visible.length > PAGE ? ` (showing ${shown})` : "";
-    const why = connected ? ` · ${connected} connected` : "";
+    const why = connected ? ` · ${connected.name} connected` : "";
     count.textContent = `${visible.length} of ${entries.length}${capped}${why}`;
   }
 
@@ -376,8 +380,8 @@ function openBrowser(node) {
       row.type = "button";
       row.setAttribute("aria-pressed", String(folder === name));
       // Families that cannot apply to the connected model stay visible but quiet.
-      if (connected && name !== connected) row.classList.add("is-dim");
-      const pin = connected && name === connected ? '<span class="wp-pin">●</span>' : "";
+      if (connected && !fitting.has(name)) row.classList.add("is-dim");
+      const pin = fitting.has(name) ? '<span class="wp-pin">●</span>' : "";
       row.innerHTML =
         `${pin}<span class="wp-rail-name">${escapeHTML(name || "(root)")}</span>` +
         `<span class="wp-rail-count">${n}</span>`;
@@ -396,9 +400,11 @@ function openBrowser(node) {
     .then(([data, base]) => {
       entries = data;
       connected = base;
-      // Only pre-filter when the connected model's base is one we actually have
-      // LoRAs for; otherwise show everything rather than an empty grid.
-      folder = base && entries.some((e) => groupOf(e) === base) ? base : null;
+      fitting = fittingFamilies(entries, base);
+      // Only pre-filter when there are LoRAs for the connected model, and then
+      // to the family holding most of them; otherwise show everything rather
+      // than an empty grid.
+      folder = fitting.keys().next().value ?? null;
       renderRail();
       render();
     })

@@ -67,3 +67,7 @@ jobs:
         run: npm run lint
       - name: Check formatting
         run: npm run format:check
+      # Node's own runner, so testing the pure modules costs no dependency.
+      # The files are named rather than globbed: Node 20 takes no globs.
+      - name: Run tests
+        run: npm test
