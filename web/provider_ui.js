@@ -1,16 +1,27 @@
 import { app } from "../../scripts/app.js";
 import { upgradeSizePreset } from "./size_presets.js";
 
-// The Warp Provider, showing a size preset from an old workflow the way the
-// dropdown writes it today.
+// The Warp Provider: a size preset named so it fits, and one from an old
+// workflow shown the way the dropdown writes it today.
 
 const NODE_ID = "Warp Provider";
 const SIZE_WIDGET = "size_preset";
+
+// The input ids are what the API and saved workflows speak; these are only what
+// the node calls them on screen. In a 280px node "size_preset" and the preset
+// beside it did not both fit, and the frontend cut the name to "size_pr…".
+const FRIENDLY_LABELS = {
+  size_preset: "size",
+};
 
 app.registerExtension({
   name: "warppipe.providerUI",
   async nodeCreated(node) {
     if (node.comfyClass !== NODE_ID) return;
+
+    for (const widget of node.widgets || []) {
+      if (FRIENDLY_LABELS[widget.name]) widget.label = FRIENDLY_LABELS[widget.name];
+    }
 
     // After the saved values are restored, which is when an old label arrives.
     // Left as it was, it ran perfectly well but was the long padded string the

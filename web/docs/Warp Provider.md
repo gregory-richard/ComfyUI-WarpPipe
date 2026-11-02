@@ -17,7 +17,7 @@ All inputs are **optional** with sensible defaults:
 - **cfg** — CFG scale (default: 7.0, range: 0.0–50.0)
 - **sampler_name** — Sampler selection (default: euler)
 - **scheduler** — Scheduler selection (default: normal)
-- **size_preset** — Resolution preset, e.g. `3:4 · 1152×1536 · 1.8 MP` (default: `1:1 · 1024×1024 · 1.0 MP`)
+- **size_preset** (shown as **size**) — Resolution preset, e.g. `3:4 · 1152×1536 · 1.8 MP` (default: `1:1 · 1024×1024 · 1.0 MP`)
 - **custom_width**, **custom_height** — Custom dimensions when "Custom" preset is selected (step: 8; use multiples of 16 for anything but SDXL)
 
 ## Outputs

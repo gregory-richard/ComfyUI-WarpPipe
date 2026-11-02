@@ -458,7 +458,7 @@ Sampling parameters and a matching empty latent, in one node.
 | `cfg` | `FLOAT` | 7.0 | 0.0–50.0 |
 | `sampler_name` | sampler enum | `euler` | |
 | `scheduler` | scheduler enum | `normal` | |
-| `size_preset` | 32 presets and `Custom` | `1:1 · 1024×1024 · 1.0 MP` | |
+| `size_preset` (shown as **size**) | 32 presets and `Custom` | `1:1 · 1024×1024 · 1.0 MP` | |
 | `custom_width`, `custom_height` | `INT` | 1024 | 64–8192, step 8 |
 
 **Outputs:** `latent`, `batch_size`, `seed`, `steps_1`, `steps_2`, `steps_3`,
@@ -738,7 +738,7 @@ web/
   text.js             escaping and filename helpers
   widget_values.js    saving widget values by name rather than by position
   save_image_ui.js    friendly labels, and the toast when nothing was saved
-  provider_ui.js      today's label for a size preset an old workflow saved
+  provider_ui.js      the size widget's name, and today's label for an old preset
   size_presets.js     matching an old preset label to a new one
   docs/*.md           the per-node help ComfyUI shows behind the ? button
 WIKI.md               this documentation
