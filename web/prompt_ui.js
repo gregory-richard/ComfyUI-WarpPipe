@@ -46,6 +46,9 @@ const LIST_ROWS_MAX = 6;
 const LIST_ROWS_HELD_MAX = 30;
 const LIST_ROW_H = 16;
 const LIST_CHROME = 10;
+// The most a double-click on the prompt's band fits it to. A prompt is prose
+// and can run to a page; a node a page tall is not what anyone was asking for.
+const PROMPT_FIT_ROWS_MAX = 40;
 
 // A textarea styled the way ComfyUI styles every multiline widget, so a list
 // can be measured before its own textarea exists. The constants above were the
@@ -158,7 +161,9 @@ body.wpe-own-tip .p-tooltip { display: none !important; }
 .wps {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
   display: flex; align-items: center; gap: 7px; box-sizing: border-box;
-  height: 24px; padding: 0 6px; overflow: hidden;
+  /* The prompt's grip lies along the strip's bottom edge, so the row sits a
+     little above centre and the band takes none of a chip. */
+  height: 24px; padding: 0 6px 4px; overflow: hidden;
   font-size: 10px; line-height: 1; color: var(--input-text, #dcdcdc);
   /* Darker than the field it sits in, so the two read as separate things. */
   background: var(--comfy-menu-bg, #171718);
@@ -215,8 +220,8 @@ body.wpe-own-tip .p-tooltip { display: none !important; }
 .wps-offer { cursor: pointer; }
 .wps-offer:hover .wps-do { border-color: #4ec8e8; color: #4ec8e8; }
 
-/* A band along the bottom of a list, to set its height by hand. Quiet, since
-   the box sizes itself to what it holds and most of the time there is nothing
+/* A band along the bottom of each box, to set its height by hand. Quiet, since
+   a list sizes itself to what it holds and most of the time there is nothing
    to do here - but never invisible. Hidden until hovered, nobody found it: a
    seven-pixel strip with nothing on it is not something anyone points at. */
 .wps-grip { position: absolute; left: 0; right: 0; bottom: 0; height: 7px; z-index: 3; cursor: ns-resize; }
@@ -1813,7 +1818,7 @@ app.registerExtension({
       editVerbs(el, commit);
       inlineCompletion(el, commit, box.lit, lookup, say, baseOf, wordsTarget);
       if (box === prompt) attachStrip();
-      else attachGrip(box);
+      attachGrip(box);
       // A new layer knows nothing of what is picked out, so the next pass is
       // made to hand it over rather than finding nothing has changed.
       linkedKey = null;
@@ -1901,11 +1906,81 @@ app.registerExtension({
       node.setDirtyCanvas?.(true, true);
     };
 
-    /** A band along the bottom of a list, dragged to set its height.
+    /** The prompt's height as the canvas laid it out, in canvas pixels. */
+    const promptHeight = () => prompt.widget.computedHeight ?? prompt.el?.offsetHeight ?? 0;
+
+    /** Make the prompt `height` tall, from where a drag or a fit began.
+     *
+     * The prompt is the one box with no height of its own: it takes whatever
+     * the node has left once the lists have theirs. So it is resized by moving
+     * the node's bottom edge, and the lists below it move down with the edge
+     * rather than giving up any of theirs - each box is sized by its own band.
+     *
+     * That is also why nothing is stored for it. Its height is the node's,
+     * less the lists, and the node's size is saved with the workflow already;
+     * a second copy in the properties could only disagree with it, and the
+     * one way to settle that on load would be to resize the node.
+     */
+    const sizePrompt = (from, height) => {
+      // No smaller than ComfyUI will lay it out, or the node ends short of its
+      // widgets and the last of them hangs off the bottom.
+      const floor = prompt.widget.computeLayoutSize?.(node)?.minHeight ?? 50;
+      const target = Math.max(floor, Math.round(height));
+      node.setSize?.([node.size[0], Math.max(0, from.node + target - from.prompt)]);
+      node.setDirtyCanvas?.(true, true);
+    };
+
+    /** How tall the prompt would be with nothing of its text hidden.
+     *
+     * Asked of a copy rather than of the box: a textarea reports how much it
+     * hides but not how much room it has spare, and shrinking the real one to
+     * find out would show. The copy wraps where the box does - same font, same
+     * padding, same width and the same reserved scrollbar.
+     */
+    let probe = null;
+    const textHeight = (el) => {
+      if (!probe?.isConnected) {
+        probe = document.createElement("textarea");
+        probe.tabIndex = -1;
+        probe.setAttribute("aria-hidden", "true");
+        document.body.appendChild(probe);
+      }
+      const cs = getComputedStyle(el);
+      for (const prop of COPIED_STYLES) probe.style[prop] = cs[prop];
+      Object.assign(probe.style, {
+        position: "absolute",
+        left: "-9999px",
+        top: "0",
+        visibility: "hidden",
+        overflow: "hidden",
+        scrollbarGutter: cs.scrollbarGutter,
+        whiteSpace: cs.whiteSpace,
+        overflowWrap: cs.overflowWrap,
+        wordBreak: cs.wordBreak,
+        width: `${el.offsetWidth}px`,
+        height: "0px",
+      });
+      probe.value = el.value;
+      const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+      const most = PROMPT_FIT_ROWS_MAX * rowHeight(prompt) + pad;
+      return Math.min(probe.scrollHeight, most);
+    };
+
+    /** A double-click on the prompt's band: just tall enough for its text. */
+    const fitPrompt = () => {
+      const el = prompt.el;
+      if (!el) return;
+      const spare = textHeight(el) - el.clientHeight;
+      const from = { node: node.size[1], prompt: promptHeight() };
+      sizePrompt(from, from.prompt + spare);
+    };
+
+    /** A band along the bottom of a box, dragged to set its height.
      *
      * The rows are counted in canvas pixels rather than screen ones, so a drag
      * moves the edge by as much as the pointer wherever the canvas is zoomed
-     * to. A double-click hands the height back to the box.
+     * to. A double-click hands a list's height back to the list, and makes the
+     * prompt as tall as its text.
      *
      * ComfyUI notices a change to the graph on a mouse-up on the canvas or a
      * key, and a drag here is neither - the canvas is kept out of it. Unsaid,
@@ -1917,9 +1992,12 @@ app.registerExtension({
       const holder = box.el?.parentElement;
       if (!holder) return;
       if (!box.grip) {
+        const isPrompt = box === prompt;
         const grip = document.createElement("div");
         grip.className = "wps-grip";
-        grip.title = "Drag to set the height · double-click to fit the list";
+        grip.title = isPrompt
+          ? "Drag to set the height · double-click to fit the text"
+          : "Drag to set the height · double-click to fit the list";
         grip.addEventListener("pointerdown", (e) => {
           // The canvas pans and selects on the same button underneath.
           e.preventDefault();
@@ -1927,10 +2005,19 @@ app.registerExtension({
           grip.setPointerCapture(e.pointerId);
           grip.classList.add("is-held");
           app.canvas?.emitBeforeChange?.();
-          const line = rowHeight(box) * (app.canvas?.ds?.scale || 1);
+          const scale = app.canvas?.ds?.scale || 1;
           const from = e.clientY;
-          const rows = rowsNow(box);
-          const drag = (m) => holdRows(box, rows + Math.round((m.clientY - from) / line));
+          // The prompt follows the pointer a pixel at a time; a list moves in
+          // whole rows, because a list is counted in rows.
+          let drag;
+          if (isPrompt) {
+            const start = { node: node.size[1], prompt: promptHeight() };
+            drag = (m) => sizePrompt(start, start.prompt + (m.clientY - from) / scale);
+          } else {
+            const line = rowHeight(box) * scale;
+            const rows = rowsNow(box);
+            drag = (m) => holdRows(box, rows + Math.round((m.clientY - from) / line));
+          }
           const done = () => {
             grip.classList.remove("is-held");
             grip.removeEventListener("pointermove", drag);
@@ -1946,7 +2033,8 @@ app.registerExtension({
           e.preventDefault();
           e.stopPropagation();
           app.canvas?.emitBeforeChange?.();
-          holdRows(box, null);
+          if (isPrompt) fitPrompt();
+          else holdRows(box, null);
           app.canvas?.emitAfterChange?.();
         });
         box.grip = grip;
@@ -2104,7 +2192,7 @@ app.registerExtension({
           }
         }
         if (prompt?.el) attachStrip();
-        for (const box of [list, list2]) if (box?.el) attachGrip(box);
+        for (const box of boxes.values()) if (box.el) attachGrip(box);
         sizeBoxes();
         return !!prompt?.el;
       } finally {
@@ -2152,6 +2240,7 @@ app.registerExtension({
         box.grip = null;
       }
       strip.el.remove();
+      probe?.remove();
     };
 
     let tries = 0;

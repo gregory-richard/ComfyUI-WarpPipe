@@ -112,13 +112,19 @@ that uses one LoRA is barely taller than a prompt. The prose stays prose: what
 goes to the model is what you can read in the prompt box, with nothing to skip
 over.
 
-**Drag the bottom edge of a list to set its height** — the short bar in the
-middle of it marks the handle, though the whole edge works, and the node grows
-by what you take rather than squeezing the prompt. The height is kept with the
-node, so it is there next time the workflow opens, and Ctrl+Z takes it back
-like any other change. Resizing the node itself gives the room to the prompt
-instead. **Double-click** the same band to hand the height back to the box and
-have it fit the list again.
+**Drag the bottom edge of any box to set its height** — the prompt's runs along
+the bottom of the strip, and each list has its own. The short bar in the middle
+marks the handle, though the whole edge works. Each box is sized on its own:
+the boxes below move with the edge and the node grows or shrinks by what you
+take, so making the list taller never squeezes the prompt, and making the
+prompt taller never squeezes the list. The heights are kept with the node, so
+they are there next time the workflow opens, and Ctrl+Z takes a drag back like
+any other change. Resizing the node from its corner gives the room to the
+prompt.
+
+**Double-click** a list's band to hand the height back to the box and have it
+fit the list again. Double-click the prompt's band and the prompt becomes just
+tall enough for its text, up to forty lines.
 
 When the prompt has tags in it and the list is empty, the strip offers to move
 them down: **click anywhere on that line**, and it says how many it moved.

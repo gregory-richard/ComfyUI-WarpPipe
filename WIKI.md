@@ -114,12 +114,20 @@ A tag written into the prompt itself still loads — that is how an A1111 prompt
 arrives — and the strip offers to move those down into the list; clicking
 anywhere on that line does it.
 
-A list grows with what it holds, up to six lines. For more room, drag the short
-bar at the middle of its bottom edge — the whole edge is the handle — and the
-node grows by what you take rather than the prompt being squeezed. The height
-is kept with the node and is one step of undo; double-click the band to have
-the box fit the list again. Resizing the node itself gives the room to the
-prompt instead.
+Every box has a short bar at the middle of its bottom edge — the whole edge is
+the handle — and each is sized on its own. Drag the prompt's, under the strip,
+and the prompt grows or shrinks by exactly that; drag a list's and the list
+does. Either way the boxes below move with the edge and the node grows or
+shrinks by the same amount, so setting one box never squeezes another. Every
+drag is one step of undo and is saved with the workflow: a list's height in the
+node's properties, the prompt's as the node's own size, which is what it takes
+up once the lists have theirs. Resizing the node from its corner still gives
+the room to the prompt.
+
+A list grows with what it holds, up to six lines, until its height is set by
+hand; double-click its band to have it fit the list again. Double-click the
+prompt's band and the prompt becomes just tall enough for its text, up to
+forty lines.
 
 The node's **model** and **clip** outputs come out patched with every tag it
 resolved. Its **prompt** output is what you wrote with the tags and the notes
@@ -730,9 +738,12 @@ web/
   text.js             escaping and filename helpers
   widget_values.js    saving widget values by name rather than by position
   save_image_ui.js    friendly labels, and the toast when nothing was saved
+  provider_ui.js      today's label for a size preset an old workflow saved
+  size_presets.js     matching an old preset label to a new one
   docs/*.md           the per-node help ComfyUI shows behind the ? button
 WIKI.md               this documentation
 tests/                pytest, no ComfyUI required
+tests/web/            node --test for the frontend modules that need no page
 ```
 
 ### How a warp travels

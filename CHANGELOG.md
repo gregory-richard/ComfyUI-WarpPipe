@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **The prompt has a band of its own**: drag the bottom edge of the prompt, under the strip, and it grows or shrinks by exactly that, the way a list does - the boxes below move with the edge and the node takes up the difference, so the prompt and each list are sized independently. The prompt had no handle at all: it took whatever the node had left, so making it taller meant resizing the whole node from its corner, and making a list taller and the prompt shorter took two different gestures. A drag is one step of undo and survives a save, a reload and a browser refresh; nothing is added to `widgets_values`, and a loaded workflow keeps the size it was saved at. Double-clicking the band makes the prompt just tall enough for its text, up to forty lines
+
 ### Changed
 
 - **Size presets you can read**: `3:4 · 1152×1536 · 1.8 MP` instead of `Portrait (high-res)         |  3:4   |  1152 ×  1536  |  1.77 MP`. The old labels padded each column with runs of spaces to line up in a monospace font the widget does not use, so a 280px combo showed a use case and the start of the blanks. The size and the megapixels are what tell the presets apart, so they are all a label says now; the tooltip says which model families like which pixel count
