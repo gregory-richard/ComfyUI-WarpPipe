@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - **The Provider's latent fits any model**: it now says it was made at an eighth of the size, as ComfyUI's own Empty Latent Image does, and KSampler and SamplerCustomAdvanced resize it for a model on a sixteenth-size grid. Unlabelled, FLUX.2 and MOSS-Image took it for their own grid and rendered at twice the width and twice the height asked for, which is why a MOSS-Image group needed an Empty Flux 2 Latent beside the Provider
+- **LoRAs filed beside a checkpoint without a sidecar are not orange**: a checkpoint with no `.civitai.info` - Kromoss, say, which comes from Hugging Face and will never have one - is known by its folder, and `moss` was held against sidecar bases like `MOSS Image`. Every properly tagged LoRA for it read as made for another model, `/` hid them and the browser dimmed their family: 30 of the 32 in one real `Lora\moss\`. A LoRA filed in the folder of the same name now counts as made for it; anything else is compared as before, and the warning says the model is *filed under* `moss` rather than calling that its base
 
 ## [4.1.1] - 2026-10-27
 

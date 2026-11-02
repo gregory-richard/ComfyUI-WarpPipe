@@ -77,7 +77,10 @@ const OLD = [
 
 test("every label 4.1 saved finds the same place the server gives it", () => {
   for (const [old, w, h] of OLD) {
-    assert.equal(upgradeSizePreset(old, OPTIONS), OPTIONS.find((o) => o.includes(`${w}×${h}`)));
+    assert.equal(
+      upgradeSizePreset(old, OPTIONS),
+      OPTIONS.find((o) => o.includes(`${w}×${h}`))
+    );
   }
 });
 

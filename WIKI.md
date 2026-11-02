@@ -154,6 +154,13 @@ With nothing wired into **model**, or for a file whose sidecar declares no base,
 nothing can be judged and nothing goes orange. A Turbo counts as the model it
 was distilled from, so a Krea 2 LoRA is not orange on a Krea 2 Turbo checkpoint.
 
+A checkpoint without a sidecar is known by its folder instead: `moss` for
+`Unet\moss\kromoss.safetensors`, which came from Hugging Face and will never
+have one. LoRAs filed in the folder of the same name, `Lora\moss\`, count as
+made for it whatever their sidecars call the base, so a properly tagged
+`MOSS Image` LoRA is not orange there. Everything else is compared with the
+folder name, as before.
+
 #### Naming a LoRA
 
 A tag does not need the full filename, only enough to identify one file.
@@ -227,9 +234,10 @@ where the other went.
 
 ![The LoRA library browser](assets/docs/lora-browser.webp)
 
-The rail groups by family with counts. The family of the model you have
-connected is pinned and marked; the rest stay visible but dimmed, because you
-may have a reason. Search matches creator, name, version and family. Clicking a
+The rail groups by family with counts. The families with LoRAs for the model you
+have connected are pinned and marked, and the largest is opened; the rest stay
+visible but dimmed, because you may have a reason. For a model known only by its
+folder, those are the families of the LoRAs filed in the folder of that name. Search matches creator, name, version and family. Clicking a
 card writes its tag into the LoRAs list, or wherever the caret is if it is in
 one of the boxes at the time.
 
@@ -1120,6 +1128,11 @@ may know better than the sidecar — the warning does not stop anything.
 
 With nothing connected to `model`, nothing can be judged and nothing goes
 orange.
+
+If every LoRA is orange, the checkpoint probably has no sidecar and is being
+judged by its folder name — the hover text then says *a model filed under …*.
+File the LoRAs for it in a folder of the same name (`Unet\moss\` and
+`Lora\moss\`) and they count as a match.
 
 Bases are compared after tidying: case, spacing and punctuation are ignored, and
 a trailing `-base` or `Turbo` is dropped, so `Krea 2 Turbo` matches `Krea 2` and

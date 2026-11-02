@@ -79,6 +79,14 @@ finetune under a base of its own, but it runs Krea 2 LoRAs, so they are not
 orange on it and **/** still suggests them. `ZImageTurbo` and `ZImageBase` match
 the same way.
 
+A checkpoint with no sidecar - one from Hugging Face, say, that Civitai has
+never seen - is known only by the folder it sits in, `moss` for
+`Unet\moss\kromoss.safetensors`. A folder name is not a base model, so the LoRAs
+filed in the folder of the same name, `Lora\moss\`, count as made for it,
+whatever their sidecars call the base (`MOSS Image`). Any other LoRA is compared
+with the folder name as before, and the warning says the model is filed under
+`moss` rather than calling that its base.
+
 A tag inside a note is coloured as a note, because that is what happens to it:
 it does not load.
 

@@ -1,6 +1,12 @@
 import { app } from "../../scripts/app.js";
 import { everything, forget } from "./library.js";
-import { connectedBase, connectedModelName, forgetBases, sameBase } from "./model_base.js";
+import {
+  connectedBase,
+  connectedModelName,
+  describeBase,
+  fitsBase,
+  forgetBases,
+} from "./model_base.js";
 import { escapeAttr, escapeHTML, stemOf } from "./text.js";
 import { keepWidgetValuesByName } from "./widget_values.js";
 
@@ -906,12 +912,12 @@ function inlineCompletion(textarea, commit, lit, lookup, say, baseOf, words) {
     //
     // So only two ranks reach here, a match and an unknown, and the unknowns
     // sort last: the first suggestion is always a fit when a fit exists.
-    const fit = (e) => (sameBase(e.base_model, base) ? 0 : 1);
+    const fit = (e) => (fitsBase(e, base) ? 0 : 1);
 
     session.matches = entries
       .filter((e) => {
         if (!terms.length) return false; // a bare "/" is a slash, not a request
-        if (base && e.base_model && !sameBase(e.base_model, base)) return false;
+        if (fitsBase(e, base) === false) return false;
         const hay = `${e.creator || ""} ${e.name} ${e.folder} ${stemOf(e.id)}`.toLowerCase();
         return terms.every((t) => hay.includes(t));
       })
@@ -1682,10 +1688,7 @@ app.registerExtension({
 
       if (word) {
         const use = word.uses[0];
-        const fits =
-          use.entry.base_model && baseSeen.base
-            ? sameBase(use.entry.base_model, baseSeen.base)
-            : null;
+        const fits = fitsBase(use.entry, baseSeen.base);
         const others = [
           ...new Set(
             word.uses
@@ -1719,7 +1722,7 @@ app.registerExtension({
         const total = countTags();
         // Naming the base model here is the only place the reader can find out
         // that "/" is not offering them the whole library.
-        const fitting = baseSeen.base ? ` · ${baseSeen.base}` : "";
+        const fitting = baseSeen.base ? ` · ${baseSeen.base.name}` : "";
         strip.idle(
           total
             ? `${total} LoRA${total === 1 ? "" : "s"} · / to add${fitting} · caret in a tag to see it`
@@ -1728,8 +1731,7 @@ app.registerExtension({
         return;
       }
       const entry = lookup(tag.name);
-      const fits =
-        entry?.base_model && baseSeen.base ? sameBase(entry.base_model, baseSeen.base) : null;
+      const fits = fitsBase(entry, baseSeen.base);
       strip.show(
         tag,
         entry,
@@ -1754,10 +1756,10 @@ app.registerExtension({
       const entry = lookup(name);
       if (!entry) return { cls: "wpe-tag-unknown", title: "No file matches this name" };
       const base = baseSeen.base;
-      if (base && entry.base_model && !sameBase(entry.base_model, base)) {
+      if (fitsBase(entry, base) === false) {
         return {
           cls: "wpe-tag-other",
-          title: `Made for ${entry.base_model}, but ${base} is connected`,
+          title: `Made for ${entry.base_model}, but ${describeBase(base)} is connected`,
           link: entry.id,
         };
       }

@@ -22,6 +22,42 @@ export function sameBase(a, b) {
   return left !== "" && left === key(b);
 }
 
+/** Is this LoRA made for the connected model? True, false, or null for "can't
+ * tell" - a LoRA with no sidecar says nothing about its base, and a guess that
+ * it does not fit would hide one that works.
+ *
+ * A base found only from the checkpoint's folder is a folder name, not a base
+ * model: "moss" for Unet\moss\, which no Civitai sidecar will ever spell. Held
+ * against the sidecars it matched nothing, so on a checkpoint from Hugging Face
+ * every properly tagged LoRA read as made for another model. The folder means
+ * something to whoever filed it, though, and they filed the LoRAs the same way:
+ * a LoRA in Lora\moss\ fits a model in Unet\moss\, whatever its sidecar calls
+ * the base. Anywhere else, the folder name is compared as before.
+ */
+export function fitsBase(entry, base) {
+  if (!entry || !base?.name) return null;
+  if (base.fromFolder && sameBase(entry.folder, base.name)) return true;
+  if (!entry.base_model) return null;
+  return sameBase(entry.base_model, base.name);
+}
+
+/** The families - as groupOf names them - holding LoRAs that fit this base,
+ *  each with how many of its LoRAs do, largest first. */
+export function fittingFamilies(entries, base) {
+  const counts = new Map();
+  for (const entry of entries) {
+    if (fitsBase(entry, base) !== true) continue;
+    const group = groupOf(entry);
+    counts.set(group, (counts.get(group) || 0) + 1);
+  }
+  return new Map([...counts.entries()].sort((a, b) => b[1] - a[1]));
+}
+
+/** The connected base, the way a sentence should name it. */
+export function describeBase(base) {
+  return base?.fromFolder ? `a model filed under ${base.name}` : (base?.name ?? "");
+}
+
 /** The model file feeding this node, found by walking back up the graph. */
 export function connectedModelName(node) {
   const seen = new Set();
@@ -50,7 +86,11 @@ export function forgetBases() {
   asked.clear();
 }
 
-/** The base model of the file wired into this node, asked of the server. */
+/** The base model of the file wired into this node, asked of the server.
+ *
+ * { name, fromFolder }, or null when nothing is known. fromFolder says the name
+ * is only the folder the file sits in - see fitsBase for what that changes.
+ */
 export async function connectedBase(node) {
   const name = connectedModelName(node);
   if (!name) return null;
@@ -61,16 +101,18 @@ export async function connectedBase(node) {
     const info = await fetch(`/warppipe/model/base?name=${encodeURIComponent(name)}`).then((r) =>
       r.json()
     );
-    answer = info.base_model || null;
+    if (info.base_model) answer = { name: info.base_model, fromFolder: false };
   } catch {
     /* fall through to the folder */
   }
-  if (!answer) {
-    // No sidecar: fall back to the folder, which is right for collections filed
-    // that way and simply matches nothing for the rest.
-    const parts = name.replace(/\\/g, "/").split("/");
-    answer = parts.length > 1 ? parts[0] : null;
-  }
+  if (!answer) answer = folderBase(name);
   asked.set(name, answer);
   return answer;
+}
+
+/** No sidecar: fall back to the folder, which is right for collections filed
+ *  that way and simply matches nothing for the rest. */
+export function folderBase(modelName) {
+  const parts = (modelName || "").replace(/\\/g, "/").split("/");
+  return parts.length > 1 && parts[0] ? { name: parts[0], fromFolder: true } : null;
 }
