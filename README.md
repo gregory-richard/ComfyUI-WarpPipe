@@ -76,7 +76,7 @@ without a sidecar, and the features built on them go quiet.
 | 🌀 **Scheduler Adapter for FaceDetailer** | Maps KSampler schedulers onto FaceDetailer's set |
 | 🌀 **Warp Send** | Passes a Warp through one model group; the active Send is the one that runs, and shows the live preview and a before/after slider |
 | 🌀 **Warp Select** | Picks the model group to run from a dropdown of Sends, in the hub - no wire moved |
-| 🌀 **Warp Result** | Takes the first and final images and shows them in the active Send |
+| 🌀 **Warp Compare** | Compares two images with a slider that follows the mouse; arrows step through batch pairs. Replaces rgthree's Image Comparer |
 | 🚫 **Dead End** | Accepts any type, produces nothing. Parks a branch without deleting it |
 
 ### Choosing a model group without moving wires
@@ -84,12 +84,19 @@ without a sidecar, and the features built on them go quiet.
 Put a **Warp Send** in each model group and a **Warp Select** in the hub. Pick a
 group in Warp Select's dropdown, or press **activate** on its Warp Send, and that
 group's Send is the one that runs. **go to active group** on Warp Select only
-moves the canvas to the active Send. The queue is blocked with a message when no Send is active,
-the active one is muted or bypassed, two Sends share a name or an index, or the
-active one has no warp input. Warp Result shows the first and final images in
-the Send that was active. The live preview needs ComfyUI started with
-`--preview-method auto`. Help for each: `web/docs/Warp Send.md`,
-`Warp Select.md`, `Warp Result.md`.
+moves the canvas to the active Send. The active Send is fully green, inactive
+Sends are fully red with a line "active: <name>", and Warp Select is green while
+the route is valid and red otherwise. The queue is blocked with a message when
+no Send is active, the active one is muted or bypassed, two Sends share a name or
+an index, or the active one has no warp input.
+
+No links are needed for results. The active Send shows the images Save Image
+(Civitai) shows in that run as the final, and the images of the node you mark
+with right-click **Use as before image for Warp Send** as the before (one node
+per workflow; **Remove before-image mark** undoes it). Warp Compare is the same
+slider as a node of its own. All of it works in the classic canvas and in
+Nodes 2.0. The live preview needs ComfyUI started with `--preview-method auto`.
+Help for each: `web/docs/Warp Send.md`, `Warp Select.md`, `Warp Compare.md`.
 
 Every node carries its own help inside ComfyUI, behind the `?` on the node.
 

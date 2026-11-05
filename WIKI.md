@@ -377,7 +377,7 @@ flagged safe.
 
 ## Node reference
 
-Ten nodes, all under **Custom/WarpPipe Nodes**. Node IDs are what saved
+Ten nodes (nine backend nodes plus the frontend-only Warp Select), all under **Custom/WarpPipe Nodes**. Node IDs are what saved
 workflows and the API use; display names are what you see on the canvas. Warp
 Select is the one exception to the rest of this section: it exists only in the
 browser, so the backend never sees it.
@@ -391,8 +391,8 @@ browser, so the backend never sees it.
 | `Save Image Civitai` | 🌀 Save Image (Civitai) |
 | `FD Scheduler Adapter` | 🌀 Scheduler Adapter for FaceDetailer |
 | `Warp Send` | 🌀 Warp Send |
+| `Warp Compare` | 🌀 Warp Compare |
 | `Warp Select` | 🌀 Warp Select (frontend only) |
-| `Warp Result` | 🌀 Warp Result |
 | `Dead End` | 🚫 Dead End |
 
 ---
@@ -593,17 +593,27 @@ one Warp Select in the hub, and the active Send is the group that runs.
 **Outputs:** `warp`, `index` — both unchanged.
 
 The backend only passes the two through. Everything else happens in the
-browser: **activate** makes this Send the active one (stored in its
-`properties.active`, so it is saved with the workflow) and turns its title
-green; any other Send stops being active. A colour you gave the node comes back
-when it stops being active. The rest of the node is a large canvas that shows
-the live sampling preview while the active group runs, then a before/after
-slider — A the first generation, B the final image, the split following the
-pointer — with ◀ ▶ arrows for a batch. Results live in the page only, keyed by
-the Send's name: they are not saved with the workflow, mark nothing modified and
-leave no undo step, and the temp files they point at are gone after a ComfyUI
-restart anyway. The live preview needs ComfyUI started with
-`--preview-method auto`.
+browser: the big **activate** button (it reads **active** on the active Send)
+makes this Send the active one (stored in its `properties.active`, so it is saved
+with the workflow); any other Send stops being active. The active Send is fully
+green, title and body. Inactive Sends are fully red and show a line
+`active: <name>`. A colour you gave the node comes back when it stops being
+active. The rest of the node is a compare view: the live sampling preview while
+the active group runs, then a before/after slider that follows the pointer, with
+◀ i/n ▶ to step through pairs of a batch, and **no result yet** before the first
+run.
+
+The results arrive without links. **final** is the images Save Image (Civitai)
+shows in that run. **before** is the images of the one node marked through its
+right-click entry **Use as before image for Warp Send** (stored in
+`properties.warpBefore`; only one node per workflow carries it, it shows a
+`before` badge, and **Remove before-image mark** clears it). Both go to the Send
+that was active when the run was queued. They live in the page only: they are
+not saved with the workflow, mark nothing modified and leave no undo step, stay
+until the page is reloaded, and the temp files they point at are gone after a
+ComfyUI restart anyway. The live preview needs ComfyUI started with
+`--preview-method auto`. The view is a DOM widget, so it works in the classic
+canvas renderer and in Nodes 2.0 (Vue nodes).
 
 A pasted copy of the active Send is not active. Converting a group to a subgraph
 or unpacking one keeps the Send active, since the original goes away. If a
@@ -618,7 +628,8 @@ never appears in the prompt ComfyUI receives.
 
 **Widgets:** `active`, a dropdown of every Send's name in index order, including
 Sends inside subgraphs — picking one activates it; **go to active group**, which
-only moves the canvas to the active Send, opening its subgraph if need be.
+only moves the canvas to the active Send, opening its subgraph if need be. The
+node is green while the route is valid and red otherwise.
 
 **Outputs:** `warp` (`WARPPIPE`), `index` (`INT`) — wire them to Generate.
 
@@ -634,22 +645,20 @@ is muted or bypassed — itself or a subgraph it sits in — or the active one h
 
 ---
 
-### 🌀 Warp Result
+### 🌀 Warp Compare
 
-Takes the first and final images at the end of the hub and shows them in the
-Send that was active for the run.
+Compares two images with a slider. An output node, and the replacement for
+rgthree's Image Comparer in WarpPipe workflows.
 
 | Input | Type | Notes |
 | --- | --- | --- |
-| `first` | `IMAGE` | optional. The first generation, before refining |
-| `final` | `IMAGE` | optional. The final image |
-| `target` | `STRING` | optional, hidden. Written by the frontend: the active Send's name |
+| `image_a` | `IMAGE` | optional. Shown on one side of the split |
+| `image_b` | `IMAGE` | optional. Shown on the other side |
 
-**No outputs.** It is an output node: both batches are saved as temp previews
-and sent back with `target`, and the browser draws them into the Send of that
-name. With an empty or unknown `target` the previews are still saved and no Send
-changes. With batches of different sizes the slider pairs them by position, up
-to the shorter one.
+**No outputs.** Both batches are saved as temp previews. The split follows the
+mouse; ◀ i/n ▶ steps through pairs (A1/B1, A2/B2). A missing side is blank.
+Warp Send uses the same compare view. It is a DOM widget, so it renders in the
+classic canvas and in Nodes 2.0.
 
 ---
 
