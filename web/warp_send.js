@@ -344,9 +344,12 @@ function addActivate(node) {
 const COMPARE_ID = "Warp Compare";
 const COMPARE_SIZE = [400, 480];
 const COMPARE_WIDGET = "warp_compare";
+// Left side first, right side second: the later image is always on the right.
+const SEND_LABELS = ["first", "final"];
 
-function addCompare(node) {
+function addCompare(node, labels) {
   node._warpCompare = addCompareWidget(node, COMPARE_WIDGET, {
+    labels,
     apiURL: (path) => api.apiURL(path),
     getCanvas: () => app.canvas?.canvas ?? null,
   });
@@ -551,7 +554,7 @@ function setupSend(nodeType) {
     }
 
     addActivate(this);
-    addCompare(this);
+    addCompare(this, SEND_LABELS);
     this.setSize([...DEFAULT_SIZE]);
   });
 
@@ -594,12 +597,12 @@ function setupSend(nodeType) {
 function setupCompare(nodeType) {
   const proto = nodeType.prototype;
   wrap(proto, "onNodeCreated", function () {
-    addCompare(this);
+    addCompare(this, ["before", "after"]);
     this.setSize([...COMPARE_SIZE]);
   });
-  // Its output is {a: [ref…], b: [ref…]}, one temp image per batch item.
+  // Its output is {before: [ref…], after: [ref…]}, one temp image per batch item.
   wrap(proto, "onExecuted", function (output) {
-    this._warpCompare?.setPairs(output?.a, output?.b);
+    this._warpCompare?.setPairs(output?.before, output?.after);
   });
 }
 

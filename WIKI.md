@@ -656,12 +656,12 @@ rgthree's Image Comparer in WarpPipe workflows.
 
 | Input | Type | Notes |
 | --- | --- | --- |
-| `image_a` | `IMAGE` | optional. Shown on one side of the split |
-| `image_b` | `IMAGE` | optional. Shown on the other side |
+| `before` | `IMAGE` | optional. The earlier image, shown on the left, labelled "before" |
+| `after` | `IMAGE` | optional. The later image, shown on the right, labelled "after" |
 
 **No outputs.** Both batches are saved as temp previews. The split follows the
-mouse; ◀ i/n ▶ steps through pairs (A1/B1, A2/B2). A missing side is blank.
-Warp Send uses the same compare view. It is a DOM widget, so it renders in the
+mouse; ◀ i/n ▶ steps through pairs (before 1/after 1, before 2/after 2). A missing side is blank.
+Warp Send uses the same compare view, with its sides labelled "first" (left) and "final" (right). It is a DOM widget, so it renders in the
 classic canvas and in Nodes 2.0.
 
 ---

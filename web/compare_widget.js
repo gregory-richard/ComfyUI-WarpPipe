@@ -1,8 +1,8 @@
-// The A/B compare widget shared by Warp Send and Warp Compare.
+// The before/after compare widget shared by Warp Send and Warp Compare.
 //
 // It is a DOM widget, so the same element shows on the classic canvas (the
 // frontend lays it over the node) and in Vue nodes (mounted inside the node).
-// B lies under A; A shows left of the split and B right of it, the split
+// The right image lies under the left one; the left shows left of the split and the right one right of it, the split
 // follows the pointer, and a bar steps through the pairs. A live frame covers
 // the pairs until it is cleared.
 //
@@ -12,6 +12,7 @@
 export const NO_RESULT = "no result yet";
 export const WIDGET_TYPE = "warp-compare";
 export const MIN_HEIGHT = 240;
+export const DEFAULT_LABELS = ["before", "after"];
 
 const BAR_H = 24;
 const ARROW_W = 32;
@@ -36,6 +37,13 @@ export function viewPath(ref) {
     type: ref.type ?? "temp",
   });
   return `/view?${params}`;
+}
+
+/** The [left, right] side labels; anything that is not a non-empty string falls back to the default. */
+export function sideLabels(labels) {
+  const pick = (i) =>
+    typeof labels?.[i] === "string" && labels[i] !== "" ? labels[i] : DEFAULT_LABELS[i];
+  return [pick(0), pick(1)];
 }
 
 /** How many pairs there are: a side that is shorter is blank for the rest. */
@@ -79,9 +87,10 @@ function cornerLabel(text, side) {
       position: "absolute",
       top: "4px",
       [side]: "4px",
-      width: "18px",
+      padding: "0 6px",
       height: "18px",
       lineHeight: "18px",
+      borderRadius: "3px",
       textAlign: "center",
       font: "12px sans-serif",
       color: "#fff",
@@ -147,7 +156,8 @@ export function forwardToCanvas(element, getCanvas) {
 /**
  * Add the compare widget to `node` as `name`.
  *
- * `options.apiURL` turns a /view path into a URL (pass `api.apiURL`), and
+ * `options.labels` is [left, right] (default ["before", "after"]; the first
+ * side is shown left of the split, the second right of it). `options.apiURL` turns a /view path into a URL (pass `api.apiURL`), and
  * `options.getCanvas` returns the canvas element events are forwarded to.
  */
 export function addCompareWidget(node, name, options = {}) {
@@ -177,8 +187,9 @@ export function addCompareWidget(node, name, options = {}) {
   });
   const imgB = el("img", IMAGE);
   const imgA = el("img", IMAGE);
-  imgA.alt = "A";
-  imgB.alt = "B";
+  const [leftText, rightText] = sideLabels(options.labels);
+  imgA.alt = leftText;
+  imgB.alt = rightText;
   for (const img of [imgA, imgB]) img.draggable = false;
   const line = el("div", {
     position: "absolute",
@@ -189,8 +200,8 @@ export function addCompareWidget(node, name, options = {}) {
     pointerEvents: "none",
     display: "none",
   });
-  const labelA = cornerLabel("A", "left");
-  const labelB = cornerLabel("B", "right");
+  const labelA = cornerLabel(leftText, "left");
+  const labelB = cornerLabel(rightText, "right");
   const live = el("canvas", { ...FILL, objectFit: "contain", display: "none" });
   const placeholder = el(
     "div",
@@ -319,7 +330,7 @@ export function addCompareWidget(node, name, options = {}) {
   const handle = {
     widget,
     element: root,
-    /** Show these pairs from the first; a side that is shorter is blank. */
+    /** Show these pairs from the first: `a` on the left, `b` on the right; a side that is shorter is blank. */
     setPairs(a, b) {
       state.a = imageRefs(a);
       state.b = imageRefs(b);

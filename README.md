@@ -76,7 +76,7 @@ without a sidecar, and the features built on them go quiet.
 | 🌀 **Scheduler Adapter for FaceDetailer** | Maps KSampler schedulers onto FaceDetailer's set |
 | 🌀 **Warp Send** | Passes a Warp through one model group; the active Send is the one that runs, and shows the live preview and a before/after slider |
 | 🌀 **Warp Select** | Picks the model group to run from a dropdown of Sends, in the hub - no wire moved |
-| 🌀 **Warp Compare** | Compares two images with a slider that follows the mouse; arrows step through batch pairs. Replaces rgthree's Image Comparer |
+| 🌀 **Warp Compare** | Compares a `before` (left) and an `after` (right) image with a slider that follows the mouse; arrows step through batch pairs. Replaces rgthree's Image Comparer |
 | 🚫 **Dead End** | Accepts any type, produces nothing. Parks a branch without deleting it |
 
 ### Choosing a model group without moving wires

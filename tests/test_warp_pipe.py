@@ -1801,24 +1801,24 @@ def test_warp_compare_payload(warp_pipe, monkeypatch):
     _fake_previews(monkeypatch, warp_pipe)
 
     ui = warp_pipe.WarpCompare().compare(
-        image_a=FakeTensor((2, 8, 8, 3)), image_b=FakeTensor((2, 8, 8, 3))
+        before=FakeTensor((2, 8, 8, 3)), after=FakeTensor((2, 8, 8, 3))
     )["ui"]
 
-    assert set(ui) == {"a", "b"}
-    assert len(ui["a"]) == 2
-    assert len(ui["b"]) == 2
-    assert ui["a"][0]["type"] == "temp"
+    assert set(ui) == {"before", "after"}
+    assert len(ui["before"]) == 2
+    assert len(ui["after"]) == 2
+    assert ui["before"][0]["type"] == "temp"
 
 
 def test_warp_compare_absent_side_is_empty_list(warp_pipe, monkeypatch):
     _fake_previews(monkeypatch, warp_pipe)
 
-    ui = warp_pipe.WarpCompare().compare(image_b=FakeTensor((1, 8, 8, 3)))["ui"]
+    ui = warp_pipe.WarpCompare().compare(after=FakeTensor((1, 8, 8, 3)))["ui"]
 
-    assert ui["a"] == []
-    assert len(ui["b"]) == 1
-    assert warp_pipe.WarpCompare().compare()["ui"] == {"a": [], "b": []}
-    assert warp_pipe.WarpCompare().compare(image_a=FakeTensor((0, 8, 8, 3)))["ui"]["a"] == []
+    assert ui["before"] == []
+    assert len(ui["after"]) == 1
+    assert warp_pipe.WarpCompare().compare()["ui"] == {"before": [], "after": []}
+    assert warp_pipe.WarpCompare().compare(before=FakeTensor((0, 8, 8, 3)))["ui"]["before"] == []
 
 
 def test_save_temp_previews_writes_one_temp_file_per_image(warp_pipe, monkeypatch, tmp_path):
@@ -1870,7 +1870,7 @@ def test_the_v3_send_and_compare_nodes_match_the_legacy_ones(warp_pipe_loader, m
 
     warp = object()
     assert tuple(warp_pipe.WarpSendV3.execute(warp=warp, index=3, name="x")) == (warp, 3)
-    output = warp_pipe.WarpCompareV3.execute(image_b=FakeTensor((1, 8, 8, 3)))
-    assert output.metadata["ui"]["a"] == []
-    assert len(output.metadata["ui"]["b"]) == 1
+    output = warp_pipe.WarpCompareV3.execute(after=FakeTensor((1, 8, 8, 3)))
+    assert output.metadata["ui"]["before"] == []
+    assert len(output.metadata["ui"]["after"]) == 1
     assert warp_pipe.WarpCompareV3.GET_SCHEMA().metadata["is_output_node"] is True

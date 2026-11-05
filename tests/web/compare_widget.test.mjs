@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  DEFAULT_LABELS,
   MIN_HEIGHT,
   NO_RESULT,
   WIDGET_TYPE,
   counterText,
   imageRefs,
   pairCount,
+  sideLabels,
   splitAt,
   stepPair,
   viewPath,
@@ -36,6 +38,14 @@ test("viewPath builds an encoded /view query", () => {
     "/view?filename=Warp+A_00001_.png&subfolder=&type=temp"
   );
   assert.equal(viewPath({ filename: "a&b.png" }), "/view?filename=a%26b.png&subfolder=&type=temp");
+});
+
+test("sideLabels is [left, right] with before/after as the default", () => {
+  assert.deepEqual(DEFAULT_LABELS, ["before", "after"]);
+  assert.deepEqual(sideLabels(), ["before", "after"]);
+  assert.deepEqual(sideLabels(["first", "final"]), ["first", "final"]);
+  assert.deepEqual(sideLabels(["first"]), ["first", "after"]);
+  assert.deepEqual(sideLabels(["", 3]), ["before", "after"]);
 });
 
 test("pairCount is the longer side", () => {

@@ -1035,7 +1035,7 @@ class WarpCompare:
     RETURN_NAMES = ()
     DESCRIPTION = (
         "Compares two images with a slider. Batches are stepped through as pairs "
-        "(A1/B1, A2/B2). Replaces rgthree's image comparer in WarpPipe workflows."
+        "(before 1/after 1, before 2/after 2). Replaces rgthree's image comparer in WarpPipe workflows."
     )
 
     @classmethod
@@ -1043,12 +1043,12 @@ class WarpCompare:
         return {
             "required": {},
             "optional": {
-                "image_a": ("IMAGE", {"tooltip": "The first image (A)."}),
-                "image_b": ("IMAGE", {"tooltip": "The second image (B)."}),
+                "before": ("IMAGE", {"tooltip": "The earlier image, shown on the left."}),
+                "after": ("IMAGE", {"tooltip": "The later image, shown on the right."}),
             },
         }
 
-    def compare(self, image_a=None, image_b=None):
+    def compare(self, before=None, after=None):
         def previews(images, prefix):
             if images is None or len(images) == 0:
                 return []
@@ -1056,8 +1056,8 @@ class WarpCompare:
 
         return {
             "ui": {
-                "a": previews(image_a, "WarpCompareA"),
-                "b": previews(image_b, "WarpCompareB"),
+                "before": previews(before, "WarpCompareBefore"),
+                "after": previews(after, "WarpCompareAfter"),
             }
         }
 
@@ -2995,18 +2995,18 @@ if ENABLE_V3_NODES:
                 is_output_node=True,
                 inputs=[
                     _io_type("IMAGE").Input(
-                        "image_a", optional=True, tooltip=optional["image_a"][1]["tooltip"]
+                        "before", optional=True, tooltip=optional["before"][1]["tooltip"]
                     ),
                     _io_type("IMAGE").Input(
-                        "image_b", optional=True, tooltip=optional["image_b"][1]["tooltip"]
+                        "after", optional=True, tooltip=optional["after"][1]["tooltip"]
                     ),
                 ],
                 outputs=[],
             )
 
         @classmethod
-        def execute(cls, image_a=None, image_b=None) -> io.NodeOutput:
-            result = WarpCompare().compare(image_a=image_a, image_b=image_b)
+        def execute(cls, before=None, after=None) -> io.NodeOutput:
+            result = WarpCompare().compare(before=before, after=after)
             return io.NodeOutput(ui=result["ui"])
 
     class SaveImageCivitaiV3(io.ComfyNode):
