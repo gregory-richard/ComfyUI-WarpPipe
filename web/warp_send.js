@@ -7,9 +7,8 @@ import {
   BEFORE_PROP,
   collectSends,
   markBefore,
-  nodeByExecutionId,
   outputImages,
-  resultRole,
+  resultRoles,
   settleBefore,
   sortedNames,
   stateColors,
@@ -148,6 +147,11 @@ function showBadge(node, on) {
 function syncBefore(root) {
   settleBefore(root);
   for (const node of allNodes(root)) showBadge(node, node.properties?.[BEFORE_PROP] === true);
+}
+
+/** Only an output node sends `executed` images, so only one can give the before side. */
+function isOutputNode(node) {
+  return node.constructor?.nodeData?.output_node === true;
 }
 
 function toggleBefore(node) {
@@ -373,28 +377,47 @@ function drawPreviewInto(sendNode, img) {
 
 // --- Live sampling preview and results -------------------------------------------
 
-// prompt id -> the Send that was active when that prompt was submitted.
+// prompt id -> {name, roles} of that prompt, taken when it was submitted: the
+// name of the Send that was active, and execution id -> "final" | "before".
+// No node is kept: switching workflow tabs builds new nodes, so the Send that
+// gets a frame or a result is looked up by name in the graph shown now.
 const trackedPrompts = new Map();
 const MAX_TRACKED = 32;
 let decodeTicket = 0;
 
-function activeSendNode() {
+/** The run about to be queued, or null when the workflow has no Select or no active Send. */
+function currentRun() {
   const root = rootGraph();
   if (!root || nodesOfType(root, SELECT_ID).length === 0) return null;
-  return collectSends(root).find((s) => s.active)?.node ?? null;
+  const active = collectSends(root).find((s) => s.active);
+  if (!active) return null;
+  return { name: active.name, roles: resultRoles(root) };
 }
 
-function track(promptId, send) {
-  if (!promptId || !send) return;
-  trackedPrompts.set(promptId, send);
+/** The Send of that name in the graph shown now, or null. */
+function sendNamed(name) {
+  const root = rootGraph();
+  if (!root) return null;
+  return collectSends(root).find((s) => s.name === name)?.node ?? null;
+}
+
+function track(promptId, run) {
+  if (!promptId || !run) return;
+  trackedPrompts.set(promptId, run);
   while (trackedPrompts.size > MAX_TRACKED) {
     trackedPrompts.delete(trackedPrompts.keys().next().value);
   }
 }
 
+function clearPreview(send) {
+  if (!send) return;
+  const old = send._warpPreview;
+  drawPreviewInto(send, null);
+  old?.close?.();
+}
+
 async function showFrame(promptId, blob) {
-  const send = trackedPrompts.get(promptId);
-  if (!send || !(blob instanceof Blob)) return;
+  if (!trackedPrompts.has(promptId) || !(blob instanceof Blob)) return;
   // Only the newest frame is decoded and shown; an older one finishing late is dropped.
   const ticket = ++decodeTicket;
   let bitmap;
@@ -403,7 +426,9 @@ async function showFrame(promptId, blob) {
   } catch {
     return;
   }
-  if (ticket !== decodeTicket || !trackedPrompts.has(promptId)) {
+  const run = trackedPrompts.get(promptId);
+  const send = run ? sendNamed(run.name) : null;
+  if (ticket !== decodeTicket || !send) {
     bitmap.close?.();
     return;
   }
@@ -413,36 +438,29 @@ async function showFrame(promptId, blob) {
 }
 
 function endPrompt(promptId) {
-  const send = trackedPrompts.get(promptId);
-  if (!send) return;
+  const run = trackedPrompts.get(promptId);
+  if (!run) return;
   trackedPrompts.delete(promptId);
   decodeTicket++;
-  const old = send._warpPreview;
-  drawPreviewInto(send, null);
-  old?.close?.();
+  clearPreview(sendNamed(run.name));
 }
 
 /** A tracked prompt's Save Image (final) or marked node (before) has run. */
 function takeResult(detail) {
   const promptId = detail?.prompt_id;
-  const send = trackedPrompts.get(promptId);
-  if (!send) return;
-  const root = rootGraph();
-  if (!root) return;
-  const node = nodeByExecutionId(root, detail.display_node) ?? nodeByExecutionId(root, detail.node);
-  const role = resultRole(node);
+  const run = trackedPrompts.get(promptId);
+  if (!run) return;
+  const role = run.roles.get(String(detail.display_node ?? detail.node));
   if (!role) return;
-  const name = widgetNamed(send, "name")?.value;
-  let entry = results.get(name);
+  let entry = results.get(run.name);
   // A new run starts blank: a side it does not produce stays empty.
   if (!entry || entry.promptId !== promptId) entry = { promptId, before: [], final: [] };
   entry[role] = imageRefs(outputImages(detail.output));
-  results.set(name, entry);
-  if (role === "final") {
-    const old = send._warpPreview;
-    drawPreviewInto(send, null);
-    old?.close?.();
-  }
+  results.set(run.name, entry);
+  // No Send of that name here (another tab is shown): it shows when its tab returns.
+  const send = sendNamed(run.name);
+  if (!send) return;
+  if (role === "final") clearPreview(send);
   showResult(send);
 }
 
@@ -450,9 +468,9 @@ function setupPreviewMirror() {
   // queuePrompt answers with a boolean; the prompt id only comes back from the API call.
   const originalQueue = api.queuePrompt;
   api.queuePrompt = async function (...args) {
-    const send = activeSendNode();
+    const run = currentRun();
     const response = await originalQueue.apply(this, args);
-    track(response?.prompt_id, send);
+    track(response?.prompt_id, run);
     return response;
   };
 
@@ -670,10 +688,12 @@ app.registerExtension({
     setupPreviewMirror();
   },
 
-  // Any node can give the before image; only one carries the mark at a time.
+  // An output node (Preview Image, say) gives the before image; only one
+  // carries the mark at a time. A node already marked can always drop it.
   getNodeMenuItems(node) {
-    if (!node) return [];
+    if (!node || node.type === SEND_ID || node.type === SELECT_ID) return [];
     const marked = node.properties?.[BEFORE_PROP] === true;
+    if (!marked && !isOutputNode(node)) return [];
     return [{ content: marked ? UNMARK_LABEL : MARK_LABEL, callback: () => toggleBefore(node) }];
   },
 

@@ -115,6 +115,24 @@ export function resultRole(node) {
   return null;
 }
 
+/**
+ * What each node's `executed` output is for a run, by execution id: "final"
+ * or "before". Inside subgraphs the id is a path ("12:3:7"). A subgraph used
+ * by two subgraph nodes runs under two paths, so each use is walked.
+ */
+export function resultRoles(graph, prefix = "", out = new Map(), path = new Set()) {
+  if (!graph || path.has(graph)) return out;
+  path.add(graph);
+  for (const node of graph._nodes ?? []) {
+    const id = `${prefix}${node.id}`;
+    const role = resultRole(node);
+    if (role) out.set(id, role);
+    if (node.subgraph) resultRoles(node.subgraph, `${id}:`, out, path);
+  }
+  path.delete(graph);
+  return out;
+}
+
 function isRefList(value) {
   return (
     Array.isArray(value) &&

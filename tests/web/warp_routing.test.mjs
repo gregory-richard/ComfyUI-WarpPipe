@@ -11,6 +11,7 @@ import {
   nodeByExecutionId,
   outputImages,
   resultRole,
+  resultRoles,
   settleBefore,
   stateColors,
 } from "../../web/warp_route.js";
@@ -92,4 +93,53 @@ test("colours and the active line", () => {
   );
   assert.equal(activeLine([{ name: "A", active: false }]), "active: none");
   assert.equal(activeLine([]), "active: none");
+});
+
+const graphOf = (...nodes) => ({ _nodes: nodes });
+const save = (id) => ({ id, type: "Save Image Civitai", properties: {} });
+const marked = (id) => ({ id, type: "PreviewImage", properties: { warpBefore: true } });
+const plain = (id) => ({ id, type: "PreviewImage", properties: {} });
+
+test("resultRoles: root nodes by plain id, plain nodes left out", () => {
+  const roles = resultRoles(graphOf(save(4), marked(9), plain(2)));
+  assert.deepEqual(
+    [...roles],
+    [
+      ["4", "final"],
+      ["9", "before"],
+    ]
+  );
+});
+
+test("resultRoles: nested subgraphs give path ids", () => {
+  const inner = graphOf(save(7));
+  const middle = graphOf(marked(5), { id: 3, subgraph: inner });
+  const roles = resultRoles(graphOf({ id: 12, subgraph: middle }, plain(1)));
+  assert.deepEqual(
+    [...roles],
+    [
+      ["12:5", "before"],
+      ["12:3:7", "final"],
+    ]
+  );
+});
+
+test("resultRoles: a shared subgraph definition is walked once per use", () => {
+  const shared = graphOf(save(2), marked(3));
+  const roles = resultRoles(graphOf({ id: 10, subgraph: shared }, { id: 11, subgraph: shared }));
+  assert.deepEqual(
+    [...roles],
+    [
+      ["10:2", "final"],
+      ["10:3", "before"],
+      ["11:2", "final"],
+      ["11:3", "before"],
+    ]
+  );
+});
+
+test("resultRoles: a graph that holds itself does not loop", () => {
+  const loop = graphOf(save(1));
+  loop._nodes.push({ id: 2, subgraph: loop });
+  assert.deepEqual([...resultRoles(loop)], [["1", "final"]]);
 });
