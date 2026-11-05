@@ -186,4 +186,6 @@
 
 ## Probe result
 
-(Filled in by Task 1.)
+- Hook: frontend 1.57 `ExecutableNodeDTO.resolveOutput` natively calls `node.resolveVirtualOutput?.(slot)` for `isVirtualNode` nodes (assets/nodeDefStore-*.js), before falling back to `getInputLink`.
+- Return shape: `{node: LGraphNode, slot: number}`; the DTO is looked up across all execution ids, so the source may sit in any subgraph.
+- Cross-subgraph: supported natively; no KJ-style DTO patch needed. (Confirmed by reading the bundle; Task 4's browser check is the live confirmation.)
