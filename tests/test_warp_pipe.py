@@ -21,12 +21,12 @@ NODE_IDS = {
     "Save Image Civitai",
     "Warp Lora Prompt",
     "Warp Send",
-    "Warp Result",
+    "Warp Compare",
 }
 
 
 class FakeTensor:
-    """A batch that only knows its shape; Warp Result's saving is faked."""
+    """A batch that only knows its shape; Warp Compare's saving is faked."""
 
     def __init__(self, shape):
         self.shape = tuple(shape)
@@ -100,9 +100,11 @@ def test_legacy_registration_and_node_contracts(warp_pipe):
 
     assert warp_pipe.DeadEnd().dead_end() == ()
     assert warp_pipe.NODE_DISPLAY_NAME_MAPPINGS["Warp Send"] == "🌀 Warp Send"
-    assert warp_pipe.NODE_DISPLAY_NAME_MAPPINGS["Warp Result"] == "🌀 Warp Result"
-    assert warp_pipe.WarpResult.OUTPUT_NODE is True
-    assert warp_pipe.WarpResult.RETURN_TYPES == ()
+    assert warp_pipe.NODE_DISPLAY_NAME_MAPPINGS["Warp Compare"] == "🌀 Warp Compare"
+    assert "Warp Result" not in warp_pipe.NODE_CLASS_MAPPINGS
+    assert warp_pipe.WarpCompare.OUTPUT_NODE is True
+    assert warp_pipe.WarpCompare.RETURN_TYPES == ()
+    assert warp_pipe.WarpCompare.CATEGORY == "Custom/WarpPipe Nodes"
     assert not getattr(warp_pipe.WarpSend, "OUTPUT_NODE", False)
     assert warp_pipe.WarpSend.RETURN_NAMES == ("warp", "index")
 
@@ -1776,7 +1778,7 @@ def test_the_package_ships_every_file_the_frontend_needs():
         )
 
 
-# --- Warp Send / Warp Result ------------------------------------------------
+# --- Warp Send / Warp Compare ------------------------------------------------
 
 
 def _fake_previews(monkeypatch, warp_pipe):
@@ -1795,57 +1797,80 @@ def test_warp_send_passes_warp_and_index_through(warp_pipe):
     assert warp_pipe.WarpSend().passthrough(warp, 7, "Krea 2") == (warp, 7)
 
 
-def test_warp_result_payload_has_target_and_both_lists(warp_pipe, monkeypatch):
+def test_warp_compare_payload(warp_pipe, monkeypatch):
     _fake_previews(monkeypatch, warp_pipe)
 
-    result = warp_pipe.WarpResult().show(
-        first=FakeTensor((2, 8, 8, 3)), final=FakeTensor((2, 8, 8, 3)), target="Krea 2"
+    ui = warp_pipe.WarpCompare().compare(
+        image_a=FakeTensor((2, 8, 8, 3)), image_b=FakeTensor((2, 8, 8, 3))
+    )["ui"]
+
+    assert set(ui) == {"a", "b"}
+    assert len(ui["a"]) == 2
+    assert len(ui["b"]) == 2
+    assert ui["a"][0]["type"] == "temp"
+
+
+def test_warp_compare_absent_side_is_empty_list(warp_pipe, monkeypatch):
+    _fake_previews(monkeypatch, warp_pipe)
+
+    ui = warp_pipe.WarpCompare().compare(image_b=FakeTensor((1, 8, 8, 3)))["ui"]
+
+    assert ui["a"] == []
+    assert len(ui["b"]) == 1
+    assert warp_pipe.WarpCompare().compare()["ui"] == {"a": [], "b": []}
+    assert warp_pipe.WarpCompare().compare(image_a=FakeTensor((0, 8, 8, 3)))["ui"]["a"] == []
+
+
+def test_save_temp_previews_writes_one_temp_file_per_image(warp_pipe, monkeypatch, tmp_path):
+    written = []
+
+    class FakeImage:
+        @staticmethod
+        def fromarray(array):
+            class Saved:
+                def save(self, path, *args, **kwargs):
+                    pathlib.Path(path).write_bytes(b"png")
+                    written.append(path)
+
+            return Saved()
+
+    folder_paths = types.ModuleType("folder_paths")
+    folder_paths.get_temp_directory = lambda: str(tmp_path)
+    folder_paths.get_save_image_path = lambda prefix, out, w, h: (
+        str(tmp_path),
+        prefix,
+        1,
+        "sub",
+        prefix,
     )
+    pil = types.ModuleType("PIL")
+    pil_image = types.ModuleType("PIL.Image")
+    pil_image.fromarray = FakeImage.fromarray
+    pil.Image = pil_image
+    for name, module in {
+        "folder_paths": folder_paths,
+        "PIL": pil,
+        "PIL.Image": pil_image,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
 
-    ui = result["ui"]
-    assert len(ui["first"]) == 2
-    assert len(ui["final"]) == 2
-    assert ui["target"] == ["Krea 2"]
-    assert ui["first"][0]["type"] == "temp"
+    refs = warp_pipe.save_temp_previews([ImageTensor(), ImageTensor(), ImageTensor()], "WarpA")
 
-
-def test_warp_result_mismatched_batches(warp_pipe, monkeypatch):
-    _fake_previews(monkeypatch, warp_pipe)
-
-    ui = warp_pipe.WarpResult().show(
-        first=FakeTensor((1, 8, 8, 3)), final=FakeTensor((2, 8, 8, 3)), target="A"
-    )["ui"]
-
-    assert len(ui["first"]) == 1
-    assert len(ui["final"]) == 2
-
-
-def test_warp_result_empty_target_still_saves(warp_pipe, monkeypatch):
-    _fake_previews(monkeypatch, warp_pipe)
-
-    ui = warp_pipe.WarpResult().show(
-        first=FakeTensor((1, 8, 8, 3)), final=FakeTensor((1, 8, 8, 3)), target=""
-    )["ui"]
-
-    assert len(ui["first"]) == 1 and len(ui["final"]) == 1
-    assert ui["target"] == [""]
+    assert len(refs) == 3
+    assert all(r["type"] == "temp" and r["subfolder"] == "sub" for r in refs)
+    assert len({r["filename"] for r in refs}) == 3
+    assert all(r["filename"].startswith("WarpA_") for r in refs)
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(r["filename"] for r in refs)
+    assert len(written) == 3
 
 
-def test_warp_result_missing_image_gives_an_empty_list(warp_pipe, monkeypatch):
-    _fake_previews(monkeypatch, warp_pipe)
-
-    ui = warp_pipe.WarpResult().show(final=FakeTensor((1, 8, 8, 3)))["ui"]
-
-    assert ui["first"] == []
-    assert len(ui["final"]) == 1
-
-
-def test_the_v3_send_and_result_nodes_match_the_legacy_ones(warp_pipe_loader, monkeypatch):
+def test_the_v3_send_and_compare_nodes_match_the_legacy_ones(warp_pipe_loader, monkeypatch):
     warp_pipe = warp_pipe_loader(enable_v3=True)
     _fake_previews(monkeypatch, warp_pipe)
 
     warp = object()
     assert tuple(warp_pipe.WarpSendV3.execute(warp=warp, index=3, name="x")) == (warp, 3)
-    output = warp_pipe.WarpResultV3.execute(final=FakeTensor((1, 8, 8, 3)), target="T")
-    assert output.metadata["ui"]["target"] == ["T"]
-    assert warp_pipe.WarpResultV3.GET_SCHEMA().metadata["is_output_node"] is True
+    output = warp_pipe.WarpCompareV3.execute(image_b=FakeTensor((1, 8, 8, 3)))
+    assert output.metadata["ui"]["a"] == []
+    assert len(output.metadata["ui"]["b"]) == 1
+    assert warp_pipe.WarpCompareV3.GET_SCHEMA().metadata["is_output_node"] is True

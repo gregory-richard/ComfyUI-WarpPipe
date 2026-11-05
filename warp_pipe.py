@@ -1025,17 +1025,17 @@ def save_temp_previews(images, prefix: str) -> list[dict[str, str]]:
     return results
 
 
-class WarpResult:
-    """Output node: the first and final images, shown in the Warp Send that ran."""
+class WarpCompare:
+    """Output node: two images shown as a before/after slider."""
 
     CATEGORY = "Custom/WarpPipe Nodes"
-    FUNCTION = "show"
+    FUNCTION = "compare"
     OUTPUT_NODE = True
     RETURN_TYPES = ()
     RETURN_NAMES = ()
     DESCRIPTION = (
-        "End of the hub: takes the first and final images and shows them in the "
-        "Warp Send that was active for this run."
+        "Compares two images with a slider. Batches are stepped through as pairs "
+        "(A1/B1, A2/B2). Replaces rgthree's image comparer in WarpPipe workflows."
     )
 
     @classmethod
@@ -1043,19 +1043,12 @@ class WarpResult:
         return {
             "required": {},
             "optional": {
-                "first": ("IMAGE", {"tooltip": "The first generation, before refining."}),
-                "final": ("IMAGE", {"tooltip": "The final image."}),
-                "target": (
-                    "STRING",
-                    {
-                        "default": "",
-                        "tooltip": "Set by the frontend: the Warp Send that shows the result.",
-                    },
-                ),
+                "image_a": ("IMAGE", {"tooltip": "The first image (A)."}),
+                "image_b": ("IMAGE", {"tooltip": "The second image (B)."}),
             },
         }
 
-    def show(self, first=None, final=None, target: str = ""):
+    def compare(self, image_a=None, image_b=None):
         def previews(images, prefix):
             if images is None or len(images) == 0:
                 return []
@@ -1063,9 +1056,8 @@ class WarpResult:
 
         return {
             "ui": {
-                "first": previews(first, "WarpResultFirst"),
-                "final": previews(final, "WarpResultFinal"),
-                "target": [target],
+                "a": previews(image_a, "WarpCompareA"),
+                "b": previews(image_b, "WarpCompareB"),
             }
         }
 
@@ -2678,7 +2670,7 @@ NODE_DEFINITIONS: dict[str, tuple[str, type]] = {
     "FD Scheduler Adapter": ("🌀 Scheduler Adapter for FaceDetailer", FDSchedulerAdapter),
     "Dead End": ("🚫 Dead End", DeadEnd),
     "Warp Send": ("🌀 Warp Send", WarpSend),
-    "Warp Result": ("🌀 Warp Result", WarpResult),
+    "Warp Compare": ("🌀 Warp Compare", WarpCompare),
     "Save Image Civitai": ("🌀 Save Image (Civitai)", SaveImageCivitai),
     "Warp Lora Prompt": ("🌀 Prompt + LoRAs", WarpLoraPrompt),
 }
@@ -2991,36 +2983,30 @@ if ENABLE_V3_NODES:
         def execute(cls, warp, index: int, name: str = "Model") -> io.NodeOutput:
             return io.NodeOutput(*WarpSend().passthrough(warp, index, name))
 
-    class WarpResultV3(io.ComfyNode):
+    class WarpCompareV3(io.ComfyNode):
         @classmethod
         def define_schema(cls) -> io.Schema:
-            optional = WarpResult.INPUT_TYPES()["optional"]
+            optional = WarpCompare.INPUT_TYPES()["optional"]
             return io.Schema(
-                node_id="Warp Result",
-                display_name="🌀 Warp Result",
-                category=WarpResult.CATEGORY,
-                description=WarpResult.DESCRIPTION,
+                node_id="Warp Compare",
+                display_name="🌀 Warp Compare",
+                category=WarpCompare.CATEGORY,
+                description=WarpCompare.DESCRIPTION,
                 is_output_node=True,
                 inputs=[
                     _io_type("IMAGE").Input(
-                        "first", optional=True, tooltip=optional["first"][1]["tooltip"]
+                        "image_a", optional=True, tooltip=optional["image_a"][1]["tooltip"]
                     ),
                     _io_type("IMAGE").Input(
-                        "final", optional=True, tooltip=optional["final"][1]["tooltip"]
-                    ),
-                    io.String.Input(
-                        "target",
-                        default="",
-                        optional=True,
-                        tooltip=optional["target"][1]["tooltip"],
+                        "image_b", optional=True, tooltip=optional["image_b"][1]["tooltip"]
                     ),
                 ],
                 outputs=[],
             )
 
         @classmethod
-        def execute(cls, first=None, final=None, target: str = "") -> io.NodeOutput:
-            result = WarpResult().show(first=first, final=final, target=target)
+        def execute(cls, image_a=None, image_b=None) -> io.NodeOutput:
+            result = WarpCompare().compare(image_a=image_a, image_b=image_b)
             return io.NodeOutput(ui=result["ui"])
 
     class SaveImageCivitaiV3(io.ComfyNode):
@@ -3166,7 +3152,7 @@ if ENABLE_V3_NODES:
         "FD Scheduler Adapter": FDSchedulerAdapterV3,
         "Dead End": DeadEndV3,
         "Warp Send": WarpSendV3,
-        "Warp Result": WarpResultV3,
+        "Warp Compare": WarpCompareV3,
         "Save Image Civitai": SaveImageCivitaiV3,
         "Warp Lora Prompt": WarpLoraPromptV3,
     }
