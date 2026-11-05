@@ -23,7 +23,7 @@ const MODEL_PROP = "model_id";
 const NOT_LISTED = " (not listed)";
 const FLASH_MS = 600;
 
-const ACTIONS_H = 96;
+const ACTIONS_H = 126;
 const BUTTON_H = 26;
 const STATUS_COLOR = "#bbb";
 const ERROR_COLOR = "#f66";
@@ -224,7 +224,30 @@ function registerNode() {
         whiteSpace: "nowrap",
       });
       this.statusEl = status;
+      const keyInput = document.createElement("input");
+      keyInput.type = "password";
+      keyInput.autocomplete = "off";
+      keyInput.placeholder = "API key (saved in ComfyUI, never in the workflow)";
+      Object.assign(keyInput.style, {
+        flex: "3 1 0",
+        minWidth: "0",
+        height: `${BUTTON_H}px`,
+        boxSizing: "border-box",
+        padding: "0 6px",
+        borderRadius: "6px",
+        border: "1px solid #555",
+        background: "#1e1e1e",
+        color: "#ddd",
+        font: "13px sans-serif",
+      });
+      keyInput.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+        if (event.key === "Enter") this.saveKey();
+      });
+      this.keyInput = keyInput;
+      this.keyButton = makeButton("save key", () => this.saveKey());
       root.append(
+        row(keyInput, this.keyButton),
         row(
           makeButton("reference…", () => this.uploadReference()),
           makeButton("clear reference", () => this.setReference("")),
@@ -246,6 +269,40 @@ function registerNode() {
         getMaxHeight: () => ACTIONS_H,
       });
       if (widget) widget.serialize = false;
+    }
+
+    baseUrl() {
+      return String(this.value("base_url") ?? "").trim() || DEFAULT_BASE_URL;
+    }
+
+    async refreshKeyStatus() {
+      const out = await getJson(
+        `/warppipe/llm/key_status?base_url=${encodeURIComponent(this.baseUrl())}`
+      );
+      if (!this.keyButton || out?.error) return;
+      this.keyButton.textContent = out.set ? "key set ✓ (replace)" : "save key";
+      this.keyButton.title = out.set ? `key from ${out.source}` : "";
+    }
+
+    /** Sends the typed key to the backend once; the field is cleared and never filled again. */
+    async saveKey() {
+      const key = this.keyInput?.value ?? "";
+      if (!key.trim()) {
+        this.setStatus("Type the API key into the field first", true);
+        return;
+      }
+      const out = await getJson("/warppipe/llm/key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base_url: this.baseUrl(), key }),
+      });
+      if (this.keyInput) this.keyInput.value = "";
+      if (out?.error) {
+        this.setStatus(out.error, true);
+        return;
+      }
+      this.setStatus("API key saved");
+      this.refreshKeyStatus();
     }
 
     setStatus(text, isError = false) {
@@ -314,6 +371,7 @@ function registerNode() {
     }
 
     async load(refresh) {
+      this.refreshKeyStatus();
       const baseUrl = String(this.value("base_url") ?? "").trim() || DEFAULT_BASE_URL;
       this.setStatus("loading models…");
       const query = `base_url=${encodeURIComponent(baseUrl)}${refresh ? "&refresh=1" : ""}`;

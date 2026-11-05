@@ -688,10 +688,12 @@ error that names the group, and so is no active Send.
 
 **Keys** are bound to hosts and used only when `base_url`'s host is the key's
 host, so a workflow pointing at another server never receives your key.
-`NANOGPT_API_KEY` covers `nano-gpt.com` and `api.nano-gpt.com`;
+The node's key field saves the typed key for `base_url`'s host (both NanoGPT
+hosts at once) into `ComfyUI/user/warppipe_llm_keys.json`; the browser can only
+ask whether a key is set. `NANOGPT_API_KEY` covers `nano-gpt.com` and `api.nano-gpt.com`;
 `ComfyUI/user/warppipe_llm_keys.json` holds `{"host": "key"}` for others. Local
-servers get no key unless the file names them. WarpPipe never writes, logs or
-returns a key.
+servers get no key unless the file names them. WarpPipe never logs or returns a
+key and writes it only on **save key**.
 
 ---
 

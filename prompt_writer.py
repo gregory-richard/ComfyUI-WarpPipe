@@ -434,6 +434,51 @@ def handle_write(
 # --- aiohttp routes ---------------------------------------------------------
 
 
+def _key_hosts(base_url: str) -> frozenset:
+    check_url(base_url)
+    host = _host(base_url)
+    if not host:
+        raise PromptWriterError("The base URL has no host")
+    return NANOGPT_HOSTS if host in NANOGPT_HOSTS else frozenset({host})
+
+
+def save_key(key_file: Path, base_url: str, key: str) -> dict:
+    """Store (or, with an empty key, remove) the key for base_url's host. Never returns it."""
+    hosts = _key_hosts(base_url)
+    key = (key or "").strip()
+    if any(ch.isspace() for ch in key):
+        raise PromptWriterError("An API key cannot contain spaces or line breaks")
+    key_file = Path(key_file)
+    try:
+        data = json.loads(key_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data = {k: v for k, v in data.items() if not (isinstance(k, str) and k.strip().lower() in hosts)}
+    if key:
+        for host in sorted(hosts):
+            data[host] = key
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp = key_file.with_name(key_file.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, key_file)
+    return {"set": bool(key)}
+
+
+def key_status(base_url: str, *, env, key_file) -> dict:
+    """Whether a key exists for base_url's host, and where it comes from. Never the key."""
+    try:
+        hosts = _key_hosts(base_url)
+    except PromptWriterError as exc:
+        return {"error": str(exc)}
+    host = _host(base_url)
+    in_file = key_for(base_url, {}, key_file) is not None
+    in_env = host in NANOGPT_HOSTS and bool(env.get(NANOGPT_ENV))
+    source = "settings" if in_file else ("environment" if in_env else None)
+    return {"set": bool(source), "source": source, "host": sorted(hosts)[0]}
+
+
 def register(routes, web, *, user_dir: str, settings_loader, image_path) -> None:
     """Attach the /warppipe/llm routes. Blocking work runs in a thread."""
     import asyncio
@@ -447,6 +492,26 @@ def register(routes, web, *, user_dir: str, settings_loader, image_path) -> None
         out = await asyncio.to_thread(
             handle_models, base_url, refresh, env=os.environ, key_file=key_file
         )
+        return web.json_response(out)
+
+    @routes.get("/warppipe/llm/key_status")
+    async def _key_status(request):
+        base_url = request.query.get("base_url", "") or DEFAULT_BASE_URL
+        out = await asyncio.to_thread(key_status, base_url, env=os.environ, key_file=key_file)
+        return web.json_response(out)
+
+    @routes.post("/warppipe/llm/key")
+    async def _save_key(request):
+        try:
+            body = await request.json()
+            base_url = str(body.get("base_url") or DEFAULT_BASE_URL)
+            key = str(body.get("key") or "")
+        except Exception:
+            return web.json_response({"error": "Invalid request body"})
+        try:
+            out = await asyncio.to_thread(save_key, key_file, base_url, key)
+        except (PromptWriterError, OSError) as exc:
+            return web.json_response({"error": _scrub(str(exc), key)})
         return web.json_response(out)
 
     @routes.get("/warppipe/llm/system_prompts")

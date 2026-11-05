@@ -422,3 +422,32 @@ def test_handle_models_needs_no_key(server, tmp_path):
     out = pw.handle_models(server.url, True, env={}, key_file=tmp_path / "none.json")
     assert out == {"models": [{"id": "m", "name": "m", "prompt_price": None,
                                "completion_price": None, "vision": False}]}
+
+
+def test_save_key_binds_nanogpt_hosts_and_never_returns_key(tmp_path):
+    f = tmp_path / "keys.json"
+    f.write_text('{"127.0.0.1": "local"}', encoding="utf-8")
+    assert pw.save_key(f, "https://nano-gpt.com/api/v1", "  sk-ABC  ") == {"set": True}
+    data = json.loads(f.read_text(encoding="utf-8"))
+    assert data == {"127.0.0.1": "local", "api.nano-gpt.com": "sk-ABC", "nano-gpt.com": "sk-ABC"}
+    assert pw.key_for("https://api.nano-gpt.com/api/v1", {}, f) == "sk-ABC"
+    assert pw.key_for("https://evil.example/v1", {}, f) is None
+    status = pw.key_status("https://nano-gpt.com/api/v1", env={}, key_file=f)
+    assert status == {"set": True, "source": "settings", "host": "api.nano-gpt.com"}
+    assert "sk-ABC" not in json.dumps(status)
+    assert pw.save_key(f, "https://nano-gpt.com/api/v1", "") == {"set": False}
+    assert json.loads(f.read_text(encoding="utf-8")) == {"127.0.0.1": "local"}
+
+
+def test_save_key_rejects_bad_input(tmp_path):
+    f = tmp_path / "keys.json"
+    with pytest.raises(pw.PromptWriterError):
+        pw.save_key(f, "https://nano-gpt.com/api/v1", "a b")
+    with pytest.raises(pw.PromptWriterError):
+        pw.save_key(f, "http://evil.example/v1", "k")
+
+
+def test_key_status_env_and_none(tmp_path):
+    f = tmp_path / "none.json"
+    assert pw.key_status("https://nano-gpt.com/api/v1", env={"NANOGPT_API_KEY": "x"}, key_file=f)["source"] == "environment"
+    assert pw.key_status("https://nano-gpt.com/api/v1", env={}, key_file=f)["set"] is False

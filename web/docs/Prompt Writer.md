@@ -31,6 +31,6 @@ From the active Warp Send, the node follows the links upstream, into and out of 
 ## Setup
 
 - **System prompt folder** — Settings → WarpPipe → Prompt Writer. Only `.txt` files directly in that folder are listed.
-- **API key** — Set the environment variable `NANOGPT_API_KEY` before starting ComfyUI. For other servers, put `{"host": "key"}` entries in `ComfyUI/user/warppipe_llm_keys.json`. A key is sent only to its own host, so a workflow pointing at another server never gets it. Local servers get no key unless the file names them.
+- **API key** — Type it once into the node's key field and click **save key**. The backend stores it in `ComfyUI/user/warppipe_llm_keys.json` for the host of `base_url`, it survives restarts, and the browser can never read it back. Alternatively set the environment variable `NANOGPT_API_KEY`. For other servers you can also put `{"host": "key"}` entries in `ComfyUI/user/warppipe_llm_keys.json`. A key is sent only to its own host, so a workflow pointing at another server never gets it. Local servers get no key unless the file names them.
 
 The key is never stored in a workflow, in image metadata or in the browser. WarpPipe never writes, logs or returns it.

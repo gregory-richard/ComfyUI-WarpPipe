@@ -105,8 +105,9 @@ Put a **Prompt Writer** in the hub, type an idea and press **write**. An LLM
 writes the prompt from your own system prompt file. **use** puts the result into
 the active group's Prompt + LoRAs, and **from prompt** copies that prompt back in
 as the idea. NanoGPT is the default; any OpenAI-compatible server (LM Studio,
-Ollama, llama.cpp) works through `base_url`. The key goes in the environment
-variable `NANOGPT_API_KEY`, or in `user/warppipe_llm_keys.json` for other hosts.
+Ollama, llama.cpp) works through `base_url`. Type the API key once into the
+node's key field; it is saved in `user/warppipe_llm_keys.json` and kept across
+restarts (`NANOGPT_API_KEY` works too).
 It is never stored in a workflow or sent to the browser. Pick the system prompt
 folder in Settings → WarpPipe → Prompt Writer. Help: `web/docs/Prompt Writer.md`.
 
