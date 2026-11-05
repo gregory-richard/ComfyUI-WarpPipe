@@ -251,7 +251,7 @@ function registerNode() {
         row(
           makeButton("reference…", () => this.uploadReference()),
           makeButton("clear reference", () => this.setReference("")),
-          makeButton("refresh models", () => this.load(true))
+          makeButton("refresh lists", () => this.load(true))
         ),
         row(
           this.writeButton,

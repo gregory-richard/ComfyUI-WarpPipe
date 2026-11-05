@@ -675,7 +675,7 @@ previous answer, so a change request in `idea` returns the complete updated
 prompt. **new** clears `result`. **from prompt** copies the active group's prompt
 into `idea`. **use** writes `result` into the active group's prompt, without
 lines that start with `//` and with runs of blank lines collapsed, and briefly
-flashes that node. **refresh models** reloads the model and system prompt lists
+flashes that node. **refresh lists** reloads the model and system prompt lists
 (the backend caches a model list for an hour).
 
 The status line shows the cost, duration and tokens, e.g.

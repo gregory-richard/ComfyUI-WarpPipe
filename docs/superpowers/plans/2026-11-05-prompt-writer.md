@@ -328,7 +328,7 @@ git commit -m "feat(prompt-writer): pure helpers for labels, status and target p
     - `temperature` (number)
     - `reference` (text, shown as the file name, plus a button "reference…" that opens a file picker and uploads through `api.fetchApi("/upload/image", {method: "POST", body: FormData})`, plus "clear")
     - `idea` and `result`, each a multiline STRING via `ComfyWidgets.STRING` from `../../scripts/widgets.js`, as other WarpPipe widgets import it
-    - buttons: `write`, `new`, `from prompt`, `use`, `refresh models`
+    - buttons: `write`, `new`, `from prompt`, `use`, `refresh lists`
     - a status line drawn in the node footer
   - **Model labels:** the combo shows `modelLabel(m)`, but the stored value is the id. Keep a map from label to id, store the id in `properties.model_id` and display the label. An id that is not in the list shows `"<id> (not listed)"`.
   - **write:**
@@ -341,7 +341,7 @@ git commit -m "feat(prompt-writer): pure helpers for labels, status and target p
     - **use** sets `node.widgets.find(w => w.name === "text").value = stripTitles(result)`, calls `widget.callback?.(value)` and `app.graph.setDirtyCanvas(true, true)`, and flashes the target (`node.boxcolor`, about 600 ms).
     - Errors go to the status line.
   - **The setting:** register `WarpPipe.PromptWriter.SystemPromptDir` in `app.registerExtension({settings: [...]})` with type `text`, the category `["WarpPipe", "Prompt Writer", "System prompt folder"]` and a tooltip saying that only `.txt` files directly in this folder are listed.
-  - **Loading lists:** the model and system-prompt lists load when the node is created or configured, and again on **refresh models**.
+  - **Loading lists:** the model and system-prompt lists load when the node is created or configured, and again on **refresh lists**.
 
 - [ ] **Step 2: Run the static checks.**
   - Run: `npm run check`

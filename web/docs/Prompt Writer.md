@@ -22,7 +22,7 @@ Use one **Prompt Writer** in the hub. Type an idea, pick a model and a system pr
 - **new** — Clears **result**, so the next **write** starts fresh.
 - **from prompt** — Copies the active group's prompt into **idea**.
 - **use** — Writes **result** into the active group's prompt, without lines that start with `//` and with runs of blank lines collapsed. One undo step; the target node flashes.
-- **refresh models** — Reloads the model list (otherwise cached for an hour) and the system prompt list.
+- **refresh lists** — Reloads the model list (otherwise cached for an hour) and the system prompt list.
 
 ## The active group's prompt
 

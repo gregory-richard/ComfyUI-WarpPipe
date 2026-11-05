@@ -46,7 +46,7 @@ It is virtual (`isVirtualNode`, like Warp Select), so it is never part of a queu
   - Writes `result` into the active group's prompt `text`, with lines starting with `//` removed and runs of blank lines collapsed.
   - One undo step.
   - Briefly flashes the target node.
-- **refresh models:** reloads the model list (it is otherwise cached by the backend for one hour).
+- **refresh lists:** reloads the model list (it is otherwise cached by the backend for one hour).
 
 **The active group's prompt:**
 - **Primary rule:** starting from the active Warp Send (from `warp_route.js`), walk upstream through links, including through subgraph boundaries, and collect the nodes of type `Warp Lora Prompt`.
