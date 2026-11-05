@@ -357,6 +357,83 @@ function drawPreviewInto(sendNode, img) {
   sendNode.setDirtyCanvas?.(true, false);
 }
 
+// --- Live sampling preview -----------------------------------------------------
+
+// prompt id -> the Send that was active when that prompt was submitted.
+const trackedPrompts = new Map();
+const MAX_TRACKED = 32;
+let decodeTicket = 0;
+
+function activeSendNode() {
+  const root = rootGraph();
+  if (!root || nodesOfType(root, SELECT_ID).length === 0) return null;
+  return collectSends(root).find((s) => s.active)?.node ?? null;
+}
+
+function track(promptId, send) {
+  if (!promptId || !send) return;
+  trackedPrompts.set(promptId, send);
+  while (trackedPrompts.size > MAX_TRACKED) {
+    trackedPrompts.delete(trackedPrompts.keys().next().value);
+  }
+}
+
+async function showFrame(promptId, blob) {
+  const send = trackedPrompts.get(promptId);
+  if (!send || !(blob instanceof Blob)) return;
+  // Only the newest frame is decoded and shown; an older one finishing late is dropped.
+  const ticket = ++decodeTicket;
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(blob);
+  } catch {
+    return;
+  }
+  if (ticket !== decodeTicket || !trackedPrompts.has(promptId)) {
+    bitmap.close?.();
+    return;
+  }
+  const old = send._warpPreview;
+  drawPreviewInto(send, bitmap);
+  if (old && old !== bitmap) old.close?.();
+}
+
+function endPrompt(promptId) {
+  const send = trackedPrompts.get(promptId);
+  if (!send) return;
+  trackedPrompts.delete(promptId);
+  decodeTicket++;
+  const old = send._warpPreview;
+  drawPreviewInto(send, null);
+  old?.close?.();
+}
+
+function setupPreviewMirror() {
+  // queuePrompt answers with a boolean; the prompt id only comes back from the API call.
+  const originalQueue = api.queuePrompt;
+  api.queuePrompt = async function (...args) {
+    const send = activeSendNode();
+    const response = await originalQueue.apply(this, args);
+    track(response?.prompt_id, send);
+    return response;
+  };
+
+  let sawMetadata = false;
+  api.addEventListener("b_preview_with_metadata", ({ detail }) => {
+    sawMetadata = true;
+    showFrame(detail?.jobId ?? detail?.promptId, detail?.blob);
+  });
+  // Without metadata there is no prompt id: the running prompt is the newest tracked one.
+  api.addEventListener("b_preview", ({ detail }) => {
+    if (sawMetadata) return;
+    const last = [...trackedPrompts.keys()].pop();
+    if (last) showFrame(last, detail);
+  });
+  for (const type of ["execution_success", "execution_error", "execution_interrupted"]) {
+    api.addEventListener(type, ({ detail }) => endPrompt(detail?.prompt_id));
+  }
+}
+
 window.WarpPipe = window.WarpPipe ?? {};
 window.WarpPipe.warpSend = { ...(window.WarpPipe.warpSend ?? {}), drawPreviewInto };
 
@@ -539,6 +616,8 @@ app.registerExtension({
       syncAll();
       return original.apply(this, args);
     };
+
+    setupPreviewMirror();
 
     api.addEventListener("executed", ({ detail }) => {
       const output = detail?.output;
