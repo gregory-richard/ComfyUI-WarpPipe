@@ -89,3 +89,28 @@ Renaming a Send updates the combo immediately. A Warp Result with an empty `targ
 - Persisting results across restarts.
 - Sending results to more than one Send.
 - Replacing Get/Set nodes in other workflows (for example Vid).
+
+## Addendum 2026-11-06 (approved in chat)
+
+- **Warp Result is removed.** The active Send gets its results with no links:
+  - **final:** the images that **Save Image (Civitai)** shows in that run.
+  - **before:** the images of the one node marked through the right-click entry "Use as before image for Warp Send". It is stored in `properties.warpBefore = true`, only one node per graph carries it, and the marked node gets a small badge.
+  - **Routing:** both go to the Send that was active when the prompt was queued, using the prompt-id tracking the live preview already has.
+- **Colours:**
+  - The active Send is fully green (title and body).
+  - Inactive Sends are fully red and show a line "active: <name>".
+  - Warp Select is green while the route is valid and red otherwise.
+  - The "activate" button is about three times the normal widget height.
+- **Warp Compare:** a new output node with optional `image_a` and `image_b` inputs.
+  - Its arrows step through pairs (A1/B1, A2/B2) with a counter, and the split follows the mouse.
+  - It uses the same compare widget as Warp Send.
+  - The image workflow replaces its rgthree Image Comparers with it.
+- **Nodes 1 and 2:** the compare widget is a DOM widget, so it works with the classic canvas renderer and with Vue "Nodes 2.0". Colours, buttons and routing must work in both.
+- **Workflow:**
+  - Saved as a new dated file built from the user's reordered copy.
+  - All nine model groups follow the user's Krea 2 arrangement:
+    - left: the Models loader with the Warp Provider below it
+    - middle: Prompt + LoRAs
+    - right: a large Warp Send, with Warp and VAE/Conditioning collapsed behind it
+  - The hub keeps the user's arrangement, minus Warp Result.
+- **Measurement:** load time, panning/zoom frame times (average and 95th percentile) and JS heap for the full workflow in Nodes 1 and Nodes 2.

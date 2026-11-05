@@ -189,3 +189,72 @@
 - Hook: frontend 1.57 `ExecutableNodeDTO.resolveOutput` natively calls `node.resolveVirtualOutput?.(slot)` for `isVirtualNode` nodes (assets/nodeDefStore-*.js), before falling back to `getInputLink`.
 - Return shape: `{node: LGraphNode, slot: number}`; the DTO is looked up across all execution ids, so the source may sit in any subgraph.
 - Cross-subgraph: supported natively; no KJ-style DTO patch needed. (Confirmed by reading the bundle; Task 4's browser check is the live confirmation.)
+
+---
+
+# Iteration 2 (spec addendum 2026-11-06)
+
+## Global Constraints (iteration 2)
+- Node ids/display names: `Warp Compare` / `🌀 Warp Compare`. `Warp Result` is deleted everywhere (code, tests, docs, README, WIKI, CHANGELOG).
+- UI text is English only: "activate", "go to active group", "no result yet", "active: <name>", "Use as before image for Warp Send".
+- Colours:
+  - active Send: `color` and `bgcolor` green (`#2a5` / `#1b3d26`)
+  - inactive Send: red (`#a33` / `#3d1b1b`)
+  - Warp Select: valid = green, invalid = red (same values)
+- The compare widget is a DOM widget (`addDOMWidget`) and must render in both renderers (setting `Comfy.VueNodes.Enabled` false and true).
+
+### Task 8: Python — remove Warp Result, add Warp Compare
+**Files:** `warp_pipe.py`, `tests/test_warp_pipe.py`, `web/docs/Warp Result.md` (delete), `web/docs/Warp Compare.md` (new)
+**Interfaces:** Produces `WarpCompare.compare(image_a=None, image_b=None) -> {"ui": {"a": [ref…], "b": [ref…]}}`. It is an OUTPUT_NODE with no outputs and uses `save_temp_previews`. It is registered in legacy and V3.
+- [ ] Tests:
+  - `test_warp_compare_payload` (batches of 2 and 2 give lists of 2 and 2)
+  - `test_warp_compare_absent_side_is_empty_list`
+  - the registration test lists `Warp Compare` and no longer lists `Warp Result`
+  - add a direct test for `save_temp_previews`, using a faked folder_paths and Pillow
+- [ ] Implement, then run pytest, ruff check and ruff format check. Commit `feat: Warp Compare replaces Warp Result`.
+
+### Task 9: Shared compare widget (DOM) and Warp Compare UI
+**Files:** create `web/compare_widget.js`; modify `web/warp_send.js`
+**Interfaces:** Produces `addCompareWidget(node, name) -> {setPairs(a: ref[], b: ref[]), setLive(bitmapOrNull), clear()}`. It is a DOM widget with:
+- a canvas or img pair, where the split follows the mouse
+- the counter "i/n" and prev/next buttons, which step through pairs, with n = max(len a, len b)
+- a missing side shown as a blank half
+- the placeholder "no result yet"
+- a live frame that overrides the pairs until cleared
+
+Warp Send and Warp Compare both use it. Warp Compare fills it from its `executed` output `{a, b}`.
+- [ ] Grep the 1.57 bundle to confirm that `addDOMWidget` works in Vue nodes mode (how DOM widgets are mounted for Vue nodes), and note it in the report.
+- [ ] Implement, then run `npm run check`. Commit `feat: shared compare widget, Warp Compare node`.
+
+### Task 10: Send/Select behaviour — results without Warp Result, marker, colours, big button
+**Files:** `web/warp_send.js`, `web/warp_route.js` (only if needed), `tests/web/*`
+- [ ] Results:
+  - on `executed` of a node of type `Save Image Civitai` for a tracked prompt, take `output.images` as final
+  - on `executed` of the marked node (`properties.warpBefore`), take `output.images` (or the first image list in the output) as before
+  - both go to the tracked Send's widget
+  - delete all Warp Result handling (target widget sync)
+- [ ] Marker: add the context-menu entry "Use as before image for Warp Send" on any node. Marking one node clears the property on all others. The marked node shows a small badge (title suffix " ⟵ before" is not allowed; draw a badge or use the node badge API).
+- [ ] Colours per the iteration-2 constraints. Inactive Sends show a widget line "active: <name>", or "active: none".
+- [ ] The "activate" button is about 3× the default widget height, in both renderers.
+- [ ] Run `npm run check`. Commit `feat: Send results from Save Image and a marked before image; colours`.
+
+### Task 11: Workflow Img (26-11-06)
+**Files (outside the repo):** copy the user's reordered workflow to the new dated file and apply a scratch migration script.
+- [ ] Remove Warp Result and its links.
+- [ ] Mark PreviewImage 3310 (fed by the Image Selector) with `properties.warpBefore = true`.
+- [ ] Replace every `Image Comparer (rgthree)` with `Warp Compare`, keeping its position, size and both input links.
+- [ ] Lay out all nine model groups like the user's Krea 2 group:
+  - Models top-left, with the Warp Provider below it
+  - Prompt + LoRAs in the middle (keep its size)
+  - Warp Send on the right (about 516 × 781)
+  - Warp and VAE/Conditioning collapsed behind the Send's top area
+  - group size about 1860 × 915, with extra loaders (LoadImage, pose helpers, Qwen Edit extras) placed sensibly
+- [ ] Keep the hub as the user arranged it. Run the JSON overlap check; nodes collapsed behind the Send are deliberate.
+
+### Task 12: Live verification in Nodes 1 and 2, performance, docs
+- [ ] Controller, in the browser:
+  - one short run with a neutral prompt at batch 1: the final from Save Image and the before image land in the active Send
+  - colours, the big button, the "active:" line and the Warp Compare pair arrows
+  - repeat in Vue nodes mode
+- [ ] Measure each mode: load time, a scripted pan/zoom of 300 frames (average and p95 frame time), and `performance.memory.usedJSHeapSize`.
+- [ ] Update the README, WIKI and CHANGELOG (Warp Compare, no Warp Result, Nodes 2 support). Commit `docs: Warp Compare and iteration 2`.
