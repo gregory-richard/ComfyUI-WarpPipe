@@ -84,7 +84,7 @@ and different steps, and switching between them is one connection moved.
 
 ### Version
 
-This documents **4.0.0**. See the [changelog](CHANGELOG.md) for what changed,
+This documents **4.3.0**. See the [changelog](CHANGELOG.md) for what changed,
 and [Development](#development) for how releases are cut.
 
 ---
@@ -377,10 +377,10 @@ flagged safe.
 
 ## Node reference
 
-Ten nodes (nine backend nodes plus the frontend-only Warp Select), all under **Custom/WarpPipe Nodes**. Node IDs are what saved
+Eleven nodes (nine backend nodes plus the frontend-only Warp Select and Prompt Writer), all under **Custom/WarpPipe Nodes**. Node IDs are what saved
 workflows and the API use; display names are what you see on the canvas. Warp
-Select is the one exception to the rest of this section: it exists only in the
-browser, so the backend never sees it.
+Select and Prompt Writer are the exceptions to the rest of this section: they exist only in the
+browser, so the backend never sees them.
 
 | ID | Display name |
 | --- | --- |
@@ -393,6 +393,7 @@ browser, so the backend never sees it.
 | `Warp Send` | 🌀 Warp Send |
 | `Warp Compare` | 🌀 Warp Compare |
 | `Warp Select` | 🌀 Warp Select (frontend only) |
+| `Warp Prompt Writer` | 🌀 Prompt Writer (frontend only) |
 | `Dead End` | 🚫 Dead End |
 
 ---
@@ -649,6 +650,51 @@ is muted or bypassed — itself or a subgraph it sits in — or the active one h
 
 ---
 
+### 🌀 Prompt Writer
+
+Has an LLM write an image prompt and puts it into the active group's
+🌀 Prompt + LoRAs. **Frontend only**, like Warp Select: it never appears in the
+prompt ComfyUI receives, and writing a prompt never queues an image. Every call
+goes through the `/warppipe/llm` routes, so the browser never sees a key.
+
+**Widgets** (saved with the workflow; none of them secret):
+
+| Widget | Notes |
+| --- | --- |
+| `base_url` | default `https://nano-gpt.com/api/v1`. Any OpenAI-compatible server; plain `http://` only for `localhost`, `127.0.0.1` and `::1` |
+| `model` | the server's model list, shown as `name · $in/$out · 👁` (prices per million tokens, 👁 for vision). The id is stored in `properties.model_id`; a model no longer listed stays selected and reads `(not listed)` |
+| `system_prompt` | the `.txt` files directly in the folder set in Settings → WarpPipe → Prompt Writer (`WarpPipe.PromptWriter.SystemPromptDir`) |
+| `temperature` | 0–2, default 0.6 |
+| `reference` | an optional image in `input/`, set with **reference…** and cleared with **clear reference**. Sent only when the model has vision |
+| `idea` | the idea, an existing prompt, or a change request |
+| `result` | the LLM's prompt, editable |
+
+**Buttons:** **write** sends the request; while it runs it reads `writing…` and
+a second click cancels. When `result` is not empty it is sent along as the
+previous answer, so a change request in `idea` returns the complete updated
+prompt. **new** clears `result`. **from prompt** copies the active group's prompt
+into `idea`. **use** writes `result` into the active group's prompt, without
+lines that start with `//` and with runs of blank lines collapsed, and briefly
+flashes that node. **refresh models** reloads the model and system prompt lists
+(the backend caches a model list for an hour).
+
+The status line shows the cost, duration and tokens, e.g.
+`0.3 ¢ · 8 s · 1,812 → 640 tokens`, or the error in red.
+
+**The active group's prompt** is found from the active Warp Send by walking its
+input links upstream, through subgraphs, to a `Warp Lora Prompt`; failing that,
+the Prompt + LoRAs inside the same group as the Send. None or two of them is an
+error that names the group, and so is no active Send.
+
+**Keys** are bound to hosts and used only when `base_url`'s host is the key's
+host, so a workflow pointing at another server never receives your key.
+`NANOGPT_API_KEY` covers `nano-gpt.com` and `api.nano-gpt.com`;
+`ComfyUI/user/warppipe_llm_keys.json` holds `{"host": "key"}` for others. Local
+servers get no key unless the file names them. WarpPipe never writes, logs or
+returns a key.
+
+---
+
 ### 🌀 Warp Compare
 
 Compares two images with a slider. An output node, and the replacement for
@@ -679,8 +725,8 @@ on another, or for tidying an unused output.
 ### Registration
 
 Both registration paths are built from one table in `warp_pipe.py`, so every
-node exists whichever path runs. Warp Select is not in it: it is registered by
-`web/warp_send.js` in the browser.
+node exists whichever path runs. Warp Select and Prompt Writer are not in it: they are registered by
+`web/warp_send.js` and `web/prompt_writer.js` in the browser.
 
 - **Legacy** (default) — `NODE_CLASS_MAPPINGS` and `NODE_DISPLAY_NAME_MAPPINGS`.
 - **V3** — set `WARPPIPE_ENABLE_V3=1` to register through
@@ -694,7 +740,7 @@ naming it rather than quietly dropping it.
 
 ## HTTP API
 
-Four routes, registered on ComfyUI's own `PromptServer` at import. They exist
+Seven routes, registered on ComfyUI's own `PromptServer` at import. They exist
 for WarpPipe's frontend; nothing stops you calling them yourself.
 
 If `aiohttp` or `server` cannot be imported — running the module outside
@@ -707,7 +753,17 @@ GET /warppipe/loras
 GET /warppipe/embeddings
 GET /warppipe/model/base?name=<name>
 GET /warppipe/lora/thumbnail?name=<name>&kind=<loras|embeddings>[&full=1]
+GET  /warppipe/llm/models?base_url=<url>[&refresh=1]
+GET  /warppipe/llm/system_prompts
+POST /warppipe/llm/write
 ```
+
+The three `llm` routes serve 🌀 Prompt Writer. `models` returns
+`{models: [{id, name, prompt_price, completion_price, vision}]}`,
+`system_prompts` returns `{names: [...]}`, and `write` takes
+`{base_url, model, system_prompt, temperature, idea, previous_result, reference}`
+and returns `{text, seconds, usage, cost}`. Each returns `{error}` instead when
+something fails, and none ever returns a key.
 
 ---
 

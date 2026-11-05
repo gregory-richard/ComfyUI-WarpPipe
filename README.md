@@ -76,6 +76,7 @@ without a sidecar, and the features built on them go quiet.
 | 🌀 **Scheduler Adapter for FaceDetailer** | Maps KSampler schedulers onto FaceDetailer's set |
 | 🌀 **Warp Send** | Passes a Warp through one model group; the active Send is the one that runs, and shows the live preview and a before/after slider |
 | 🌀 **Warp Select** | Picks the model group to run from a dropdown of Sends, in the hub - no wire moved |
+| 🌀 **Prompt Writer** | Has an LLM (NanoGPT or any OpenAI-compatible server) write a prompt from an idea and your own system prompt, and puts it into the active group's Prompt + LoRAs, in the hub |
 | 🌀 **Warp Compare** | Compares a `before` (left) and an `after` (right) image with a slider that follows the mouse; arrows step through batch pairs. Replaces rgthree's Image Comparer |
 | 🚫 **Dead End** | Accepts any type, produces nothing. Parks a branch without deleting it |
 
@@ -97,6 +98,17 @@ per workflow; **Remove before-image mark** undoes it). Warp Compare is the same
 slider as a node of its own. All of it works in the classic canvas and in
 Nodes 2.0. The live preview needs ComfyUI started with `--preview-method auto`.
 Help for each: `web/docs/Warp Send.md`, `Warp Select.md`, `Warp Compare.md`.
+
+### Writing prompts with an LLM
+
+Put a **Prompt Writer** in the hub, type an idea and press **write**. An LLM
+writes the prompt from your own system prompt file. **use** puts the result into
+the active group's Prompt + LoRAs, and **from prompt** copies that prompt back in
+as the idea. NanoGPT is the default; any OpenAI-compatible server (LM Studio,
+Ollama, llama.cpp) works through `base_url`. The key goes in the environment
+variable `NANOGPT_API_KEY`, or in `user/warppipe_llm_keys.json` for other hosts.
+It is never stored in a workflow or sent to the browser. Pick the system prompt
+folder in Settings → WarpPipe → Prompt Writer. Help: `web/docs/Prompt Writer.md`.
 
 Every node carries its own help inside ComfyUI, behind the `?` on the node.
 

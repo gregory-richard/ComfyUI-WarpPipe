@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.3.0] - 2026-11-05
+
+### Added
+
+- **Prompt Writer**: a hub node that has an LLM write an image prompt from an idea, an optional reference image and your own system prompt file. **write** fills `result` and shows the cost, duration and tokens (`0.3 ¢ · 8 s · 1,812 → 640 tokens`); a second click while it runs cancels. With a result already there, a change request in `idea` returns the complete updated prompt. **use** puts the result into the active Warp Send group's Prompt + LoRAs, without `//` title lines, as one undo step; **from prompt** copies that prompt into `idea`; **new** starts fresh. NanoGPT is the default, with its model list, prices and vision marks; any OpenAI-compatible server (LM Studio, Ollama, llama.cpp) works through `base_url`. Frontend only, so it never takes part in a run
+- **Keys stay on the server**: `NANOGPT_API_KEY`, or `user/warppipe_llm_keys.json` for other hosts. A key is sent only to its own host, so a shared workflow pointing elsewhere never receives it, and no key is ever stored in a workflow, an image or the browser
+- **Setting `WarpPipe.PromptWriter.SystemPromptDir`**: the folder of system prompts; only `.txt` files directly in it are listed
+- **Routes**: `GET /warppipe/llm/models`, `GET /warppipe/llm/system_prompts`, `POST /warppipe/llm/write`
+
 ## [4.2.0] - 2026-11-05
 
 ### Added
