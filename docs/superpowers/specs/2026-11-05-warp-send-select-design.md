@@ -1,12 +1,12 @@
 # Warp Send / Warp Select / Warp Result: design
 
-Date: 2026-11-05. Status: approved in chat, awaiting spec review.
+Date: 2026-11-05. Status: implemented (4.2.0).
 
 ## Goal
 
 The user works on one model at a time. They want to see that model's prompt, loaders, Warp Provider settings and its result (first generation and final image) on one screen, without scrolling to the hub. They also want a live sampling preview there.
 
-Today the image workflow ("Img (26-11-02)") routes everything through 27 KJ SetNodes and 30 GetNodes, two ImpactInversedSwitches, an INTConstant model selector with labels, and an ImpactSwitch. Two thirds of that only send results back to per-group comparers.
+Today the user's image workflow routes everything through 27 KJ SetNodes and 30 GetNodes, two ImpactInversedSwitches, an INTConstant model selector with labels, and an ImpactSwitch. Two thirds of that only send results back to per-group comparers.
 
 Success means:
 - No Get/Set nodes, InversedSwitches or Model Selector are left in the image workflow.
@@ -26,7 +26,7 @@ It sits in each model group, at the end of the data flow (Warp → Warp Send).
 - **Activate button:** marks this Send as the active one, and only one Send per graph is active. The active state is stored in the node's `properties.active`. The node gets a highlighted title bar, and the change syncs Warp Select's dropdown.
 - **Display:** a large before/after slider. The left side is the first generation and the right side is the final image. With batch > 1, small prev/next arrows step through the pairs.
 - **Live preview:** while sampling, the slider area shows the live preview.
-- **Persistence:** result image references are kept in `properties` for the session only. Temp files do not survive a ComfyUI restart, and nothing more is persisted.
+- **Persistence:** result image references are kept in memory for the session only (a module-level map keyed by the Send's name, never in `properties`, so a result neither marks the workflow modified nor adds an undo step). Temp files do not survive a ComfyUI restart, and nothing more is persisted.
 - **Backend role:** a small real passthrough node (Python: `warp` and `index` in, `warp` and `index` out). Its outputs have no visible links. Warp Select resolves to them virtually, so only the active Send is ever referenced and executed. This replaces "virtual like KJ SetNode": a virtual node cannot hand an INT literal to Generate, but a real output can.
 
 ### Warp Select (frontend-only virtual node, `web/warp_send.js`)
@@ -48,12 +48,12 @@ It sits at the end of the hub.
 
 ### Live preview mirror
 
-The extension listens to the API's `b_preview_with_metadata` / `b_preview` events. While a prompt queued through Warp Select runs, it draws the latest preview frame into the active Send. Previews only exist when ComfyUI runs with `--preview-method auto`, so that flag is added to `run_nvidia_gpu.bat`; the restart needs the user's approval.
+The extension listens to the API's `b_preview_with_metadata` / `b_preview` events. While a prompt queued through Warp Select runs, it draws the latest preview frame into the active Send. Previews only exist when ComfyUI runs with `--preview-method auto`, so that flag is added to the ComfyUI launch script; the restart needs the user's approval.
 
 ## Errors (the run is blocked with a clear message)
 
 - No Send is active.
-- The active Send is muted or bypassed.
+- The active Send is muted or bypassed, directly or through a muted or bypassed subgraph it sits in.
 - Two Sends share a name.
 - The active Send has no `warp` input.
 - A workflow contains a Warp Select but no Warp Send.
@@ -61,7 +61,7 @@ The extension listens to the API's `b_preview_with_metadata` / `b_preview` event
 
 Renaming a Send updates the combo immediately. A Warp Result with an empty `target` still runs, and its images are simply not mirrored.
 
-## Workflow changes (Img (26-11-02), outside the repo)
+## Workflow changes (the user's image workflow, outside the repo)
 
 - **Model groups:**
   - Each group's SetNode `warp - <model>` becomes a Warp Send named after the group.

@@ -4,7 +4,7 @@ Collect the first and final images at the end of the hub.
 
 ## Overview
 
-Put one **Warp Result** at the end of the hub. It takes the first and final images and shows them in the Warp Send that was active for that run, as a before/after slider.
+Put one **Warp Result** at the end of the hub. It takes the first and final images and shows them in the Warp Send that was active for that run, as a before/after slider. The images stay in that Send until the page is reloaded; they are not saved with the workflow.
 
 ## Inputs
 

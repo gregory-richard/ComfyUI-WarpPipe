@@ -82,8 +82,9 @@ without a sidecar, and the features built on them go quiet.
 ### Choosing a model group without moving wires
 
 Put a **Warp Send** in each model group and a **Warp Select** in the hub. Pick a
-group in Warp Select, or press *zur aktiven Gruppe*, and that group's Send is
-the one that runs. The queue is blocked with a message when no Send is active,
+group in Warp Select's dropdown, or press **activate** on its Warp Send, and that
+group's Send is the one that runs. **go to active group** on Warp Select only
+moves the canvas to the active Send. The queue is blocked with a message when no Send is active,
 the active one is muted or bypassed, two Sends share a name or an index, or the
 active one has no warp input. Warp Result shows the first and final images in
 the Send that was active. The live preview needs ComfyUI started with

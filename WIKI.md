@@ -377,8 +377,10 @@ flagged safe.
 
 ## Node reference
 
-Seven nodes, all under **Custom/WarpPipe Nodes**. Node IDs are what saved
-workflows and the API use; display names are what you see on the canvas.
+Ten nodes, all under **Custom/WarpPipe Nodes**. Node IDs are what saved
+workflows and the API use; display names are what you see on the canvas. Warp
+Select is the one exception to the rest of this section: it exists only in the
+browser, so the backend never sees it.
 
 | ID | Display name |
 | --- | --- |
@@ -388,6 +390,9 @@ workflows and the API use; display names are what you see on the canvas.
 | `Warp Lora Prompt` | 🌀 Prompt + LoRAs |
 | `Save Image Civitai` | 🌀 Save Image (Civitai) |
 | `FD Scheduler Adapter` | 🌀 Scheduler Adapter for FaceDetailer |
+| `Warp Send` | 🌀 Warp Send |
+| `Warp Select` | 🌀 Warp Select (frontend only) |
+| `Warp Result` | 🌀 Warp Result |
 | `Dead End` | 🚫 Dead End |
 
 ---
@@ -574,6 +579,80 @@ not.
 
 ---
 
+### 🌀 Warp Send
+
+Marks the end of one model group and hands its warp on. One Send in each group,
+one Warp Select in the hub, and the active Send is the group that runs.
+
+| Input | Type | Notes |
+| --- | --- | --- |
+| `warp` | `WARPPIPE` | The group's warp |
+| `index` | `INT` | 1–99, default 1. The number Generate's model switch uses. Unique per Send |
+| `name` | `STRING` | default `Model`. Shown in Warp Select's list. Unique per Send |
+
+**Outputs:** `warp`, `index` — both unchanged.
+
+The backend only passes the two through. Everything else happens in the
+browser: **activate** makes this Send the active one (stored in its
+`properties.active`, so it is saved with the workflow) and turns its title
+green; any other Send stops being active. A colour you gave the node comes back
+when it stops being active. The rest of the node is a large canvas that shows
+the live sampling preview while the active group runs, then a before/after
+slider — A the first generation, B the final image, the split following the
+pointer — with ◀ ▶ arrows for a batch. Results live in the page only, keyed by
+the Send's name: they are not saved with the workflow, mark nothing modified and
+leave no undo step, and the temp files they point at are gone after a ComfyUI
+restart anyway. The live preview needs ComfyUI started with
+`--preview-method auto`.
+
+A pasted copy of the active Send is not active. Converting a group to a subgraph
+or unpacking one keeps the Send active, since the original goes away. If a
+workflow somehow holds two active Sends, the one with the lower index keeps it.
+
+---
+
+### 🌀 Warp Select
+
+Picks which Warp Send runs. **Frontend only** — there is no backend node, and it
+never appears in the prompt ComfyUI receives.
+
+**Widgets:** `active`, a dropdown of every Send's name in index order, including
+Sends inside subgraphs — picking one activates it; **go to active group**, which
+only moves the canvas to the active Send, opening its subgraph if need be.
+
+**Outputs:** `warp` (`WARPPIPE`), `index` (`INT`) — wire them to Generate.
+
+It is a virtual node: when the prompt is built, ComfyUI asks it where its outputs
+really come from, and it names the active Send's outputs, wherever that Send
+lives. So Generate reads straight from that one Send, and the inactive groups are
+not referenced and never run.
+
+A workflow with a Warp Select refuses to queue, with a message, when it has no
+Warp Send, two Sends share a name or an index, no Send is active, the active one
+is muted or bypassed — itself or a subgraph it sits in — or the active one has no
+`warp` input. A workflow without a Warp Select is never checked.
+
+---
+
+### 🌀 Warp Result
+
+Takes the first and final images at the end of the hub and shows them in the
+Send that was active for the run.
+
+| Input | Type | Notes |
+| --- | --- | --- |
+| `first` | `IMAGE` | optional. The first generation, before refining |
+| `final` | `IMAGE` | optional. The final image |
+| `target` | `STRING` | optional, hidden. Written by the frontend: the active Send's name |
+
+**No outputs.** It is an output node: both batches are saved as temp previews
+and sent back with `target`, and the browser draws them into the Send of that
+name. With an empty or unknown `target` the previews are still saved and no Send
+changes. With batches of different sizes the slider pairs them by position, up
+to the shorter one.
+
+---
+
 ### 🚫 Dead End
 
 **Input:** `input` — any type, optional. **No outputs.**
@@ -587,7 +666,8 @@ on another, or for tidying an unused output.
 ### Registration
 
 Both registration paths are built from one table in `warp_pipe.py`, so every
-node exists whichever path runs.
+node exists whichever path runs. Warp Select is not in it: it is registered by
+`web/warp_send.js` in the browser.
 
 - **Legacy** (default) — `NODE_CLASS_MAPPINGS` and `NODE_DISPLAY_NAME_MAPPINGS`.
 - **V3** — set `WARPPIPE_ENABLE_V3=1` to register through
@@ -740,6 +820,8 @@ web/
   save_image_ui.js    friendly labels, and the toast when nothing was saved
   provider_ui.js      the size widget's name, and today's label for an old preset
   size_presets.js     matching an old preset label to a new one
+  warp_send.js        Warp Send's activation and slider, Warp Select, the preview mirror
+  warp_route.js       which Send is active, and whether the route can run
   docs/*.md           the per-node help ComfyUI shows behind the ? button
 WIKI.md               this documentation
 tests/                pytest, no ComfyUI required

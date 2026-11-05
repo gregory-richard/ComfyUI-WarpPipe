@@ -46,7 +46,7 @@
 ### Task 1: Probe the frontend virtual-output path (throwaway)
 
 **Files:**
-- Create (throwaway, not committed): `C:\Users\grego\AppData\Local\Temp\claude\…\scratchpad\probe_select.js`, pasted into the browser pane.
+- Create (throwaway, not committed): `probe_select.js` in a scratch directory, pasted into the browser pane.
 
 - [ ] **Step 1: Find the native hook in the frontend.** In `python_embeded/Lib/site-packages/comfyui_frontend_package/static/assets/`, search for `resolveVirtualOutput`. Expected: `ExecutableNodeDTO.resolveOutput` calls `node.resolveVirtualOutput(slot)` and expects `{node, slot}`. If it is absent, KJ's runtime patch (`comfyui-kjnodes/web/js/setgetnodes.js`, extension `KJNodes.CrossGraphSetGet`) is the model to copy.
 - [ ] **Step 2: Probe in the running ComfyUI.**
@@ -116,18 +116,18 @@
 - Produces, used by Task 5: `drawPreviewInto(sendNode, imageBitmapOrImg)`, exported on `window.WarpPipe.warpSend` for the preview mirror.
 
 - [ ] **Step 1: Warp Send node UI** (`beforeRegisterNodeDef` for `Warp Send`):
-  - An "aktivieren" button calls `activate`, refreshes every Select combo and every Result `target` widget, and marks the active node with `color: "#2a5"` on the title (the others keep their defaults).
+  - An "activate" button calls `activate`, refreshes every Select combo and every Result `target` widget, and marks the active node with `color: "#2a5"` on the title (the others keep their defaults).
   - A canvas widget draws the slider (A = first, B = final), with prev/next arrows when there is more than one pair. Pairs are `min(first.length, final.length)`.
-  - `onConfigure` restores the active state. Pasting or cloning sets `properties.active = false`.
+  - `onConfigure` restores the active state. A pasted copy is not active; converting to or unpacking a subgraph keeps the Send active (the copy is settled after the original has stayed or gone).
   - The default size is `[520, 860]`.
 - [ ] **Step 2: Warp Select virtual node** (`registerCustomNodes`, a LiteGraph class `"Warp Select"` with `isVirtualNode = true`):
   - Outputs are `warp` (WARPPIPE) and `index` (INT).
-  - Widgets: an `active` combo (values from `sortedNames`; setting it activates that Send) and a "zur aktiven Gruppe" button (centre the canvas on the active Send; if it lives in a subgraph, open that subgraph first).
+  - Widgets: an `active` combo (values from `sortedNames`; setting it activates that Send) and a "go to active group" button (centre the canvas on the active Send; if it lives in a subgraph, open that subgraph first).
   - `resolveVirtualOutput(slot)` returns `{node: send.node, slot}` from `validateRoute`. Use the Task 1 probe result for the exact contract, and add the scoped DTO patch only if the probe says it is needed.
 - [ ] **Step 3: Queue guard:** wrap `app.queuePrompt` (or the `graphToPrompt` hook the probe found) so that when the graph contains a Warp Select and `validateRoute` is not ok, `alert(error)` runs and nothing is queued. A graph without a Warp Select is untouched.
 - [ ] **Step 4: Result routing:**
   - On the `executed` API event for a `Warp Result` node, find the Send whose name equals `output.target[0]`.
-  - Store the image refs in `send.properties.warpResult = {first, final}`, a session cache that is not re-fetched after a restart, and redraw.
+  - Store the image refs `{first, final}` in a module-level map keyed by the Send's name, a session cache that is not saved with the workflow or re-fetched after a restart, and redraw.
   - An unknown or empty target leaves every Send unchanged.
 - [ ] **Step 5: Verify in the browser pane** on a scratch copy of the workflow:
   - Two groups, each with a Send, plus a Select, a Generate stand-in and a Result.
@@ -146,15 +146,15 @@
   - Track the prompt id of a queue that passed the guard and the active Send at that moment.
   - On `b_preview_with_metadata` (fall back to `b_preview`) for that prompt id, call `drawPreviewInto(activeSend, blob→ImageBitmap)`.
   - On `execution_success`, `execution_error` or `execution_interrupted`, clear the live frame. The last result, if any, shows again.
-- [ ] **Step 2: Enable previews:** after asking the user, add `--preview-method auto` to `C:\Users\grego\Documents\StableDiffusion\ComfyUI-2603\run_nvidia_gpu.bat`, then restart (kill `python main.py`, then `Start-Process` the bat).
+- [ ] **Step 2: Enable previews:** after asking the user, add `--preview-method auto` to the ComfyUI launch script, then restart ComfyUI.
 - [ ] **Step 3: Verify:** queue a run. The active Send shows changing frames during sampling, then the slider.
 - [ ] **Step 4: Commit:** `feat: Warp Send shows the live sampling preview`
 
 ### Task 6: Migrate the image workflow and lay it out
 
 **Files (outside the repo):**
-- Modify: `ComfyUI/user/default/workflows/Img (26-11-02).json`. Back it up first to the scratchpad as `Img-before-warpsend.json`.
-- Create: scratchpad `wf_warpsend_migrate.py`.
+- Modify: the user's image workflow (a JSON file in ComfyUI's user workflows folder). Back it up first to a scratch directory.
+- Create: a migration script `wf_warpsend_migrate.py` in a scratch directory.
 
 - [ ] **Step 1: Capture a regression baseline:** queue the current workflow via `graphToPrompt` (Krea 2, batch 1, fixed seed, Image Filter timeout 3) with prefix `workflow-test/baseline`, and keep the PNG.
 - [ ] **Step 2: Write the migration script.** For each model group, replace the `warp - <model>` SetNode with a Warp Send:
@@ -169,7 +169,7 @@
   - Model groups go left to right: Models, Prompt + LoRAs, Warp Provider, Warp, Warp Send (520 × group height). Each group stays about 2070 × 900, in two columns, 1–9.
   - Hub: images in the top row, with the detailer previews above their detailer, the final image and Save. Modules go in the bottom row, with Warp Select directly left of Generate. The hub bottom is tight above the groups.
   - Bookmarks: 0 = hub, 1–9 = models (retitled `🔖 (n) <name>`).
-- [ ] **Step 4: Check for overlaps:** run the browser overlap check (frontend sizes) from the workflow memory notes. Expected: no overlaps except deliberate ones.
+- [ ] **Step 4: Check for overlaps:** run a browser overlap check on the nodes (frontend sizes). Expected: no overlaps except deliberate ones.
 - [ ] **Step 5: Run the regression test:** queue the migrated workflow with the same seed and prefix `workflow-test/after`. Expected: pixel-identical to the baseline (compare with PIL `ImageChops.difference(...).getbbox() is None`). The result and live preview appear in the Krea 2 Send.
 - [ ] **Step 6: Switch test:** activate Z-Image Turbo and run. The result lands in ZIT, and Krea 2 still shows its previous result. Then batch 2: the slider arrows step through 2 pairs.
 - [ ] **Step 7:** Nothing to commit, since the file is outside the repo. Tell the user to reload the workflow.
