@@ -74,7 +74,21 @@ without a sidecar, and the features built on them go quiet.
 | 🌀 **Prompt + LoRAs** | The prompt box above |
 | 🌀 **Save Image (Civitai)** | Saves with metadata Civitai reads |
 | 🌀 **Scheduler Adapter for FaceDetailer** | Maps KSampler schedulers onto FaceDetailer's set |
+| 🌀 **Warp Send** | Passes a Warp through one model group; the active Send is the one that runs, and shows the live preview and a before/after slider |
+| 🌀 **Warp Select** | Picks the model group to run from a dropdown of Sends, in the hub - no wire moved |
+| 🌀 **Warp Result** | Takes the first and final images and shows them in the active Send |
 | 🚫 **Dead End** | Accepts any type, produces nothing. Parks a branch without deleting it |
+
+### Choosing a model group without moving wires
+
+Put a **Warp Send** in each model group and a **Warp Select** in the hub. Pick a
+group in Warp Select, or press *zur aktiven Gruppe*, and that group's Send is
+the one that runs. The queue is blocked with a message when no Send is active,
+the active one is muted or bypassed, two Sends share a name or an index, or the
+active one has no warp input. Warp Result shows the first and final images in
+the Send that was active. The live preview needs ComfyUI started with
+`--preview-method auto`. Help for each: `web/docs/Warp Send.md`,
+`Warp Select.md`, `Warp Result.md`.
 
 Every node carries its own help inside ComfyUI, behind the `?` on the node.
 
