@@ -2365,6 +2365,55 @@ def _register_routes() -> None:
 
     logger.info("WarpPipe LoRA library routes registered")
 
+    _register_prompt_writer_routes(routes, web, instance)
+
+
+def _register_prompt_writer_routes(routes, web, instance) -> None:
+    """The /warppipe/llm routes of the Prompt Writer (see prompt_writer.py)."""
+    try:
+        from . import prompt_writer
+    except ImportError:
+        import prompt_writer
+    import folder_paths
+
+    def settings_loader(request) -> dict:
+        try:
+            path = instance.user_manager.get_request_user_filepath(request, "comfy.settings.json")
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def image_path(name: str) -> Optional[str]:
+        # Only files inside ComfyUI's input/output/temp folders; a shared
+        # workflow must not be able to send an arbitrary file to a provider.
+        try:
+            if not folder_paths.exists_annotated_filepath(name):
+                return None
+            path = os.path.realpath(folder_paths.get_annotated_filepath(name))
+            roots = (
+                folder_paths.get_input_directory(),
+                folder_paths.get_output_directory(),
+                folder_paths.get_temp_directory(),
+            )
+            for root in roots:
+                root = os.path.realpath(root)
+                if os.path.commonpath([root, path]) == root and os.path.isfile(path):
+                    return path
+        except Exception:
+            pass
+        return None
+
+    prompt_writer.register(
+        routes,
+        web,
+        user_dir=folder_paths.get_user_directory(),
+        settings_loader=settings_loader,
+        image_path=image_path,
+    )
+    logger.info("WarpPipe Prompt Writer routes registered (/warppipe/llm)")
+
 
 try:
     _register_routes()
