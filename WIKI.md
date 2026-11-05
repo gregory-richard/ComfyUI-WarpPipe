@@ -597,18 +597,22 @@ browser: the big **activate** button (it reads **active** on the active Send)
 makes this Send the active one (stored in its `properties.active`, so it is saved
 with the workflow); any other Send stops being active. The active Send is fully
 green, title and body. Inactive Sends are fully red and show a line
-`active: <name>`. A colour you gave the node comes back when it stops being
-active. The rest of the node is a compare view: the live sampling preview while
+`active: <name>`. Sends and Selects are always coloured by their state, so a
+colour you set by hand is overwritten. The rest of the node is a compare view: the live sampling preview while
 the active group runs, then a before/after slider that follows the pointer, with
 ◀ i/n ▶ to step through pairs of a batch, and **no result yet** before the first
 run.
 
 The results arrive without links. **final** is the images Save Image (Civitai)
-shows in that run. **before** is the images of the one node marked through its
-right-click entry **Use as before image for Warp Send** (stored in
-`properties.warpBefore`; only one node per workflow carries it, it shows a
-`before` badge, and **Remove before-image mark** clears it). Both go to the Send
-that was active when the run was queued. They live in the page only: they are
+shows in that run; with several Save Image (Civitai) nodes the last one to run
+is the final, and a Save Image (Civitai) with its preview turned off gives no
+final. **before** is the images of the one node marked through its right-click
+entry **Use as before image for Warp Send** (stored in `properties.warpBefore`;
+only one node per workflow carries it, it shows a `before` badge, and **Remove
+before-image mark** clears it). The mark goes on an output node such as Preview
+Image; the entry is not offered on other nodes, nor on Warp Send or Warp Select.
+Both go to the Send that was active when the run was queued, by its name, even
+if you switch to another workflow tab while it runs. They live in the page only: they are
 not saved with the workflow, mark nothing modified and leave no undo step, stay
 until the page is reloaded, and the temp files they point at are gone after a
 ComfyUI restart anyway. The live preview needs ComfyUI started with
