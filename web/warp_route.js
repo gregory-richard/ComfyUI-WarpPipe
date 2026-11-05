@@ -11,8 +11,11 @@ function widgetValue(node, name) {
   return widget ? widget.value : undefined;
 }
 
-function collectInto(graph, out) {
+// `muted` is true inside a subgraph node that is itself muted or bypassed:
+// nothing in there runs, whatever its own mode says.
+function collectInto(graph, out, muted = false) {
   for (const node of graph?._nodes ?? []) {
+    const off = muted || MUTED_MODES.includes(node.mode);
     if (node.type === "Warp Send") {
       const warp = (node.inputs ?? []).find((input) => input.name === "warp");
       out.push({
@@ -21,11 +24,11 @@ function collectInto(graph, out) {
         name: String(widgetValue(node, "name") ?? ""),
         index: Number(widgetValue(node, "index")),
         active: node.properties?.active === true,
-        muted: MUTED_MODES.includes(node.mode),
+        muted: off,
         hasWarp: warp?.link != null,
       });
     }
-    if (node.subgraph?._nodes) collectInto(node.subgraph, out);
+    if (node.subgraph?._nodes) collectInto(node.subgraph, out, off);
   }
 }
 

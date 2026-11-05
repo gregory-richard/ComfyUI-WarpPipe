@@ -79,6 +79,22 @@ test("validateRoute: muted or bypassed", () => {
   }
 });
 
+test("validateRoute: active send inside a muted or bypassed subgraph", () => {
+  for (const mode of [2, 4]) {
+    const host = { type: "Group", mode, subgraph: { _nodes: [send("A", 1, { active: true })] } };
+    const sends = collectSends({ _nodes: [send("B", 2), host] });
+    assert.equal(sends.find((s) => s.name === "A").muted, true);
+    assert.equal(sends.find((s) => s.name === "B").muted, false);
+    const r = validateRoute(sends);
+    assert.equal(r.error, 'Warp Select: the active Warp Send "A" is muted or bypassed.');
+  }
+  // Deeper still: a bypassed host two levels up mutes the Send too.
+  const inner = { type: "Group", mode: 0, subgraph: { _nodes: [send("C", 3, { active: true })] } };
+  const outer = { type: "Group", mode: 4, subgraph: { _nodes: [inner] } };
+  const r = validateRoute(collectSends({ _nodes: [outer] }));
+  assert.equal(r.error, 'Warp Select: the active Warp Send "C" is muted or bypassed.');
+});
+
 test("validateRoute: no warp link", () => {
   for (const link of [null, undefined]) {
     const r = validateRoute(infos(send("A", 1, { active: true, link })));

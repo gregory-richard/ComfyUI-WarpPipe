@@ -18,9 +18,9 @@ const CATEGORY = "Custom/WarpPipe Nodes";
 
 const ACTIVE_COLOR = "#2a5";
 const DEFAULT_SIZE = [520, 860];
-const ACTIVATE_LABEL = "aktivieren";
-const GO_TO_LABEL = "zur aktiven Gruppe";
-const NO_RESULT = "noch kein Ergebnis";
+const ACTIVATE_LABEL = "activate";
+const GO_TO_LABEL = "go to active group";
+const NO_RESULT = "no result yet";
 
 const SLIDER_MIN_H = 240;
 const SLIDER_PAD = 10;
@@ -69,9 +69,20 @@ function warn(message) {
 
 // --- Keeping everything in step with the active Send -----------------------
 
+// A colour the user gave the node is kept in its properties while it is active
+// (the colour is saved with the workflow, so the one it replaces must be too)
+// and given back when it is no longer active.
 function markActive(node, on) {
-  if (on) node.color = ACTIVE_COLOR;
-  else if (node.color === ACTIVE_COLOR) node.color = undefined;
+  node.properties = node.properties ?? {};
+  if (on) {
+    if (node.color === ACTIVE_COLOR) return;
+    if (node.color) node.properties._warpPrevColor = node.color;
+    else delete node.properties._warpPrevColor;
+    node.color = ACTIVE_COLOR;
+  } else if (node.color === ACTIVE_COLOR) {
+    node.color = node.properties._warpPrevColor || undefined;
+    delete node.properties._warpPrevColor;
+  }
 }
 
 /** The Result's target is written here, never by hand, so it is not shown. */
@@ -83,11 +94,42 @@ function hideTarget(node) {
   return widget;
 }
 
+// Sends that were just pasted, cloned, or moved into or out of a subgraph.
+// Their copied `active` is only dropped later, in syncAll: a paste keeps the
+// original, so its copy must not be a second active Send, but converting to a
+// subgraph or unpacking one removes the original in the same tick, and then
+// the copy is the active Send.
+const newSends = new Set();
+
+/** Settle which Send is active: at most one, and never a fresh copy beside its original. */
+function settleActive(sends) {
+  const isNew = (s) => newSends.has(s.node);
+  newSends.clear();
+  if (sends.some((s) => s.active && !isNew(s))) {
+    for (const s of sends) {
+      if (s.active && isNew(s)) {
+        s.node.properties.active = false;
+        s.active = false;
+      }
+    }
+  }
+  // Still more than one (an edited or old workflow): keep the first by index.
+  const actives = sends.filter((s) => s.active);
+  if (actives.length < 2) return;
+  const keep = [...actives].sort((a, b) => a.index - b.index)[0];
+  for (const s of actives) {
+    if (s === keep) continue;
+    s.node.properties.active = false;
+    s.active = false;
+  }
+}
+
 /** Title colours, every Select's combo and every Result's target. */
 function syncAll() {
   const root = rootGraph();
   if (!root) return;
   const sends = collectSends(root);
+  settleActive(sends);
   for (const s of sends) markActive(s.node, s.active);
   const active = sends.find((s) => s.active);
   const name = active ? active.name : "";
@@ -109,6 +151,7 @@ function syncSoon() {
 function activateNode(node) {
   const root = rootGraph();
   if (!root) return;
+  newSends.delete(node);
   // A fresh list: activate writes to the nodes it is handed.
   activate(collectSends(root), node);
   syncAll();
@@ -182,10 +225,18 @@ function loadImage(node, ref) {
   return img;
 }
 
-/** The loaded images for the node's stored result, rebuilt when it changes. */
+// Send name -> {first, final} image refs of its last result. Kept for this
+// page only: the temp files are gone after a ComfyUI restart anyway, and a
+// result is not an edit, so it must not mark the workflow modified or add an
+// undo step. Keyed by name because that is how a Warp Result names its Send; a
+// renamed Send shows whatever its new name last produced.
+const results = new Map();
+
+/** The loaded images for the node's last result, rebuilt when it changes. */
 function resultImages(node) {
-  const result = node.properties?.warpResult;
-  const key = result ? JSON.stringify(result) : "";
+  const name = widgetNamed(node, "name")?.value;
+  const result = results.get(name);
+  const key = result ? JSON.stringify([name, result]) : "";
   if (node._warpImages?.key !== key) {
     node._warpImages = {
       key,
@@ -478,23 +529,16 @@ function setupSend(nodeType) {
     this.setSize([...DEFAULT_SIZE]);
   });
 
-  // A paste adds the node and then configures it from the clipboard, outside
-  // a workflow load. That copy must not be a second active Send.
+  // A paste, a subgraph convert or unpack adds a copy of a Send outside a
+  // workflow load (which keeps the active state it saved). Whichever order the
+  // frontend adds and configures it in, syncAll settles the copy afterwards,
+  // once the original has either stayed or gone.
   wrap(proto, "onAdded", function () {
-    this._warpJustAdded = true;
-    setTimeout(() => {
-      this._warpJustAdded = false;
-    }, 0);
+    if (!app.configuringGraph) newSends.add(this);
     syncSoon();
   });
 
   wrap(proto, "onConfigure", function () {
-    if (this._warpJustAdded && !app.configuringGraph) {
-      this.properties = this.properties ?? {};
-      this.properties.active = false;
-      delete this.properties.warpResult;
-    }
-    this._warpJustAdded = false;
     syncSoon();
   });
 
@@ -502,10 +546,8 @@ function setupSend(nodeType) {
   proto.clone = function (...args) {
     const copy = priorClone.apply(this, args);
     if (copy) {
-      copy.properties = copy.properties ?? {};
-      copy.properties.active = false;
-      delete copy.properties.warpResult;
-      markActive(copy, false);
+      newSends.add(copy);
+      syncSoon();
     }
     return copy;
   };
@@ -593,7 +635,9 @@ function registerSelect() {
       const root = rootGraph();
       if (!root) return undefined;
       const route = validateRoute(collectSends(root));
-      return route.ok ? { node: route.send.node, slot } : undefined;
+      if (route.ok) return { node: route.send.node, slot };
+      console.warn(route.error);
+      return undefined;
     }
   }
 
@@ -629,12 +673,9 @@ app.registerExtension({
       if (!root) return;
       const send = collectSends(root).find((s) => s.name === name);
       if (!send) return;
+      results.set(name, { first: imageRefs(output.first), final: imageRefs(output.final) });
       const node = send.node;
-      node.properties = node.properties ?? {};
-      node.properties.warpResult = {
-        first: imageRefs(output.first),
-        final: imageRefs(output.final),
-      };
+      node._warpPreview?.close?.();
       node._warpPreview = null;
       node._warpPair = 0;
       node.setDirtyCanvas?.(true, true);
