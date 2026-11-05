@@ -119,7 +119,7 @@ function arrowButton(text, title) {
  * (zoom) and the middle button (pan) are handed on to it. A Vue node handles
  * those itself, so nothing is forwarded there.
  */
-function forwardToCanvas(element, getCanvas) {
+export function forwardToCanvas(element, getCanvas) {
   const onClassic = () => !!element.closest(".dom-widget");
   const target = () => getCanvas?.() ?? null;
   element.addEventListener(

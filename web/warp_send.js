@@ -1,11 +1,26 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { activate, collectSends, sortedNames, validateRoute } from "./warp_route.js";
-import { addCompareWidget, imageRefs } from "./compare_widget.js";
+import {
+  activate,
+  activeLine,
+  allNodes,
+  BEFORE_PROP,
+  collectSends,
+  markBefore,
+  nodeByExecutionId,
+  outputImages,
+  resultRole,
+  settleBefore,
+  sortedNames,
+  stateColors,
+  validateRoute,
+} from "./warp_route.js";
+import { addCompareWidget, forwardToCanvas, imageRefs } from "./compare_widget.js";
 
-// The hub: every model group ends in a Warp Send, one Warp Select hands the
-// active Send's warp to the shared Generate, and the Warp Result at the end
-// shows its images back in the Send that ran.
+// The hub: every model group ends in a Warp Send, and one Warp Select hands the
+// active Send's warp to the shared Generate. The run's images come back to the
+// Send that was active when it was queued: Save Image (Civitai) gives the
+// final side, the one node marked "before" gives the other.
 //
 // Warp Select exists only in the browser. When the prompt is built, ComfyUI
 // asks a virtual node where its outputs really come from, and this one names
@@ -14,13 +29,15 @@ import { addCompareWidget, imageRefs } from "./compare_widget.js";
 const SEND_ID = "Warp Send";
 const SELECT_ID = "Warp Select";
 const SELECT_TITLE = "🌀 Warp Select";
-const RESULT_ID = "Warp Result";
 const CATEGORY = "Custom/WarpPipe Nodes";
 
-const ACTIVE_COLOR = "#2a5";
 const DEFAULT_SIZE = [520, 860];
 const ACTIVATE_LABEL = "activate";
+const ACTIVE_LABEL = "active";
 const GO_TO_LABEL = "go to active group";
+const MARK_LABEL = "Use as before image for Warp Send";
+const UNMARK_LABEL = "Remove before-image mark";
+const BADGE_TEXT = "before";
 
 function rootGraph() {
   return app.rootGraph ?? app.graph ?? null;
@@ -64,29 +81,15 @@ function warn(message) {
 
 // --- Keeping everything in step with the active Send -----------------------
 
-// A colour the user gave the node is kept in its properties while it is active
-// (the colour is saved with the workflow, so the one it replaces must be too)
-// and given back when it is no longer active.
-function markActive(node, on) {
-  node.properties = node.properties ?? {};
-  if (on) {
-    if (node.color === ACTIVE_COLOR) return;
-    if (node.color) node.properties._warpPrevColor = node.color;
-    else delete node.properties._warpPrevColor;
-    node.color = ACTIVE_COLOR;
-  } else if (node.color === ACTIVE_COLOR) {
-    node.color = node.properties._warpPrevColor || undefined;
+// Sends and Selects are always coloured by their state, so a colour set by
+// hand does not last; the property the older version kept one in is dropped.
+function paint(node, ok) {
+  const { color, bgcolor } = stateColors(ok);
+  if (node.color !== color) node.color = color;
+  if (node.bgcolor !== bgcolor) node.bgcolor = bgcolor;
+  if (node.properties && "_warpPrevColor" in node.properties) {
     delete node.properties._warpPrevColor;
   }
-}
-
-/** The Result's target is written here, never by hand, so it is not shown. */
-function hideTarget(node) {
-  const widget = widgetNamed(node, "target");
-  if (!widget) return null;
-  widget.hidden = true;
-  widget.computeSize = () => [0, -4];
-  return widget;
 }
 
 // Sends that were just pasted, cloned, or moved into or out of a subgraph.
@@ -119,28 +122,77 @@ function settleActive(sends) {
   }
 }
 
-/** Title colours, every Select's combo and every Result's target. */
+// --- The before mark -------------------------------------------------------------
+
+// One badge object, shown on whichever node carries the mark. The node badge
+// list is drawn by the classic canvas and read by Vue nodes.
+let beforeBadge = null;
+
+function badge() {
+  const Badge = window.LGraphBadge;
+  if (!beforeBadge && Badge) {
+    beforeBadge = new Badge({ text: BADGE_TEXT, fgColor: "#fff", bgColor: "#b60" });
+  }
+  return beforeBadge;
+}
+
+function showBadge(node, on) {
+  const mark = badge();
+  if (!mark) return;
+  const list = Array.isArray(node.badges) ? node.badges : [];
+  if (list.includes(mark) === on) return;
+  // A new array, so a Vue node that watches the list sees the change.
+  node.badges = on ? [...list, mark] : list.filter((b) => b !== mark);
+}
+
+function syncBefore(root) {
+  settleBefore(root);
+  for (const node of allNodes(root)) showBadge(node, node.properties?.[BEFORE_PROP] === true);
+}
+
+function toggleBefore(node) {
+  const root = rootGraph();
+  if (!root || !node) return;
+  const marked = node.properties?.[BEFORE_PROP] === true;
+  markBefore(root, marked ? null : node);
+  syncAll();
+}
+
+// --- Syncing -----------------------------------------------------------------------
+
+/** Colours, the activate buttons, every Select's combo and the before badge. */
 function syncAll() {
   const root = rootGraph();
   if (!root) return;
   const sends = collectSends(root);
   settleActive(sends);
-  for (const s of sends) markActive(s.node, s.active);
+  const line = activeLine(sends);
+  for (const s of sends) {
+    paint(s.node, s.active);
+    s.node._warpActivate?.update(s.active, line);
+  }
   const active = sends.find((s) => s.active);
   const name = active ? active.name : "";
-  for (const node of nodesOfType(root, RESULT_ID)) {
-    const widget = hideTarget(node);
-    if (widget && widget.value !== name) widget.value = name;
-  }
+  const ok = validateRoute(sends).ok;
   for (const node of nodesOfType(root, SELECT_ID)) {
+    paint(node, ok);
     const widget = widgetNamed(node, "active");
     if (widget) widget.value = name;
   }
+  syncBefore(root);
   redraw();
 }
 
+// Loads and pastes add many nodes in one tick; one sync after them is enough.
+let syncPending = false;
+
 function syncSoon() {
-  setTimeout(syncAll, 0);
+  if (syncPending) return;
+  syncPending = true;
+  setTimeout(() => {
+    syncPending = false;
+    syncAll();
+  }, 0);
 }
 
 function activateNode(node) {
@@ -191,6 +243,98 @@ function goToActive() {
   }, 0);
 }
 
+// --- The activate button -----------------------------------------------------------
+
+const BUTTON_H = 3 * (window.LiteGraph?.NODE_WIDGET_HEIGHT ?? 20);
+const LINE_H = 18;
+const GAP = 4;
+const ACTIVATE_H = BUTTON_H + GAP + LINE_H;
+
+const BUTTON_UP = {
+  background: "#333",
+  color: "#eee",
+  border: "1px solid #555",
+  boxShadow: "0 2px 0 #111",
+  transform: "none",
+  cursor: "pointer",
+};
+const BUTTON_DOWN = {
+  background: "#17462a",
+  color: "#cfe9d7",
+  border: "1px solid #2a5",
+  boxShadow: "inset 0 3px 6px rgba(0,0,0,0.6)",
+  transform: "translateY(1px)",
+  cursor: "default",
+};
+
+/**
+ * The big "activate" button and, on an inactive Send, the line naming the
+ * active one. A DOM widget, so it looks and sizes the same in both renderers.
+ */
+function addActivate(node) {
+  const root = document.createElement("div");
+  Object.assign(root.style, {
+    display: "flex",
+    flexDirection: "column",
+    gap: `${GAP}px`,
+    width: "100%",
+    height: `${ACTIVATE_H}px`,
+    boxSizing: "border-box",
+  });
+  const button = document.createElement("button");
+  button.type = "button";
+  Object.assign(button.style, {
+    flex: `0 0 ${BUTTON_H}px`,
+    width: "100%",
+    padding: "0",
+    borderRadius: "6px",
+    font: "bold 18px sans-serif",
+    ...BUTTON_UP,
+  });
+  button.textContent = ACTIVATE_LABEL;
+  const line = document.createElement("div");
+  Object.assign(line.style, {
+    flex: `0 0 ${LINE_H}px`,
+    lineHeight: `${LINE_H}px`,
+    font: "13px sans-serif",
+    color: "#ddd",
+    textAlign: "center",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  });
+  root.append(button, line);
+
+  let isActive = false;
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (!isActive) activateNode(node);
+  });
+  forwardToCanvas(root, () => app.canvas?.canvas ?? null);
+
+  const widget = node.addDOMWidget("warp_activate", "warp-activate", root, {
+    serialize: false,
+    hideOnZoom: false,
+    getMinHeight: () => ACTIVATE_H,
+    getMaxHeight: () => ACTIVATE_H,
+  });
+  widget.serialize = false;
+
+  node._warpActivate = {
+    widget,
+    update(active, text) {
+      isActive = active;
+      const label = active ? ACTIVE_LABEL : ACTIVATE_LABEL;
+      if (button.textContent !== label) button.textContent = label;
+      Object.assign(button.style, active ? BUTTON_DOWN : BUTTON_UP);
+      button.setAttribute("aria-pressed", String(active));
+      line.textContent = active ? "" : text;
+      line.style.visibility = active ? "hidden" : "visible";
+    },
+  };
+  return node._warpActivate;
+}
+
 // --- The result compare widget -----------------------------------------------
 
 const COMPARE_ID = "Warp Compare";
@@ -205,11 +349,10 @@ function addCompare(node) {
   return node._warpCompare;
 }
 
-// Send name -> {first, final} image refs of its last result. Kept for this
-// page only: the temp files are gone after a ComfyUI restart anyway, and a
-// result is not an edit, so it must not mark the workflow modified or add an
-// undo step. Keyed by name because that is how a Warp Result names its Send; a
-// renamed Send shows whatever its new name last produced.
+// Send name -> {promptId, before, final} image refs of its last run. Kept for
+// this page only: the temp files are gone after a ComfyUI restart anyway, and
+// a result is not an edit, so it must not mark the workflow modified or add an
+// undo step. A renamed Send shows whatever its new name last produced.
 const results = new Map();
 
 /** Show the last result for the Send's current name, or "no result yet". */
@@ -217,7 +360,7 @@ function showResult(node) {
   const compare = node?._warpCompare;
   if (!compare) return;
   const result = results.get(widgetNamed(node, "name")?.value);
-  if (result) compare.setPairs(result.first, result.final);
+  if (result) compare.setPairs(result.before, result.final);
   else compare.setPairs([], []);
 }
 
@@ -228,7 +371,7 @@ function drawPreviewInto(sendNode, img) {
   sendNode._warpCompare?.setLive(img ?? null);
 }
 
-// --- Live sampling preview -----------------------------------------------------
+// --- Live sampling preview and results -------------------------------------------
 
 // prompt id -> the Send that was active when that prompt was submitted.
 const trackedPrompts = new Map();
@@ -279,6 +422,30 @@ function endPrompt(promptId) {
   old?.close?.();
 }
 
+/** A tracked prompt's Save Image (final) or marked node (before) has run. */
+function takeResult(detail) {
+  const promptId = detail?.prompt_id;
+  const send = trackedPrompts.get(promptId);
+  if (!send) return;
+  const root = rootGraph();
+  if (!root) return;
+  const node = nodeByExecutionId(root, detail.display_node) ?? nodeByExecutionId(root, detail.node);
+  const role = resultRole(node);
+  if (!role) return;
+  const name = widgetNamed(send, "name")?.value;
+  let entry = results.get(name);
+  // A new run starts blank: a side it does not produce stays empty.
+  if (!entry || entry.promptId !== promptId) entry = { promptId, before: [], final: [] };
+  entry[role] = imageRefs(outputImages(detail.output));
+  results.set(name, entry);
+  if (role === "final") {
+    const old = send._warpPreview;
+    drawPreviewInto(send, null);
+    old?.close?.();
+  }
+  showResult(send);
+}
+
 function setupPreviewMirror() {
   // queuePrompt answers with a boolean; the prompt id only comes back from the API call.
   const originalQueue = api.queuePrompt;
@@ -300,6 +467,7 @@ function setupPreviewMirror() {
     const last = [...trackedPrompts.keys()].pop();
     if (last) showFrame(last, detail);
   });
+  api.addEventListener("executed", ({ detail }) => takeResult(detail));
   for (const type of ["execution_success", "execution_error", "execution_interrupted"]) {
     api.addEventListener(type, ({ detail }) => endPrompt(detail?.prompt_id));
   }
@@ -317,6 +485,27 @@ function wrap(proto, method, after) {
     after.apply(this, args);
     return result;
   };
+}
+
+/** Call syncSoon whenever a Send's mode is set (mute, bypass, back on). */
+function hookMode(proto) {
+  let owner = proto;
+  let desc;
+  while (owner && !(desc = Object.getOwnPropertyDescriptor(owner, "mode"))) {
+    owner = Object.getPrototypeOf(owner);
+  }
+  if (!desc?.get || !desc?.set) return;
+  Object.defineProperty(proto, "mode", {
+    configurable: true,
+    enumerable: desc.enumerable,
+    get() {
+      return desc.get.call(this);
+    },
+    set(value) {
+      desc.set.call(this, value);
+      syncSoon();
+    },
+  });
 }
 
 function setupSend(nodeType) {
@@ -343,10 +532,7 @@ function setupSend(nodeType) {
       };
     }
 
-    const button = this.addWidget("button", ACTIVATE_LABEL, null, () => activateNode(this), {
-      serialize: false,
-    });
-    if (button) button.serialize = false;
+    addActivate(this);
     addCompare(this);
     this.setSize([...DEFAULT_SIZE]);
   });
@@ -378,6 +564,13 @@ function setupSend(nodeType) {
   wrap(proto, "onRemoved", function () {
     syncSoon();
   });
+
+  // A warp link added or removed, or the Send muted, changes whether the
+  // route is valid, and with it the Select's colour.
+  wrap(proto, "onConnectionsChange", function () {
+    syncSoon();
+  });
+  hookMode(proto);
 }
 
 function setupCompare(nodeType) {
@@ -389,18 +582,6 @@ function setupCompare(nodeType) {
   // Its output is {a: [ref…], b: [ref…]}, one temp image per batch item.
   wrap(proto, "onExecuted", function (output) {
     this._warpCompare?.setPairs(output?.a, output?.b);
-  });
-}
-
-function setupResult(nodeType) {
-  const proto = nodeType.prototype;
-  wrap(proto, "onNodeCreated", function () {
-    hideTarget(this);
-    syncSoon();
-  });
-  wrap(proto, "onConfigure", function () {
-    hideTarget(this);
-    syncSoon();
   });
 }
 
@@ -482,30 +663,27 @@ app.registerExtension({
         warn(error);
         return false;
       }
-      // The Result's target goes into the prompt; make sure it names this Send.
       syncAll();
       return original.apply(this, args);
     };
 
     setupPreviewMirror();
+  },
 
-    api.addEventListener("executed", ({ detail }) => {
-      const output = detail?.output;
-      if (!output || !Array.isArray(output.target)) return;
-      if (!("first" in output) && !("final" in output)) return;
-      const name = output.target[0];
-      if (typeof name !== "string" || name === "") return;
-      const root = rootGraph();
-      if (!root) return;
-      const send = collectSends(root).find((s) => s.name === name);
-      if (!send) return;
-      results.set(name, { first: imageRefs(output.first), final: imageRefs(output.final) });
-      const node = send.node;
-      const old = node._warpPreview;
-      drawPreviewInto(node, null);
-      old?.close?.();
-      showResult(node);
-    });
+  // Any node can give the before image; only one carries the mark at a time.
+  getNodeMenuItems(node) {
+    if (!node) return [];
+    const marked = node.properties?.[BEFORE_PROP] === true;
+    return [{ content: marked ? UNMARK_LABEL : MARK_LABEL, callback: () => toggleBefore(node) }];
+  },
+
+  // A pasted or loaded node may carry the mark; its badge follows in syncAll.
+  nodeCreated() {
+    syncSoon();
+  },
+
+  async afterConfigureGraph() {
+    syncSoon();
   },
 
   registerCustomNodes() {
@@ -515,6 +693,5 @@ app.registerExtension({
   async beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData.name === SEND_ID) setupSend(nodeType);
     else if (nodeData.name === COMPARE_ID) setupCompare(nodeType);
-    else if (nodeData.name === RESULT_ID) setupResult(nodeType);
   },
 });

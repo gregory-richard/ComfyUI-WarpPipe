@@ -82,3 +82,102 @@ export function activate(sends, node) {
 export function sortedNames(sends) {
   return [...sends].sort((a, b) => a.index - b.index).map((s) => s.name);
 }
+
+// --- Results, the before mark and colours ------------------------------------
+
+export const SAVE_IMAGE_ID = "Save Image Civitai";
+export const BEFORE_PROP = "warpBefore";
+
+export const GREEN = { color: "#2a5", bgcolor: "#1b3d26" };
+export const RED = { color: "#a33", bgcolor: "#3d1b1b" };
+
+/** The colours a Send or a Select shows: green when `ok`, red otherwise. */
+export function stateColors(ok) {
+  return ok ? GREEN : RED;
+}
+
+/** The line an inactive Send shows under its button. */
+export function activeLine(sends) {
+  const active = sends.find((s) => s.active);
+  return `active: ${active ? active.name : "none"}`;
+}
+
+/**
+ * What a node's `executed` output is for the active Send: "before" for the
+ * marked node, "final" for Save Image (Civitai), otherwise null. The mark
+ * wins, so a marked Save Image gives the before side.
+ */
+export function resultRole(node) {
+  if (!node) return null;
+  if (node.properties?.[BEFORE_PROP] === true) return "before";
+  const type = node.comfyClass ?? node.type;
+  if (type === SAVE_IMAGE_ID || node.type === SAVE_IMAGE_ID) return "final";
+  return null;
+}
+
+function isRefList(value) {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((ref) => ref && typeof ref.filename === "string")
+  );
+}
+
+/** The images in an `executed` output: `images`, or else the first list of image refs. */
+export function outputImages(output) {
+  if (!output || typeof output !== "object") return [];
+  if (isRefList(output.images)) return output.images;
+  for (const value of Object.values(output)) if (isRefList(value)) return value;
+  return [];
+}
+
+function nodeIn(graph, id) {
+  return (graph?._nodes ?? []).find((node) => String(node.id) === id) ?? null;
+}
+
+/**
+ * The node an execution id names. Inside subgraphs the id is a path,
+ * "outer:inner:node", one subgraph node id per level.
+ */
+export function nodeByExecutionId(rootGraph, id) {
+  if (id == null || id === "") return null;
+  const parts = String(id).split(":");
+  let graph = rootGraph;
+  let node = null;
+  for (const part of parts) {
+    node = nodeIn(graph, part);
+    if (!node) return null;
+    graph = node.subgraph;
+  }
+  return node;
+}
+
+/** Every node in the graph and in the subgraphs inside it. */
+export function allNodes(graph, out = [], seen = new Set()) {
+  if (!graph || seen.has(graph)) return out;
+  seen.add(graph);
+  for (const node of graph._nodes ?? []) {
+    out.push(node);
+    if (node.subgraph) allNodes(node.subgraph, out, seen);
+  }
+  return out;
+}
+
+/** Make `target` the only node marked as the before image; null clears the mark. */
+export function markBefore(rootGraph, target) {
+  for (const node of allNodes(rootGraph)) {
+    if (node === target) {
+      node.properties = node.properties ?? {};
+      node.properties[BEFORE_PROP] = true;
+    } else if (node.properties && BEFORE_PROP in node.properties) {
+      delete node.properties[BEFORE_PROP];
+    }
+  }
+}
+
+/** Keep at most one mark (a paste copies it): the first node found keeps it. */
+export function settleBefore(rootGraph) {
+  const marked = allNodes(rootGraph).filter((n) => n.properties?.[BEFORE_PROP] === true);
+  if (marked.length > 1) markBefore(rootGraph, marked[0]);
+  return marked[0] ?? null;
+}
