@@ -1,6 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { activate, collectSends, sortedNames, validateRoute } from "./warp_route.js";
+import { addCompareWidget, imageRefs } from "./compare_widget.js";
 
 // The hub: every model group ends in a Warp Send, one Warp Select hands the
 // active Send's warp to the shared Generate, and the Warp Result at the end
@@ -20,12 +21,6 @@ const ACTIVE_COLOR = "#2a5";
 const DEFAULT_SIZE = [520, 860];
 const ACTIVATE_LABEL = "activate";
 const GO_TO_LABEL = "go to active group";
-const NO_RESULT = "no result yet";
-
-const SLIDER_MIN_H = 240;
-const SLIDER_PAD = 10;
-const BAR_H = 24;
-const ARROW_W = 32;
 
 function rootGraph() {
   return app.rootGraph ?? app.graph ?? null;
@@ -196,33 +191,18 @@ function goToActive() {
   }, 0);
 }
 
-// --- The result slider -------------------------------------------------------
+// --- The result compare widget -----------------------------------------------
 
-function viewURL(ref) {
-  const params = new URLSearchParams({
-    filename: ref.filename,
-    subfolder: ref.subfolder ?? "",
-    type: ref.type ?? "temp",
+const COMPARE_ID = "Warp Compare";
+const COMPARE_SIZE = [400, 480];
+const COMPARE_WIDGET = "warp_compare";
+
+function addCompare(node) {
+  node._warpCompare = addCompareWidget(node, COMPARE_WIDGET, {
+    apiURL: (path) => api.apiURL(path),
+    getCanvas: () => app.canvas?.canvas ?? null,
   });
-  return api.apiURL(`/view?${params}`);
-}
-
-function imageRefs(list) {
-  return (Array.isArray(list) ? list : [])
-    .filter((ref) => ref && typeof ref.filename === "string")
-    .map((ref) => ({ filename: ref.filename, subfolder: ref.subfolder ?? "", type: ref.type }));
-}
-
-function loadImage(node, ref) {
-  const img = new Image();
-  img.onload = () => node.setDirtyCanvas?.(true, false);
-  // The temp files are gone after a ComfyUI restart; the slider then says so.
-  img.onerror = () => {
-    img._warpFailed = true;
-    node.setDirtyCanvas?.(true, false);
-  };
-  img.src = viewURL(ref);
-  return img;
+  return node._warpCompare;
 }
 
 // Send name -> {first, final} image refs of its last result. Kept for this
@@ -232,180 +212,20 @@ function loadImage(node, ref) {
 // renamed Send shows whatever its new name last produced.
 const results = new Map();
 
-/** The loaded images for the node's last result, rebuilt when it changes. */
-function resultImages(node) {
-  const name = widgetNamed(node, "name")?.value;
-  const result = results.get(name);
-  const key = result ? JSON.stringify([name, result]) : "";
-  if (node._warpImages?.key !== key) {
-    node._warpImages = {
-      key,
-      first: imageRefs(result?.first).map((ref) => loadImage(node, ref)),
-      final: imageRefs(result?.final).map((ref) => loadImage(node, ref)),
-    };
-  }
-  return node._warpImages;
+/** Show the last result for the Send's current name, or "no result yet". */
+function showResult(node) {
+  const compare = node?._warpCompare;
+  if (!compare) return;
+  const result = results.get(widgetNamed(node, "name")?.value);
+  if (result) compare.setPairs(result.first, result.final);
+  else compare.setPairs([], []);
 }
 
-function imageSize(img) {
-  const w = img?.naturalWidth ?? img?.width ?? 0;
-  const h = img?.naturalHeight ?? img?.height ?? 0;
-  if (img instanceof HTMLImageElement && !img.complete) return null;
-  return w > 0 && h > 0 ? [w, h] : null;
-}
-
-/** Draw `img` as large as it fits in `rect`, centred. False if not ready. */
-function drawFit(ctx, img, rect) {
-  const size = imageSize(img);
-  if (!size) return false;
-  const scale = Math.min(rect.w / size[0], rect.h / size[1]);
-  const w = size[0] * scale;
-  const h = size[1] * scale;
-  ctx.drawImage(img, rect.x + (rect.w - w) / 2, rect.y + (rect.h - h) / 2, w, h);
-  return true;
-}
-
-function drawCentredText(ctx, text, rect) {
-  ctx.fillStyle = "#888";
-  ctx.font = "14px sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(text, rect.x + rect.w / 2, rect.y + rect.h / 2);
-}
-
-function inRect(pos, rect) {
-  return (
-    rect &&
-    pos[0] >= rect.x &&
-    pos[0] <= rect.x + rect.w &&
-    pos[1] >= rect.y &&
-    pos[1] <= rect.y + rect.h
-  );
-}
-
-function drawBar(ctx, layout, pair, pairs) {
-  const { prev, next, bar } = layout;
-  ctx.fillStyle = "#2a2a2a";
-  for (const box of [prev, next]) ctx.fillRect(box.x, box.y, box.w, box.h);
-  ctx.fillStyle = "#ddd";
-  ctx.font = "14px sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("◀", prev.x + prev.w / 2, prev.y + prev.h / 2);
-  ctx.fillText("▶", next.x + next.w / 2, next.y + next.h / 2);
-  ctx.fillText(`${pair + 1}/${pairs}`, bar.x + bar.w / 2, bar.y + bar.h / 2);
-}
-
-function drawPair(ctx, node, a, b, rect) {
-  const split = rect.x + rect.w * (node._warpSplit ?? 0.5);
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(rect.x, rect.y, split - rect.x, rect.h);
-  ctx.clip();
-  const drewA = drawFit(ctx, a, rect);
-  ctx.restore();
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(split, rect.y, rect.x + rect.w - split, rect.h);
-  ctx.clip();
-  const drewB = drawFit(ctx, b, rect);
-  ctx.restore();
-  if (!drewA && !drewB) {
-    drawCentredText(ctx, a?._warpFailed || b?._warpFailed ? NO_RESULT : "…", rect);
-    return;
-  }
-  ctx.strokeStyle = "#fff";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(split, rect.y);
-  ctx.lineTo(split, rect.y + rect.h);
-  ctx.stroke();
-  ctx.fillStyle = "rgba(0,0,0,0.55)";
-  ctx.fillRect(rect.x + 4, rect.y + 4, 18, 18);
-  ctx.fillRect(rect.x + rect.w - 22, rect.y + 4, 18, 18);
-  ctx.fillStyle = "#fff";
-  ctx.font = "12px sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("A", rect.x + 13, rect.y + 13);
-  ctx.fillText("B", rect.x + rect.w - 13, rect.y + 13);
-}
-
-function drawSlider(ctx, node, widget, width, y) {
-  const height = widget.computedHeight ?? SLIDER_MIN_H;
-  const images = resultImages(node);
-  const pairs = Math.min(images.first.length, images.final.length);
-  const preview = node._warpPreview ?? null;
-  const showBar = !preview && pairs > 1;
-
-  const area = { x: SLIDER_PAD, y: y + 2, w: width - 2 * SLIDER_PAD, h: height - 8 };
-  const bar = { x: area.x, y: area.y, w: area.w, h: showBar ? BAR_H : 0 };
-  const rect = { x: area.x, y: area.y + bar.h, w: area.w, h: Math.max(10, area.h - bar.h) };
-  const layout = {
-    rect,
-    bar,
-    prev: showBar ? { x: bar.x, y: bar.y + 2, w: ARROW_W, h: BAR_H - 6 } : null,
-    next: showBar ? { x: bar.x + bar.w - ARROW_W, y: bar.y + 2, w: ARROW_W, h: BAR_H - 6 } : null,
-    pairs,
-  };
-  widget._warpLayout = layout;
-
-  ctx.save();
-  ctx.fillStyle = "#111";
-  ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
-
-  if (preview) {
-    if (!drawFit(ctx, preview, rect)) drawCentredText(ctx, "…", rect);
-  } else if (pairs > 0) {
-    const pair = Math.min(node._warpPair ?? 0, pairs - 1);
-    node._warpPair = pair;
-    if (showBar) drawBar(ctx, layout, pair, pairs);
-    drawPair(ctx, node, images.first[pair], images.final[pair], rect);
-  } else {
-    // Only one side came back (one input of the Result left empty): show it.
-    const single = images.final[0] ?? images.first[0];
-    if (!single || !drawFit(ctx, single, rect)) drawCentredText(ctx, NO_RESULT, rect);
-  }
-  ctx.restore();
-}
-
-function sliderMouse(event, pos, node, widget) {
-  if (event.type !== "pointerdown" && event.type !== "mousedown") return false;
-  const layout = widget._warpLayout;
-  if (!layout || layout.pairs < 2) return false;
-  const step = inRect(pos, layout.prev) ? -1 : inRect(pos, layout.next) ? 1 : 0;
-  if (!step) return false;
-  node._warpPair = ((node._warpPair ?? 0) + step + layout.pairs) % layout.pairs;
-  node.setDirtyCanvas?.(true, false);
-  return true;
-}
-
-function makeSlider() {
-  return {
-    type: "warppipe_result_slider",
-    name: "warp_result",
-    value: null,
-    serialize: false,
-    options: { serialize: false },
-    // No computeSize: the frontend then gives this widget whatever height the
-    // node has left, and uses that height for drawing and for hit testing.
-    computeLayoutSize() {
-      return { minHeight: SLIDER_MIN_H, maxHeight: 1e6, minWidth: 120 };
-    },
-    draw(ctx, node, width, y) {
-      drawSlider(ctx, node, this, width, y);
-    },
-    mouse(event, pos, node) {
-      return sliderMouse(event, pos, node, this);
-    },
-  };
-}
-
-/** Show `img` full size in the Send's slider until the next result, or clear it. */
+/** Show `img` full size in the Send's compare widget until the next result, or clear it. */
 function drawPreviewInto(sendNode, img) {
   if (!sendNode) return;
   sendNode._warpPreview = img ?? null;
-  sendNode.setDirtyCanvas?.(true, false);
+  sendNode._warpCompare?.setLive(img ?? null);
 }
 
 // --- Live sampling preview -----------------------------------------------------
@@ -514,9 +334,11 @@ function setupSend(nodeType) {
         continue;
       }
       const prior = widget.callback;
+      const node = this;
       widget.callback = function (...args) {
         const result = prior?.apply(this, args);
         if (!app.configuringGraph) syncAll();
+        if (name === "name") showResult(node);
         return result;
       };
     }
@@ -525,7 +347,7 @@ function setupSend(nodeType) {
       serialize: false,
     });
     if (button) button.serialize = false;
-    this.addCustomWidget(makeSlider());
+    addCompare(this);
     this.setSize([...DEFAULT_SIZE]);
   });
 
@@ -539,6 +361,7 @@ function setupSend(nodeType) {
   });
 
   wrap(proto, "onConfigure", function () {
+    showResult(this);
     syncSoon();
   });
 
@@ -555,14 +378,17 @@ function setupSend(nodeType) {
   wrap(proto, "onRemoved", function () {
     syncSoon();
   });
+}
 
-  // The split between A and B follows the pointer while it is over the image.
-  wrap(proto, "onMouseMove", function (_event, pos) {
-    const slider = widgetNamed(this, "warp_result");
-    const rect = slider?._warpLayout?.rect;
-    if (!rect || !inRect(pos, rect)) return;
-    this._warpSplit = Math.min(1, Math.max(0, (pos[0] - rect.x) / rect.w));
-    this.setDirtyCanvas?.(true, false);
+function setupCompare(nodeType) {
+  const proto = nodeType.prototype;
+  wrap(proto, "onNodeCreated", function () {
+    addCompare(this);
+    this.setSize([...COMPARE_SIZE]);
+  });
+  // Its output is {a: [ref…], b: [ref…]}, one temp image per batch item.
+  wrap(proto, "onExecuted", function (output) {
+    this._warpCompare?.setPairs(output?.a, output?.b);
   });
 }
 
@@ -675,10 +501,10 @@ app.registerExtension({
       if (!send) return;
       results.set(name, { first: imageRefs(output.first), final: imageRefs(output.final) });
       const node = send.node;
-      node._warpPreview?.close?.();
-      node._warpPreview = null;
-      node._warpPair = 0;
-      node.setDirtyCanvas?.(true, true);
+      const old = node._warpPreview;
+      drawPreviewInto(node, null);
+      old?.close?.();
+      showResult(node);
     });
   },
 
@@ -688,6 +514,7 @@ app.registerExtension({
 
   async beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData.name === SEND_ID) setupSend(nodeType);
+    else if (nodeData.name === COMPARE_ID) setupCompare(nodeType);
     else if (nodeData.name === RESULT_ID) setupResult(nodeType);
   },
 });
