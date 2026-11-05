@@ -20,7 +20,19 @@ NODE_IDS = {
     "Dead End",
     "Save Image Civitai",
     "Warp Lora Prompt",
+    "Warp Send",
+    "Warp Result",
 }
+
+
+class FakeTensor:
+    """A batch that only knows its shape; Warp Result's saving is faked."""
+
+    def __init__(self, shape):
+        self.shape = tuple(shape)
+
+    def __len__(self):
+        return self.shape[0]
 
 
 class _Pixels:
@@ -87,6 +99,12 @@ def test_legacy_registration_and_node_contracts(warp_pipe):
         assert len(node_class.RETURN_TYPES) == len(node_class.RETURN_NAMES)
 
     assert warp_pipe.DeadEnd().dead_end() == ()
+    assert warp_pipe.NODE_DISPLAY_NAME_MAPPINGS["Warp Send"] == "🌀 Warp Send"
+    assert warp_pipe.NODE_DISPLAY_NAME_MAPPINGS["Warp Result"] == "🌀 Warp Result"
+    assert warp_pipe.WarpResult.OUTPUT_NODE is True
+    assert warp_pipe.WarpResult.RETURN_TYPES == ()
+    assert not getattr(warp_pipe.WarpSend, "OUTPUT_NODE", False)
+    assert warp_pipe.WarpSend.RETURN_NAMES == ("warp", "index")
 
 
 def test_custom_validation_only_bypasses_link_type_checks(warp_pipe):
@@ -1756,3 +1774,78 @@ def test_the_package_ships_every_file_the_frontend_needs():
             f"{path} is in web/ but no package-data glob matches it, "
             f"so it will be missing from the built wheel"
         )
+
+
+# --- Warp Send / Warp Result ------------------------------------------------
+
+
+def _fake_previews(monkeypatch, warp_pipe):
+    def fake(images, prefix):
+        return [
+            {"filename": f"{prefix}_{i}.png", "subfolder": "", "type": "temp"}
+            for i in range(images.shape[0])
+        ]
+
+    monkeypatch.setattr(warp_pipe, "save_temp_previews", fake)
+
+
+def test_warp_send_passes_warp_and_index_through(warp_pipe):
+    warp = object()
+
+    assert warp_pipe.WarpSend().passthrough(warp, 7, "Krea 2") == (warp, 7)
+
+
+def test_warp_result_payload_has_target_and_both_lists(warp_pipe, monkeypatch):
+    _fake_previews(monkeypatch, warp_pipe)
+
+    result = warp_pipe.WarpResult().show(
+        first=FakeTensor((2, 8, 8, 3)), final=FakeTensor((2, 8, 8, 3)), target="Krea 2"
+    )
+
+    ui = result["ui"]
+    assert len(ui["first"]) == 2
+    assert len(ui["final"]) == 2
+    assert ui["target"] == ["Krea 2"]
+    assert ui["first"][0]["type"] == "temp"
+
+
+def test_warp_result_mismatched_batches(warp_pipe, monkeypatch):
+    _fake_previews(monkeypatch, warp_pipe)
+
+    ui = warp_pipe.WarpResult().show(
+        first=FakeTensor((1, 8, 8, 3)), final=FakeTensor((2, 8, 8, 3)), target="A"
+    )["ui"]
+
+    assert len(ui["first"]) == 1
+    assert len(ui["final"]) == 2
+
+
+def test_warp_result_empty_target_still_saves(warp_pipe, monkeypatch):
+    _fake_previews(monkeypatch, warp_pipe)
+
+    ui = warp_pipe.WarpResult().show(
+        first=FakeTensor((1, 8, 8, 3)), final=FakeTensor((1, 8, 8, 3)), target=""
+    )["ui"]
+
+    assert len(ui["first"]) == 1 and len(ui["final"]) == 1
+    assert ui["target"] == [""]
+
+
+def test_warp_result_missing_image_gives_an_empty_list(warp_pipe, monkeypatch):
+    _fake_previews(monkeypatch, warp_pipe)
+
+    ui = warp_pipe.WarpResult().show(final=FakeTensor((1, 8, 8, 3)))["ui"]
+
+    assert ui["first"] == []
+    assert len(ui["final"]) == 1
+
+
+def test_the_v3_send_and_result_nodes_match_the_legacy_ones(warp_pipe_loader, monkeypatch):
+    warp_pipe = warp_pipe_loader(enable_v3=True)
+    _fake_previews(monkeypatch, warp_pipe)
+
+    warp = object()
+    assert tuple(warp_pipe.WarpSendV3.execute(warp=warp, index=3, name="x")) == (warp, 3)
+    output = warp_pipe.WarpResultV3.execute(final=FakeTensor((1, 8, 8, 3)), target="T")
+    assert output.metadata["ui"]["target"] == ["T"]
+    assert warp_pipe.WarpResultV3.GET_SCHEMA().metadata["is_output_node"] is True
