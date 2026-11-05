@@ -415,3 +415,10 @@ def test_handle_write_refuses_traversal_and_non_image_reference(tmp_path):
     for ref in ("../secret.txt", "C:/x.png", "/etc/x.png", "secret.txt"):
         out = pw.handle_write({**base, "reference": ref}, **kwargs)
         assert "error" in out, ref
+
+
+def test_handle_models_needs_no_key(server, tmp_path):
+    server.replies.append((200, {"data": [{"id": "m"}]}))
+    out = pw.handle_models(server.url, True, env={}, key_file=tmp_path / "none.json")
+    assert out == {"models": [{"id": "m", "name": "m", "prompt_price": None,
+                               "completion_price": None, "vision": False}]}

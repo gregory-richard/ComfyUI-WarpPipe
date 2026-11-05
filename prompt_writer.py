@@ -355,7 +355,8 @@ def _key_or_error(base_url: str, env, key_file) -> Optional[str]:
 def handle_models(base_url: str, refresh: bool, *, env, key_file, opener=urllib.request.urlopen) -> dict:
     base_url = (base_url or DEFAULT_BASE_URL).strip()
     try:
-        key = _key_or_error(base_url, env, key_file)
+        check_url(base_url)
+        key = key_for(base_url, env, key_file)  # the list works without a key
         return {"models": list_models(base_url, api_key=key, refresh=refresh, opener=opener)}
     except PromptWriterError as exc:
         return {"error": str(exc)}
