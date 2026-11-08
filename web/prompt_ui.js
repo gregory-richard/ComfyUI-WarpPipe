@@ -7,6 +7,7 @@ import {
   fitsBase,
   forgetBases,
 } from "./model_base.js";
+import { writeButtonFor } from "./prompt_writer.js";
 import { escapeAttr, escapeHTML, stemOf } from "./text.js";
 import { keepWidgetValuesByName } from "./widget_values.js";
 
@@ -2040,6 +2041,10 @@ app.registerExtension({
         box.grip = grip;
       }
       if (box.grip.parentElement !== holder) holder.appendChild(box.grip);
+      if (box === prompt) {
+        const write = writeButtonFor(node);
+        if (write.parentElement !== holder) holder.appendChild(write);
+      }
     };
 
     /** Give a widget a fixed height, or no room at all to hide it.
