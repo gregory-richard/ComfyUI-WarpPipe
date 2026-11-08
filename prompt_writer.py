@@ -34,6 +34,8 @@ CHAT_TIMEOUT = 180
 MODELS_TIMEOUT = 30
 MODELS_TTL = 3600
 DEFAULT_TEMPERATURE = 0.6
+MAX_REFERENCES = 8
+IMPROVE_REQUEST = "Improve this prompt. Keep what it describes."
 
 
 def _read_version() -> str:
@@ -250,18 +252,17 @@ def read_system_prompt(folder: Optional[str], name: str) -> str:
 
 
 def build_messages(
-    system: str, idea: str, previous_result: Optional[str], image_data_url: Optional[str]
+    system: str, idea: str, previous_result: Optional[str], image_data_urls: list
 ) -> list:
     messages = [{"role": "system", "content": system}]
     if previous_result:
         messages.append({"role": "assistant", "content": previous_result})
-    if image_data_url:
-        content = [
-            {"type": "text", "text": idea},
-            {"type": "image_url", "image_url": {"url": image_data_url}},
-        ]
+    text = IMPROVE_REQUEST if previous_result and not idea else idea
+    if image_data_urls:
+        content = [{"type": "text", "text": text}]
+        content += [{"type": "image_url", "image_url": {"url": url}} for url in image_data_urls]
     else:
-        content = idea
+        content = text
     messages.append({"role": "user", "content": content})
     return messages
 
@@ -314,7 +315,7 @@ def write(
     temperature: float,
     idea: str,
     previous_result: Optional[str],
-    image_data_url: Optional[str],
+    image_data_urls: list,
     *,
     api_key: Optional[str],
     model: Optional[dict],
@@ -324,7 +325,7 @@ def write(
         "model": model_id,
         "temperature": temperature,
         "stream": False,
-        "messages": build_messages(system, idea, previous_result, image_data_url),
+        "messages": build_messages(system, idea, previous_result, image_data_urls),
     }
     start = time.monotonic()
     payload = _request(
@@ -386,6 +387,17 @@ def _image_data_url(reference: str, image_path: Callable[[str], Optional[str]]) 
     return f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
 
 
+def _reference_names(raw) -> list:
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not all(isinstance(name, str) for name in raw):
+        raise PromptWriterError("references must be a list of image names")
+    names = [name.strip() for name in raw if name.strip()]
+    if len(names) > MAX_REFERENCES:
+        raise PromptWriterError(f"At most {MAX_REFERENCES} reference images, got {len(names)}")
+    return names
+
+
 def handle_write(
     body: dict,
     *,
@@ -404,8 +416,10 @@ def handle_write(
         if not model_id:
             raise PromptWriterError("Choose a model first")
         idea = str(body.get("idea") or "").strip()
-        if not idea:
-            raise PromptWriterError("Write an idea first")
+        previous = str(body.get("previous_result") or "")
+        previous = previous if previous.strip() else None
+        if not idea and not previous:
+            raise PromptWriterError("Type an idea first")
         try:
             temperature = float(body.get("temperature", DEFAULT_TEMPERATURE))
         except (TypeError, ValueError):
@@ -414,17 +428,17 @@ def handle_write(
         system = read_system_prompt(
             (settings or {}).get(SETTING_DIR), str(body.get("system_prompt") or "")
         )
-        reference = str(body.get("reference") or "").strip()
-        image = _image_data_url(reference, image_path) if reference else None
+        images = [
+            _image_data_url(name, image_path) for name in _reference_names(body.get("references"))
+        ]
         key = _key_or_error(base_url, env, key_file)
         try:
             models = list_models(base_url, api_key=key, opener=opener)
             model = next((m for m in models if m["id"] == model_id), None)
         except PromptWriterError:
             model = None
-        previous = str(body.get("previous_result") or "") or None
         return write(
-            base_url, model_id, system, temperature, idea, previous, image,
+            base_url, model_id, system, temperature, idea, previous, images,
             api_key=key, model=model, opener=opener,
         )
     except PromptWriterError as exc:

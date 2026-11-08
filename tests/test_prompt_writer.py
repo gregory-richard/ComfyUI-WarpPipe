@@ -184,11 +184,11 @@ def test_system_prompt_files(tmp_path):
 
 
 def test_build_messages():
-    assert pw.build_messages("S", "idea", None, None) == [
+    assert pw.build_messages("S", "idea", None, []) == [
         {"role": "system", "content": "S"},
         {"role": "user", "content": "idea"},
     ]
-    m = pw.build_messages("S", "warmer light", "OLD", "data:image/png;base64,AAA")
+    m = pw.build_messages("S", "warmer light", "OLD", ["data:image/png;base64,AAA"])
     assert m[1] == {"role": "assistant", "content": "OLD"}
     assert m[2] == {
         "role": "user",
@@ -197,7 +197,23 @@ def test_build_messages():
             {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
         ],
     }
-    assert len(pw.build_messages("S", "i", "", None)) == 2
+    assert len(pw.build_messages("S", "i", "", [])) == 2
+
+
+def test_build_messages_one_part_per_image():
+    urls = ["data:image/png;base64,AAA", "data:image/jpeg;base64,BBB", "data:image/png;base64,CCC"]
+    content = pw.build_messages("S", "i", None, urls)[1]["content"]
+    assert content[0] == {"type": "text", "text": "i"}
+    assert [p["image_url"]["url"] for p in content[1:]] == urls
+    assert all(p["type"] == "image_url" for p in content[1:])
+
+
+def test_build_messages_empty_idea_improves_previous():
+    m = pw.build_messages("S", "", "OLD", [])
+    assert m[1] == {"role": "assistant", "content": "OLD"}
+    assert m[2] == {"role": "user", "content": "Improve this prompt. Keep what it describes."}
+    with_image = pw.build_messages("S", "", "OLD", ["data:image/png;base64,AAA"])[2]["content"]
+    assert with_image[0] == {"type": "text", "text": "Improve this prompt. Keep what it describes."}
 
 
 def test_parse_reply_strips_thinking():
@@ -234,7 +250,7 @@ def test_write_round_trip(server):
         )
     )
     result = pw.write(
-        server.url, "m", "S", 0.6, "idea", None, None, api_key="k", model=None
+        server.url, "m", "S", 0.6, "idea", None, [], api_key="k", model=None
     )
     req = server.requests[0]
     assert req["method"] == "POST"
@@ -255,18 +271,18 @@ def test_write_round_trip(server):
 def test_write_surfaces_provider_errors(server):
     server.replies.append((402, {"error": {"message": "Insufficient balance"}}))
     with pytest.raises(pw.PromptWriterError) as e:
-        pw.write(server.url, "m", "S", 0.6, "i", None, None, api_key="SECRETKEY", model=None)
+        pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key="SECRETKEY", model=None)
     assert str(e.value) == "Insufficient balance"
 
     server.replies.append((500, "upstream down"))
     with pytest.raises(pw.PromptWriterError) as e:
-        pw.write(server.url, "m", "S", 0.6, "i", None, None, api_key="SECRETKEY", model=None)
+        pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key="SECRETKEY", model=None)
     assert "upstream down" in str(e.value) and "500" in str(e.value)
     assert "SECRETKEY" not in str(e.value)
 
     server.replies.append((400, "echo SECRETKEY back"))
     with pytest.raises(pw.PromptWriterError) as e:
-        pw.write(server.url, "m", "S", 0.6, "i", None, None, api_key="SECRETKEY", model=None)
+        pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key="SECRETKEY", model=None)
     assert "SECRETKEY" not in str(e.value)
 
 
@@ -277,7 +293,7 @@ def test_unreachable_host_is_error():
 
 def test_foreign_host_rejected_before_request():
     with pytest.raises(pw.PromptWriterError):
-        pw.write("http://evil.example/v1", "m", "S", 0.6, "i", None, None, api_key=None, model=None)
+        pw.write("http://evil.example/v1", "m", "S", 0.6, "i", None, [], api_key=None, model=None)
 
 
 # --- Task 2 -----------------------------------------------------------------
@@ -307,7 +323,7 @@ def test_handle_write_uses_setting_folder_and_reference(server, tmp_path):
             "temperature": 0.6,
             "idea": "i",
             "previous_result": "",
-            "reference": "ref.png",
+            "references": ["ref.png"],
         },
         env={},
         key_file=_key_file(tmp_path, "LOCALKEY"),
@@ -347,13 +363,135 @@ def test_handle_write_unknown_reference_is_error(server, tmp_path):
     (tmp_path / "s.txt").write_text("SYS", encoding="utf-8")
     out = pw.handle_write(
         {"base_url": server.url, "model": "m", "system_prompt": "s.txt", "idea": "i",
-         "reference": "nope.png"},
+         "references": ["nope.png"]},
         env={}, key_file=tmp_path / "none.json",
         settings={"WarpPipe.PromptWriter.SystemPromptDir": str(tmp_path)},
         image_path=lambda name: None,
     )
     assert "error" in out and "nope.png" in out["error"]
     assert not [r for r in server.requests if r["path"].endswith("/chat/completions")]
+
+
+def _no_request(*args, **kwargs):
+    pytest.fail("no request expected")
+
+
+def _write_kwargs(tmp_path, image_path=lambda name: None, opener=_no_request):
+    (tmp_path / "s.txt").write_text("SYS", encoding="utf-8")
+    return dict(
+        env={}, key_file=tmp_path / "none.json",
+        settings={"WarpPipe.PromptWriter.SystemPromptDir": str(tmp_path)},
+        image_path=image_path, opener=opener,
+    )
+
+
+WRITE_BASE = {"base_url": "http://127.0.0.1:9/v1", "model": "m", "system_prompt": "s.txt"}
+
+
+def test_handle_write_sends_every_reference_in_order(server, tmp_path):
+    paths = {}
+    for name in ("a.png", "b.jpg", "c.gif"):
+        paths[name] = tmp_path / name
+        paths[name].write_bytes(name.encode())
+    server.replies.append((200, {"data": []}))
+    server.replies.append((200, {"choices": [{"message": {"content": "OUT"}}]}))
+    out = pw.handle_write(
+        {**WRITE_BASE, "base_url": server.url, "idea": "i", "references": ["a.png", "b.jpg", "c.gif"]},
+        **_write_kwargs(
+            tmp_path,
+            image_path=lambda name: str(paths[name]),
+            opener=pw.urllib.request.urlopen,
+        ),
+    )
+    assert out["text"] == "OUT"
+    content = server.requests[-1]["body"]["messages"][1]["content"]
+    urls = [p["image_url"]["url"] for p in content[1:]]
+    assert len(urls) == 3
+    assert urls[0].startswith("data:image/png;base64,")
+    assert urls[1].startswith("data:image/jpeg;base64,")
+    assert urls[2].startswith("data:image/gif;base64,")
+
+
+def test_handle_write_without_references_sends_plain_text(server, tmp_path):
+    server.replies.append((200, {"data": []}))
+    server.replies.append((200, {"choices": [{"message": {"content": "OUT"}}]}))
+    out = pw.handle_write(
+        {**WRITE_BASE, "base_url": server.url, "idea": "i", "references": []},
+        **_write_kwargs(tmp_path, opener=pw.urllib.request.urlopen),
+    )
+    assert out["text"] == "OUT"
+    assert server.requests[-1]["body"]["messages"][1] == {"role": "user", "content": "i"}
+
+
+def test_handle_write_refuses_more_than_eight_references(tmp_path):
+    img = tmp_path / "a.png"
+    img.write_bytes(b"x")
+    calls = []
+
+    def image_path(name):
+        calls.append(name)
+        return str(img)
+
+    out = pw.handle_write(
+        {**WRITE_BASE, "idea": "i", "references": [f"{i}.png" for i in range(9)]},
+        **_write_kwargs(tmp_path, image_path=image_path),
+    )
+    assert "8" in out["error"]
+    assert calls == []
+
+
+def test_handle_write_allows_eight_references(server, tmp_path):
+    img = tmp_path / "a.png"
+    img.write_bytes(b"x")
+    server.replies.append((200, {"data": []}))
+    server.replies.append((200, {"choices": [{"message": {"content": "OUT"}}]}))
+    out = pw.handle_write(
+        {**WRITE_BASE, "base_url": server.url, "idea": "i", "references": [f"{i}.png" for i in range(8)]},
+        **_write_kwargs(
+            tmp_path, image_path=lambda name: str(img), opener=pw.urllib.request.urlopen
+        ),
+    )
+    assert out["text"] == "OUT"
+    assert len(server.requests[-1]["body"]["messages"][1]["content"]) == 9
+
+
+@pytest.mark.parametrize("bad", ["a.png", 5, {"name": "a.png"}, [1], [None], ["a.png", {}]])
+def test_handle_write_refuses_malformed_references(tmp_path, bad):
+    out = pw.handle_write(
+        {**WRITE_BASE, "idea": "i", "references": bad}, **_write_kwargs(tmp_path)
+    )
+    assert "error" in out
+
+
+def test_handle_write_one_bad_reference_refuses_the_request(tmp_path):
+    img = tmp_path / "a.png"
+    img.write_bytes(b"x")
+    out = pw.handle_write(
+        {**WRITE_BASE, "idea": "i", "references": ["a.png", "../secret.png"]},
+        **_write_kwargs(tmp_path, image_path=lambda name: str(img)),
+    )
+    assert "secret.png" in out["error"]
+
+
+def test_handle_write_empty_idea_improves_previous(server, tmp_path):
+    server.replies.append((200, {"data": []}))
+    server.replies.append((200, {"choices": [{"message": {"content": "OUT"}}]}))
+    out = pw.handle_write(
+        {**WRITE_BASE, "base_url": server.url, "idea": "   ", "previous_result": "OLD"},
+        **_write_kwargs(tmp_path, opener=pw.urllib.request.urlopen),
+    )
+    assert out["text"] == "OUT"
+    msgs = server.requests[-1]["body"]["messages"]
+    assert msgs[1] == {"role": "assistant", "content": "OLD"}
+    assert msgs[2] == {"role": "user", "content": "Improve this prompt. Keep what it describes."}
+
+
+@pytest.mark.parametrize("previous", [None, "", "  \n "])
+def test_handle_write_empty_idea_without_previous_is_error(tmp_path, previous):
+    out = pw.handle_write(
+        {**WRITE_BASE, "idea": "", "previous_result": previous}, **_write_kwargs(tmp_path)
+    )
+    assert out == {"error": "Type an idea first"}
 
 
 def test_handle_write_foreign_host_never_gets_key(tmp_path):
@@ -413,7 +551,7 @@ def test_handle_write_refuses_traversal_and_non_image_reference(tmp_path):
         opener=lambda *a, **k: pytest.fail("no request expected"),
     )
     for ref in ("../secret.txt", "C:/x.png", "/etc/x.png", "secret.txt"):
-        out = pw.handle_write({**base, "reference": ref}, **kwargs)
+        out = pw.handle_write({**base, "references": [ref]}, **kwargs)
         assert "error" in out, ref
 
 
