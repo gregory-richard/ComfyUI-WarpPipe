@@ -54,13 +54,11 @@ const NO_BASE = "none";
 const STYLE = `
 .wpw-open {
   position: absolute; top: 4px; right: 14px; z-index: 4;
-  height: 18px; padding: 0 7px; font: 11px/16px sans-serif; cursor: pointer;
-  color: var(--input-text, #dcdcdc); background: rgba(20, 22, 24, 0.78);
-  border: 1px solid var(--border-color, #3a3a3a); border-radius: 4px; opacity: 0.72;
+  height: 26px; padding: 0 12px; font: 700 13px/24px sans-serif; cursor: pointer;
+  color: #10242b; background: #4ec8e8; border: 1px solid #4ec8e8; border-radius: 5px;
 }
-.wpw-open:hover { opacity: 1; border-color: #4ec8e8; color: #4ec8e8; }
-.wpw-open.is-writing { opacity: 1; color: #1a1a1a; background: #e8c44e; border-color: #e8c44e; }
-.wpw-open.has-unseen { opacity: 1; }
+.wpw-open:hover { background: #7bdaf2; border-color: #7bdaf2; }
+.wpw-open.is-writing { color: #1a1a1a; background: #e8c44e; border-color: #e8c44e; }
 .wpw-open.has-unseen::after {
   content: ""; position: absolute; top: -3px; right: -3px; width: 8px; height: 8px;
   border-radius: 50%; background: #5fd38a; box-shadow: 0 0 0 1px #1a1a1a;
@@ -519,7 +517,7 @@ export function writeButtonFor(node) {
   element = el("button", {
     type: "button",
     class: "wpw-open",
-    text: "Write",
+    text: "✨ AI",
     // The canvas selects and drags on the same press underneath.
     onPointerdown: (event) => event.stopPropagation(),
     onDblclick: (event) => event.stopPropagation(),

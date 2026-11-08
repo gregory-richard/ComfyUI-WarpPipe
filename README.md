@@ -100,7 +100,7 @@ Help for each: `web/docs/Warp Send.md`, `Warp Select.md`, `Warp Compare.md`.
 
 ### Writing prompts with an LLM
 
-Every **Prompt + LoRAs** has a small **Write** button on its text box. It opens
+Every **Prompt + LoRAs** has an **✨ AI** button on its text box. It opens
 a pop-up where you chat with an LLM about the prompt: say what you want, add
 images, and each answer becomes a version you can edit or continue from. **Use
 in** writes a version into a Prompt + LoRAs. Writing carries on after the pop-up

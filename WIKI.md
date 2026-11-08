@@ -651,7 +651,7 @@ is muted or bypassed — itself or a subgraph it sits in — or the active one h
 
 ### 🌀 Prompt Writer
 
-Not a node: a chat-style pop-up opened from the small **Write** button on the
+Not a node: a chat-style pop-up opened from the **✨ AI** button on the
 `text` box of every 🌀 Prompt + LoRAs. An LLM writes and rewrites an image
 prompt, and **Use in** puts a version into a Prompt + LoRAs. It lives in the
 browser (`web/prompt_writer.js`), never appears in the prompt ComfyUI receives,
