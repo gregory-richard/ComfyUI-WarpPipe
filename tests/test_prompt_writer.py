@@ -649,3 +649,12 @@ def test_system_prompts_newest_version_first(tmp_path):
         "image master prompt v1.0.txt",
         "notes.txt",
     ]
+
+
+def test_handle_system_prompt(tmp_path):
+    (tmp_path / "v2.7.txt").write_text("MASTER", encoding="utf-8")
+    settings = {"WarpPipe.PromptWriter.SystemPromptDir": str(tmp_path)}
+    assert pw.handle_system_prompt("v2.7.txt", settings) == {"name": "v2.7.txt", "text": "MASTER"}
+    assert "error" in pw.handle_system_prompt("../secret.txt", settings)
+    assert "error" in pw.handle_system_prompt("missing.txt", settings)
+    assert "SystemPromptDir" in pw.handle_system_prompt("v2.7.txt", {})["error"]

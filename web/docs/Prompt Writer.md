@@ -32,7 +32,8 @@ The newest version is open and editable; your edit is saved when you click away.
 - **Use in** — Writes the version's text, exactly as it is, into the Prompt + LoRAs chosen beside it, as one undo step. That node flashes and the pop-up closes. The list starts on the node you opened the pop-up from, and your choice applies to every card.
 - **Continue from here** — On older versions: the next **Write** builds on this one.
 - **↶ on a message** (appears on hover) — Goes back to that message: it moves into the input with its images, and it and everything after it leave the chat.
-- **Chat titles** — After the first version a cheap model names the chat (**Title model** under the gear, about 0.002 ¢ per title). A title you typed always stays; an empty field or a failure keeps the first words of your message.
+- **Chat titles** — While the first version is being written, a cheap model names the chat from your message (**Title model** under the gear, about 0.002 ¢ per title). A title you typed always stays; an empty field or a failure keeps the first words of your message.
+- **👁** — Shows the selected system prompt, read-only.
 
 A request that fails shows a red card with the message and **Retry**, and does not count as a version.
 

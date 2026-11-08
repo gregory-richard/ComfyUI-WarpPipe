@@ -140,6 +140,12 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 .wpw-option.is-current { color: var(--wpw-warp); }
 .wpw-none { padding: 8px; opacity: 0.65; }
 
+.wpw-peek { right: 14px; width: 720px; max-width: 80vw; display: flex; flex-direction: column; gap: 6px; }
+.wpw-peek-name { font-size: 12px; opacity: 0.75; }
+.wpw-peek-text {
+  max-height: 68vh; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font: 12px/1.5 ui-monospace, Consolas, monospace; user-select: text;
+}
 .wpw-gear { right: 14px; width: 320px; display: flex; flex-direction: column; gap: 8px; }
 .wpw-gear label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
 .wpw-gear .wpw-field { width: 100%; }
@@ -638,6 +644,10 @@ async function launch(chat, spec) {
   syncButton(spec.originNode);
   ticker ??= setInterval(tick, TICK_MS);
   refresh(chat.id);
+  if (!chat.versions.length && !spec.titleAsked) {
+    spec.titleAsked = true;
+    nameChat(chat, spec);
+  }
 
   let out = null;
   let message = null;
@@ -679,18 +689,21 @@ function finish(chat, spec, out) {
     seconds: out.seconds,
     usage: out.usage,
   });
+  // The first version titles the chat with its first words; a generated title wins.
+  if (spec.aiTitle) setAutoTitle(chat, spec.aiTitle);
   save();
   if (view?.chatId !== chat.id) {
     unseen.set(chat.id, spec.originNode);
     syncButton(spec.originNode);
   }
   toast("success", "Prompt ready", chat.title);
-  if (chat.versions.length === 1) nameChat(chat, spec.request || String(out.text));
 }
 
-/** Ask the cheap model for a title. On any failure the chat keeps its first words. */
-async function nameChat(chat, source) {
+/** Ask the cheap model for a title while the prompt is written. On failure the first words stay. */
+async function nameChat(chat, spec) {
   if (chat.titleEdited) return;
+  const source = spec.request || spec.payload?.previous_result || "";
+  if (!source.trim()) return;
   const model = String(getSetting(SETTING_TITLE_MODEL, DEFAULT_TITLE_MODEL)).trim();
   if (!model) return;
   let out;
@@ -708,7 +721,8 @@ async function nameChat(chat, source) {
     console.warn("[WarpPipe] chat title", out.error);
     return;
   }
-  if (!chat.versions.length || !setAutoTitle(chat, out?.title)) return;
+  spec.aiTitle = out?.title;
+  if (!setAutoTitle(chat, out?.title)) return;
   save();
   if (!view) return;
   renderRail();
@@ -1372,6 +1386,35 @@ function openPopover(anchor, root) {
   view.head.append(root);
 }
 
+let peekRun = 0;
+
+/** Show the selected system prompt, read-only. */
+async function showPeek() {
+  const name = view.prompts.value;
+  const text = el("div", { class: "wpw-peek-text", text: "Loading…" });
+  const root = el(
+    "div",
+    { class: "wpw-pop wpw-peek" },
+    el("div", { class: "wpw-peek-name", text: name }),
+    text
+  );
+  openPopover(view.eye, root);
+  const run = ++peekRun;
+  let out;
+  try {
+    out = await getJson(`/warppipe/llm/system_prompt?name=${encodeURIComponent(name)}`);
+  } catch (error) {
+    out = { error: String(error?.message ?? error) };
+  }
+  if (run !== peekRun) return;
+  text.textContent = out?.error ?? out?.text ?? "";
+}
+
+function togglePeek() {
+  if (view.popover?.anchor === view.eye) closePopover();
+  else showPeek();
+}
+
 function toggleModels() {
   if (view.popover?.anchor === view.model) {
     closePopover();
@@ -1585,8 +1628,12 @@ function buildView(promptNode) {
   const prompts = el("select", {
     class: "wpw-field wpw-prompts",
     title: "System prompt",
-    onChange: () => setSetting(SETTING_SYSTEM_PROMPT, prompts.value),
+    onChange: () => {
+      setSetting(SETTING_SYSTEM_PROMPT, prompts.value);
+      if (view.popover?.anchor === view.eye) showPeek();
+    },
   });
+  const eye = button("👁", togglePeek, "wpw-icon", "Read this system prompt");
   const gear = button("⚙", toggleGear, "wpw-icon", "Server, temperature and API key");
   const head = el(
     "div",
@@ -1594,6 +1641,7 @@ function buildView(promptNode) {
     title,
     model,
     prompts,
+    eye,
     gear,
     button("×", closeView, "wpw-icon", "Close (Esc)")
   );
@@ -1723,6 +1771,7 @@ function buildView(promptNode) {
     title,
     model,
     prompts,
+    eye,
     gear,
     chats,
     convo,

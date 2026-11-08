@@ -442,6 +442,14 @@ def handle_title(body: dict, *, env, key_file, opener=urllib.request.urlopen) ->
         return {"error": str(exc)}
 
 
+def handle_system_prompt(name: str, settings: dict) -> dict:
+    """The text of one system prompt, for reading it in the pop-up."""
+    try:
+        return {"name": name, "text": read_system_prompt((settings or {}).get(SETTING_DIR), name)}
+    except PromptWriterError as exc:
+        return {"error": str(exc)}
+
+
 def handle_system_prompts(settings: dict) -> dict:
     try:
         return {"names": system_prompt_names((settings or {}).get(SETTING_DIR))}
@@ -605,6 +613,13 @@ def register(routes, web, *, user_dir: str, settings_loader, image_path) -> None
             out = await asyncio.to_thread(save_key, key_file, base_url, key)
         except (PromptWriterError, OSError) as exc:
             return web.json_response({"error": _scrub(str(exc), key)})
+        return web.json_response(out)
+
+    @routes.get("/warppipe/llm/system_prompt")
+    async def _system_prompt(request):
+        settings = await asyncio.to_thread(settings_loader, request)
+        name = request.query.get("name", "")
+        out = await asyncio.to_thread(handle_system_prompt, name, settings)
         return web.json_response(out)
 
     @routes.get("/warppipe/llm/system_prompts")
