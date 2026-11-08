@@ -76,7 +76,6 @@ without a sidecar, and the features built on them go quiet.
 | 🌀 **Scheduler Adapter for FaceDetailer** | Maps KSampler schedulers onto FaceDetailer's set |
 | 🌀 **Warp Send** | Passes a Warp through one model group; the active Send is the one that runs, and shows the live preview and a before/after slider |
 | 🌀 **Warp Select** | Picks the model group to run from a dropdown of Sends, in the hub - no wire moved |
-| 🌀 **Prompt Writer** | Has an LLM (NanoGPT or any OpenAI-compatible server) write a prompt from an idea and your own system prompt, and puts it into the active group's Prompt + LoRAs, in the hub |
 | 🌀 **Warp Compare** | Compares a `before` (left) and an `after` (right) image with a slider that follows the mouse; arrows step through batch pairs. Replaces rgthree's Image Comparer |
 | 🚫 **Dead End** | Accepts any type, produces nothing. Parks a branch without deleting it |
 
@@ -101,15 +100,18 @@ Help for each: `web/docs/Warp Send.md`, `Warp Select.md`, `Warp Compare.md`.
 
 ### Writing prompts with an LLM
 
-Put a **Prompt Writer** in the hub, type an idea and press **write**. An LLM
-writes the prompt from your own system prompt file. **use** puts the result into
-the active group's Prompt + LoRAs, and **from prompt** copies that prompt back in
-as the idea. NanoGPT is the default; any OpenAI-compatible server (LM Studio,
-Ollama, llama.cpp) works through `base_url`. Type the API key once into the
-node's key field; it is saved in `user/warppipe_llm_keys.json` and kept across
-restarts (`NANOGPT_API_KEY` works too).
-It is never stored in a workflow or sent to the browser. Pick the system prompt
-folder in Settings → WarpPipe → Prompt Writer. Help: `web/docs/Prompt Writer.md`.
+Every **Prompt + LoRAs** has a small **Write** button on its text box. It opens
+a pop-up where you chat with an LLM about the prompt: say what you want, add
+images, and each answer becomes a version you can edit or continue from. **Use
+in** writes a version into a Prompt + LoRAs. Writing carries on after the pop-up
+is closed, and several chats can write at once. Chats are stored in the ComfyUI
+user folder, never in the workflow or in images. NanoGPT is the default; any
+OpenAI-compatible server (LM Studio, Ollama, llama.cpp) works through the base
+URL under ⚙. Type the API key once under ⚙; it is saved in
+`user/warppipe_llm_keys.json` and kept across restarts (`NANOGPT_API_KEY` works
+too). It is never stored in a workflow or sent to the browser. Pick the system
+prompt folder in Settings → WarpPipe → Prompt Writer. Help:
+`web/docs/Prompt Writer.md`.
 
 Every node carries its own help inside ComfyUI, behind the `?` on the node.
 

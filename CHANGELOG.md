@@ -6,10 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **Prompt Writer**: a hub node that has an LLM write an image prompt from an idea, an optional reference image and your own system prompt file. **write** fills `result` and shows the cost, duration and tokens (`0.3 ¢ · 8 s · 1,812 → 640 tokens`); a second click while it runs cancels. With a result already there, a change request in `idea` returns the complete updated prompt. **use** puts the result into the active Warp Send group's Prompt + LoRAs, without `//` title lines, as one undo step; **from prompt** copies that prompt into `idea`; **new** starts fresh. NanoGPT is the default, with its model list, prices and vision marks; any OpenAI-compatible server (LM Studio, Ollama, llama.cpp) works through `base_url`. Frontend only, so it never takes part in a run
-- **Keys stay on the server**: typed once into the node's key field (saved to `user/warppipe_llm_keys.json` for that host, kept across restarts, never readable from the browser), or `NANOGPT_API_KEY`. A key is sent only to its own host, so a shared workflow pointing elsewhere never receives it, and no key is ever stored in a workflow, an image or the browser
-- **Setting `WarpPipe.PromptWriter.SystemPromptDir`**: the folder of system prompts; only `.txt` files directly in it are listed
-- **Routes**: `GET /warppipe/llm/models`, `GET /warppipe/llm/system_prompts`, `POST /warppipe/llm/write`
+- **Prompt Writer**: a chat-style pop-up, opened from the small **Write** button on every Prompt + LoRAs, where an LLM writes an image prompt from your request, images and own system prompt file. Each answer is a version you can edit, continue from, or send to any Prompt + LoRAs with **Use in** as one undo step. Status shows the cost, duration and tokens (`0.3 ¢ · 8 s · 1,812 → 640 tokens`). Several chats write at once and keep going after the pop-up closes, with a yellow button, a green dot and a toast to say where they are; **Stop** cancels. Chats are stored in the ComfyUI user folder, never in a workflow or images. NanoGPT is the default, with its model list, prices and vision marks; any OpenAI-compatible server (LM Studio, Ollama, llama.cpp) works through the base URL
+- **Keys stay on the server**: typed once under ⚙ (saved to `user/warppipe_llm_keys.json` for that host, kept across restarts, never readable from the browser), or `NANOGPT_API_KEY`. A key is sent only to its own host, and no key is ever stored in a workflow, an image or the browser
+- **Settings `WarpPipe.PromptWriter.*`**: `BaseUrl`, `Model`, `SystemPrompt` and `Temperature` hold the pop-up's choices; `SystemPromptDir` is the folder of system prompts, and only `.txt` files directly in it are listed
+- **Routes**: `GET /warppipe/llm/models`, `GET /warppipe/llm/system_prompts`, `GET /warppipe/llm/key_status`, `POST /warppipe/llm/key`, `POST /warppipe/llm/write`
 
 ## [4.2.0] - 2026-11-05
 

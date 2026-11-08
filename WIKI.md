@@ -377,10 +377,10 @@ flagged safe.
 
 ## Node reference
 
-Eleven nodes (nine backend nodes plus the frontend-only Warp Select and Prompt Writer), all under **Custom/WarpPipe Nodes**. Node IDs are what saved
+Ten nodes (nine backend nodes plus the frontend-only Warp Select), all under **Custom/WarpPipe Nodes**. Node IDs are what saved
 workflows and the API use; display names are what you see on the canvas. Warp
-Select and Prompt Writer are the exceptions to the rest of this section: they exist only in the
-browser, so the backend never sees them.
+Select is the exception to the rest of this section: it exists only in the
+browser, so the backend never sees it.
 
 | ID | Display name |
 | --- | --- |
@@ -393,7 +393,6 @@ browser, so the backend never sees them.
 | `Warp Send` | 🌀 Warp Send |
 | `Warp Compare` | 🌀 Warp Compare |
 | `Warp Select` | 🌀 Warp Select (frontend only) |
-| `Warp Prompt Writer` | 🌀 Prompt Writer (frontend only) |
 | `Dead End` | 🚫 Dead End |
 
 ---
@@ -652,39 +651,49 @@ is muted or bypassed — itself or a subgraph it sits in — or the active one h
 
 ### 🌀 Prompt Writer
 
-Has an LLM write an image prompt and puts it into the active group's
-🌀 Prompt + LoRAs. **Frontend only**, like Warp Select: it never appears in the
-prompt ComfyUI receives, and writing a prompt never queues an image. Every call
-goes through the `/warppipe/llm` routes, so the browser never sees a key.
+Not a node: a chat-style pop-up opened from the small **Write** button on the
+`text` box of every 🌀 Prompt + LoRAs. An LLM writes and rewrites an image
+prompt, and **Use in** puts a version into a Prompt + LoRAs. It lives in the
+browser (`web/prompt_writer.js`), never appears in the prompt ComfyUI receives,
+and writing a prompt never queues an image. Every call goes through the
+`/warppipe/llm` routes, so the browser never sees a key.
 
-**Widgets** (saved with the workflow; none of them secret):
+**Header:** the chat title (click to rename), the model with a text filter, shown
+as `name · $in/$out · 👁` (prices per million tokens, 👁 for vision), the system
+prompt, ⚙ and close. Under ⚙: base URL, temperature, the API key field with
+**Save key** (the field is cleared after sending and only reports whether a key
+is set), and **Refresh lists** (the backend caches a model list for an hour).
 
-| Widget | Notes |
+**Settings** (`WarpPipe.PromptWriter.*`):
+
+| Setting | Notes |
 | --- | --- |
-| `base_url` | default `https://nano-gpt.com/api/v1`. Any OpenAI-compatible server; plain `http://` only for `localhost`, `127.0.0.1` and `::1` |
-| `model` | the server's model list, shown as `name · $in/$out · 👁` (prices per million tokens, 👁 for vision). The id is stored in `properties.model_id`; a model no longer listed stays selected and reads `(not listed)` |
-| `system_prompt` | the `.txt` files directly in the folder set in Settings → WarpPipe → Prompt Writer (`WarpPipe.PromptWriter.SystemPromptDir`) |
-| `temperature` | 0–2, default 0.6 |
-| `reference` | an optional image in `input/`, set with **reference…** and cleared with **clear reference**. Sent only when the model has vision |
-| `idea` | the idea, an existing prompt, or a change request |
-| `result` | the LLM's prompt, editable |
+| `BaseUrl` | default `https://nano-gpt.com/api/v1`. Any OpenAI-compatible server; plain `http://` only for `localhost`, `127.0.0.1` and `::1` |
+| `Model` | the model id; a model no longer listed stays selected and reads `(not listed)` |
+| `SystemPrompt` | one of the `.txt` files directly in `SystemPromptDir` |
+| `Temperature` | 0–2, default 0.6 |
+| `SystemPromptDir` | Settings → WarpPipe → Prompt Writer |
 
-**Buttons:** **write** sends the request; while it runs it reads `writing…` and
-a second click cancels. When `result` is not empty it is sent along as the
-previous answer, so a change request in `idea` returns the complete updated
-prompt. **new** clears `result`. **from prompt** copies the active group's prompt
-into `idea`. **use** writes `result` into the active group's prompt, without
-lines that start with `//` and with runs of blank lines collapsed, and briefly
-flashes that node. **refresh lists** reloads the model and system prompt lists
-(the backend caches a model list for an hour).
+**Chats and versions:** the left rail lists the chats, newest first. A request
+is shown with its images, an answer as a card `v2` with its status, e.g.
+`Finished · 0.3 ¢ · 8 s · 1,812 → 640 tokens`. The newest version is editable
+(saved on blur); older ones are one line and can be expanded. **Use in** writes
+the text unchanged into the Prompt + LoRAs chosen in the list, as one undo step,
+flashes the node and closes the pop-up; the list starts on the node the pop-up
+was opened from. **Continue from here** makes an older version the next base.
 
-The status line shows the cost, duration and tokens, e.g.
-`0.3 ¢ · 8 s · 1,812 → 640 tokens`, or the error in red.
+**Writing:** the composer takes up to 8 images (**Add image**, drag and drop or
+Ctrl+V, uploaded to `input/`), left out with a notice when the model has no
+vision. The base chip sets what the next write starts from and is sent as
+`previous_result`: **+ Current prompt** in a new empty chat, then `Builds on v3`,
+which × clears. Ctrl+Enter sends; **Write** becomes **Stop** while it runs.
+Writes are held per chat outside the pop-up, so several run at once and survive
+closing it. The **Write** button on the node is yellow while a chat opened from
+that node writes, and has a green dot when one finished unseen. A failed request
+shows a red card with **Retry** and is not stored.
 
-**The active group's prompt** is found from the active Warp Send by walking its
-input links upstream, through subgraphs, to a `Warp Lora Prompt`; failing that,
-the Prompt + LoRAs inside the same group as the Send. None or two of them is an
-error that names the group, and so is no active Send.
+**Storage:** chats are saved in the ComfyUI user folder as
+`warppipe_prompt_chats.json`, never in a workflow or in images.
 
 **Keys** are bound to hosts and used only when `base_url`'s host is the key's
 host, so a workflow pointing at another server never receives your key.
@@ -727,8 +736,8 @@ on another, or for tidying an unused output.
 ### Registration
 
 Both registration paths are built from one table in `warp_pipe.py`, so every
-node exists whichever path runs. Warp Select and Prompt Writer are not in it: they are registered by
-`web/warp_send.js` and `web/prompt_writer.js` in the browser.
+node exists whichever path runs. Warp Select is not in it: it is registered by
+`web/warp_send.js` in the browser.
 
 - **Legacy** (default) — `NODE_CLASS_MAPPINGS` and `NODE_DISPLAY_NAME_MAPPINGS`.
 - **V3** — set `WARPPIPE_ENABLE_V3=1` to register through
@@ -742,7 +751,7 @@ naming it rather than quietly dropping it.
 
 ## HTTP API
 
-Seven routes, registered on ComfyUI's own `PromptServer` at import. They exist
+Nine routes, registered on ComfyUI's own `PromptServer` at import. They exist
 for WarpPipe's frontend; nothing stops you calling them yourself.
 
 If `aiohttp` or `server` cannot be imported — running the module outside
@@ -757,15 +766,20 @@ GET /warppipe/model/base?name=<name>
 GET /warppipe/lora/thumbnail?name=<name>&kind=<loras|embeddings>[&full=1]
 GET  /warppipe/llm/models?base_url=<url>[&refresh=1]
 GET  /warppipe/llm/system_prompts
+GET  /warppipe/llm/key_status?base_url=<url>
+POST /warppipe/llm/key
 POST /warppipe/llm/write
 ```
 
-The three `llm` routes serve 🌀 Prompt Writer. `models` returns
+The five `llm` routes serve the 🌀 Prompt Writer pop-up. `models` returns
 `{models: [{id, name, prompt_price, completion_price, vision}]}`,
-`system_prompts` returns `{names: [...]}`, and `write` takes
-`{base_url, model, system_prompt, temperature, idea, previous_result, reference}`
-and returns `{text, seconds, usage, cost}`. Each returns `{error}` instead when
-something fails, and none ever returns a key.
+`system_prompts` returns `{names: [...]}`, `key_status` returns
+`{set, source, host}`, `key` takes `{base_url, key}`, and `write` takes
+`{base_url, model, system_prompt, temperature, idea, previous_result, references}`
+(`references` is a list of image names in `input/`; an empty `idea` with a
+`previous_result` asks for that prompt to be optimised) and returns
+`{text, seconds, usage, cost}`. Each returns `{error}` instead when something
+fails, and none ever returns a key.
 
 ---
 
