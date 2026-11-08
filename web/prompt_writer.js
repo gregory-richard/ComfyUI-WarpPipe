@@ -20,6 +20,7 @@ import {
   emptyStore,
   normalizeStore,
   renameChat,
+  rewindChat,
   sortedChats,
 } from "./prompt_chats.js";
 
@@ -200,7 +201,17 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 .wpw-request {
   align-self: flex-end; max-width: 76%; padding: 7px 11px; border-radius: 10px 10px 2px 10px;
   background: rgba(78, 200, 232, 0.16); white-space: pre-wrap; overflow-wrap: anywhere;
+  position: relative;
 }
+.wpw-request.has-rewind { padding-right: 34px; }
+.wpw-rewind {
+  position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 5px; background: transparent; color: inherit;
+  font-size: 15px; line-height: 1; cursor: pointer; opacity: 0; pointer-events: none;
+}
+.wpw-request:hover .wpw-rewind, .wpw-rewind:focus-visible { opacity: 1; pointer-events: auto; }
+.wpw-rewind:hover { background: rgba(78, 200, 232, 0.3); }
 .wpw-request.is-empty { font-style: italic; opacity: 0.8; }
 .wpw-thumbs { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; margin-top: 5px; }
 .wpw-thumbs img { width: 64px; height: 64px; object-fit: cover; border-radius: 4px; display: block; }
@@ -677,13 +688,48 @@ function finish(chat, spec, out) {
 function restoreDraft(chat, spec) {
   const draft = draftOf(chat.id);
   if (draft.text.trim() || draft.images.length) return;
-  draft.text = spec.request;
-  draft.images = [...spec.images];
+  fillDraft(chat, spec);
+}
+
+/** Put a request back into the composer, with its images and what it built on. */
+function fillDraft(chat, spec) {
+  const draft = draftOf(chat.id);
+  draft.text = spec.request ?? "";
+  draft.images = (spec.images ?? []).filter((name) => typeof name === "string");
   draft.base = spec.baseId === "seed" ? null : (spec.baseId ?? NO_BASE);
   if (view?.chatId === chat.id) {
     view.input.value = draft.text;
     growInput();
   }
+}
+
+/** Show the composer again after a request moved back into it. */
+function focusComposer() {
+  renderRail();
+  renderConvo(false);
+  renderChips();
+  renderNote();
+  view.input.focus();
+  view.input.setSelectionRange(view.input.value.length, view.input.value.length);
+}
+
+/** The message goes back into the input; it and everything after it leave the chat. */
+function rewindTo(chat, version) {
+  if (jobs.has(chat.id)) return;
+  flushEdits();
+  const rewound = rewindChat(chat, version.id, Date.now());
+  if (!rewound) return;
+  failures.delete(chat.id);
+  fillDraft(chat, rewound);
+  save();
+  focusComposer();
+}
+
+/** The same for a request that failed, which never became a version. */
+function rewindFailure(chat, failure) {
+  failures.delete(chat.id);
+  fillDraft(chat, failure.spec);
+  focusComposer();
 }
 
 // --- Images -------------------------------------------------------------------
@@ -844,13 +890,20 @@ function railRow(chat) {
   );
 }
 
-function requestBubble(request, images) {
+function requestBubble(request, images, onRewind) {
   const empty = !request;
   const names = (images ?? []).filter((name) => typeof name === "string");
   return el(
     "div",
-    { class: `wpw-request${empty ? " is-empty" : ""}` },
+    { class: `wpw-request${empty ? " is-empty" : ""}${onRewind ? " has-rewind" : ""}` },
     empty ? "Optimise the prompt" : request,
+    onRewind &&
+      button(
+        "↶",
+        onRewind,
+        "wpw-rewind",
+        "Go back to this message: it moves into the input, and it and everything after it leave the chat"
+      ),
     names.length > 0 &&
       el(
         "div",
@@ -982,7 +1035,8 @@ function renderConvo(stick) {
     );
   }
   chat.versions.forEach((version, index) => {
-    items.push(requestBubble(version.request, version.images));
+    const rewind = jobs.has(chat.id) ? null : () => rewindTo(chat, version);
+    items.push(requestBubble(version.request, version.images, rewind));
     items.push(versionCard(chat, version, index));
   });
 
@@ -1001,7 +1055,9 @@ function renderConvo(stick) {
   }
   const failure = failures.get(chat.id);
   if (failure) {
-    items.push(requestBubble(failure.spec.request, failure.spec.images));
+    items.push(
+      requestBubble(failure.spec.request, failure.spec.images, () => rewindFailure(chat, failure))
+    );
     items.push(
       el(
         "div",
