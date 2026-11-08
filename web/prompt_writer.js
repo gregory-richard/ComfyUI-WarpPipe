@@ -21,6 +21,7 @@ import {
   normalizeStore,
   renameChat,
   rewindChat,
+  setAutoTitle,
   sortedChats,
 } from "./prompt_chats.js";
 
@@ -29,6 +30,8 @@ const SETTING_BASE_URL = "WarpPipe.PromptWriter.BaseUrl";
 const SETTING_MODEL = "WarpPipe.PromptWriter.Model";
 const SETTING_SYSTEM_PROMPT = "WarpPipe.PromptWriter.SystemPrompt";
 const SETTING_TEMPERATURE = "WarpPipe.PromptWriter.Temperature";
+const SETTING_TITLE_MODEL = "WarpPipe.PromptWriter.TitleModel";
+const DEFAULT_TITLE_MODEL = "gemma-4-26b-a4b-it-chimeraxheretic";
 
 const DEFAULT_BASE_URL = "https://nano-gpt.com/api/v1";
 const DEFAULT_TEMPERATURE = 0.6;
@@ -682,6 +685,34 @@ function finish(chat, spec, out) {
     syncButton(spec.originNode);
   }
   toast("success", "Prompt ready", chat.title);
+  if (chat.versions.length === 1) nameChat(chat, spec.request || String(out.text));
+}
+
+/** Ask the cheap model for a title. On any failure the chat keeps its first words. */
+async function nameChat(chat, source) {
+  if (chat.titleEdited) return;
+  const model = String(getSetting(SETTING_TITLE_MODEL, DEFAULT_TITLE_MODEL)).trim();
+  if (!model) return;
+  let out;
+  try {
+    out = await getJson("/warppipe/llm/title", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base_url: baseUrl(), model, source }),
+    });
+  } catch (error) {
+    console.warn("[WarpPipe] chat title", error);
+    return;
+  }
+  if (out?.error) {
+    console.warn("[WarpPipe] chat title", out.error);
+    return;
+  }
+  if (!chat.versions.length || !setAutoTitle(chat, out?.title)) return;
+  save();
+  if (!view) return;
+  renderRail();
+  if (view.chatId === chat.id) renderTitle();
 }
 
 /** After Stop, the request goes back into the composer unless a new one is there. */
@@ -1441,6 +1472,13 @@ function toggleGear() {
       setSetting(SETTING_TEMPERATURE, value);
     },
   });
+  const titleModel = el("input", {
+    class: "wpw-field",
+    type: "text",
+    value: String(getSetting(SETTING_TITLE_MODEL, DEFAULT_TITLE_MODEL)),
+    title: "Model id that names new chats. Empty keeps the first words of your message.",
+    onChange: () => setSetting(SETTING_TITLE_MODEL, titleModel.value.trim()),
+  });
   const key = el("input", {
     class: "wpw-field",
     type: "password",
@@ -1473,6 +1511,7 @@ function toggleGear() {
     { class: "wpw-pop wpw-gear" },
     el("label", {}, "Base URL", url),
     el("label", {}, "Temperature", temperature),
+    el("label", {}, "Title model", titleModel),
     el("div", { class: "wpw-key-row" }, key, button("Save key", saveKey)),
     state,
     button("Refresh lists", () => {
@@ -1778,6 +1817,12 @@ app.registerExtension({
       defaultValue: DEFAULT_BASE_URL,
     },
     { id: SETTING_MODEL, name: "Prompt Writer model", type: "hidden", defaultValue: "" },
+    {
+      id: SETTING_TITLE_MODEL,
+      name: "Prompt Writer title model",
+      type: "hidden",
+      defaultValue: DEFAULT_TITLE_MODEL,
+    },
     {
       id: SETTING_SYSTEM_PROMPT,
       name: "Prompt Writer system prompt",

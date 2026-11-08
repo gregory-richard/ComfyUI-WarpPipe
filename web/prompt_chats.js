@@ -160,6 +160,14 @@ export function rewindChat(chat, versionId, now) {
   return version;
 }
 
+/** A generated title; one the user typed always stays. */
+export function setAutoTitle(chat, title) {
+  const trimmed = String(title ?? "").trim();
+  if (!trimmed || chat.titleEdited) return false;
+  chat.title = trimmed;
+  return true;
+}
+
 export function renameChat(chat, title) {
   const trimmed = String(title ?? "").trim();
   if (!trimmed) return;

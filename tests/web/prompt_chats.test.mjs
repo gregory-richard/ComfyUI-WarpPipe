@@ -11,6 +11,7 @@ import {
   normalizeStore,
   renameChat,
   rewindChat,
+  setAutoTitle,
   sortedChats,
   titleFrom,
 } from "../../web/prompt_chats.js";
@@ -417,4 +418,16 @@ test("rewindChat ignores an unknown version", () => {
   assert.equal(rewindChat(chat, "nope", 2), null);
   assert.equal(chat.versions.length, 1);
   assert.equal(chat.updated, 1);
+});
+
+test("setAutoTitle replaces an automatic title but never one the user typed", () => {
+  const store = emptyStore();
+  const chat = createChat(store, { id: "c", now: 1 });
+  assert.equal(setAutoTitle(chat, "Red bicycle"), true);
+  assert.equal(chat.title, "Red bicycle");
+  assert.equal(chat.updated, 1);
+  assert.equal(setAutoTitle(chat, "  "), false);
+  renameChat(chat, "Mine");
+  assert.equal(setAutoTitle(chat, "Other"), false);
+  assert.equal(chat.title, "Mine");
 });

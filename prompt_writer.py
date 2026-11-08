@@ -31,6 +31,7 @@ NANOGPT_ENV = "NANOGPT_API_KEY"
 NANOGPT_HOSTS = frozenset({"nano-gpt.com", "api.nano-gpt.com"})
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 CHAT_TIMEOUT = 180
+TITLE_TIMEOUT = 30
 MODELS_TIMEOUT = 30
 MODELS_TTL = 3600
 DEFAULT_TEMPERATURE = 0.6
@@ -342,6 +343,56 @@ def write(
     return {"text": text, "seconds": seconds, "usage": usage, "cost": cost_of(payload, model)}
 
 
+# --- chat titles ------------------------------------------------------------
+
+DEFAULT_TITLE_MODEL = "gemma-4-26b-a4b-it-chimeraxheretic"
+TITLE_MAX_TOKENS = 24
+TITLE_SOURCE_CHARS = 600
+TITLE_MAX_CHARS = 60
+TITLE_SYSTEM = (
+    "You name chats about image ideas. Reply with only a short title of two to five words "
+    "that says what the image shows, in the language of the text. "
+    "No quotation marks, no final period, no explanation."
+)
+
+
+def clean_title(text: str) -> str:
+    """One short line from whatever the model returned; empty when nothing usable is left."""
+    text = re.sub(r"(?s)<think>.*?</think>", "", text or "").strip()
+    line = text.split("\n", 1)[0].strip()
+    line = re.sub(r"^title\s*:\s*", "", line, flags=re.IGNORECASE)
+    line = line.strip(" \t\"'`*\u201c\u201d\u2018\u2019").rstrip(" .")
+    return line[:TITLE_MAX_CHARS].rstrip()
+
+
+def make_title(
+    base_url: str,
+    model_id: str,
+    source: str,
+    *,
+    api_key: Optional[str],
+    opener=urllib.request.urlopen,
+) -> str:
+    body = {
+        "model": model_id,
+        "temperature": 0.3,
+        "max_tokens": TITLE_MAX_TOKENS,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": TITLE_SYSTEM},
+            {"role": "user", "content": source[:TITLE_SOURCE_CHARS]},
+        ],
+    }
+    payload = _request(
+        _endpoint(base_url, "/chat/completions"),
+        api_key=api_key,
+        body=body,
+        timeout=TITLE_TIMEOUT,
+        opener=opener,
+    )
+    return clean_title(parse_reply(payload))
+
+
 # --- request handling (no aiohttp) -----------------------------------------
 
 
@@ -359,6 +410,24 @@ def handle_models(base_url: str, refresh: bool, *, env, key_file, opener=urllib.
         check_url(base_url)
         key = key_for(base_url, env, key_file)  # the list works without a key
         return {"models": list_models(base_url, api_key=key, refresh=refresh, opener=opener)}
+    except PromptWriterError as exc:
+        return {"error": str(exc)}
+
+
+def handle_title(body: dict, *, env, key_file, opener=urllib.request.urlopen) -> dict:
+    try:
+        base_url = str(body.get("base_url") or DEFAULT_BASE_URL).strip()
+        model_id = str(body.get("model") or "").strip()
+        source = str(body.get("source") or "").strip()
+        if not model_id:
+            raise PromptWriterError("No title model set")
+        if not source:
+            raise PromptWriterError("Nothing to name")
+        key = _key_or_error(base_url, env, key_file)
+        title = make_title(base_url, model_id, source, api_key=key, opener=opener)
+        if not title:
+            raise PromptWriterError("The model returned no title")
+        return {"title": title}
     except PromptWriterError as exc:
         return {"error": str(exc)}
 
@@ -532,6 +601,15 @@ def register(routes, web, *, user_dir: str, settings_loader, image_path) -> None
     async def _system_prompts(request):
         settings = await asyncio.to_thread(settings_loader, request)
         return web.json_response(handle_system_prompts(settings))
+
+    @routes.post("/warppipe/llm/title")
+    async def _title(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid request body"})
+        out = await asyncio.to_thread(handle_title, body, env=os.environ, key_file=key_file)
+        return web.json_response(out)
 
     @routes.post("/warppipe/llm/write")
     async def _write(request):

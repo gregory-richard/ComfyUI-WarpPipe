@@ -589,3 +589,40 @@ def test_key_status_env_and_none(tmp_path):
     f = tmp_path / "none.json"
     assert pw.key_status("https://nano-gpt.com/api/v1", env={"NANOGPT_API_KEY": "x"}, key_file=f)["source"] == "environment"
     assert pw.key_status("https://nano-gpt.com/api/v1", env={}, key_file=f)["set"] is False
+
+
+def test_clean_title():
+    assert pw.clean_title('"Kitchen At Dusk."\n\nsecond line') == "Kitchen At Dusk"
+    assert pw.clean_title("<think>hm</think>Title: Red bicycle") == "Red bicycle"
+    assert len(pw.clean_title("word " * 40)) <= 60
+    assert pw.clean_title("   ") == ""
+
+
+def test_make_title_request(server):
+    server.replies.append((200, {"choices": [{"message": {"content": "Red bicycle"}}]}))
+    title = pw.make_title(server.url, "cheap", "a red bicycle " * 100, api_key="k")
+    assert title == "Red bicycle"
+    body = server.requests[0]["body"]
+    assert body["model"] == "cheap"
+    assert body["max_tokens"] == pw.TITLE_MAX_TOKENS
+    assert body["messages"][0] == {"role": "system", "content": pw.TITLE_SYSTEM}
+    assert len(body["messages"][1]["content"]) <= pw.TITLE_SOURCE_CHARS
+
+
+def test_handle_title(server, tmp_path):
+    none = tmp_path / "none.json"
+    server.replies.append((200, {"choices": [{"message": {"content": "Beach at dusk"}}]}))
+    out = pw.handle_title(
+        {"base_url": server.url, "model": "m", "source": "idea"}, env={}, key_file=none
+    )
+    assert out == {"title": "Beach at dusk"}
+    assert "error" in pw.handle_title(
+        {"base_url": server.url, "model": "", "source": "idea"}, env={}, key_file=none
+    )
+    assert "error" in pw.handle_title(
+        {"base_url": server.url, "model": "m", "source": "  "}, env={}, key_file=none
+    )
+    server.replies.append((200, {"choices": [{"message": {"content": '""'}}]}))
+    assert "error" in pw.handle_title(
+        {"base_url": server.url, "model": "m", "source": "idea"}, env={}, key_file=none
+    )
