@@ -230,12 +230,22 @@ def _folder(folder: Optional[str]) -> Path:
     return path
 
 
+def _prompt_version(name: str) -> tuple:
+    """The numbers of the last vN.N.N in a file name, empty when it has none."""
+    found = re.findall(r"v(\d+(?:\.\d+)*)", name, flags=re.IGNORECASE)
+    return tuple(int(part) for part in found[-1].split(".")) if found else ()
+
+
 def system_prompt_names(folder: Optional[str]) -> list:
+    """The .txt files in the folder: newest version first, unversioned names last."""
     path = _folder(folder)
-    return sorted(
+    names = sorted(
         (p.name for p in path.iterdir() if p.is_file() and p.suffix.lower() == ".txt"),
         key=str.lower,
     )
+    versioned = [name for name in names if _prompt_version(name)]
+    versioned.sort(key=_prompt_version, reverse=True)
+    return versioned + [name for name in names if not _prompt_version(name)]
 
 
 def read_system_prompt(folder: Optional[str], name: str) -> str:

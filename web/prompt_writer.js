@@ -1551,7 +1551,7 @@ async function loadLists(refreshModels) {
   lists.error = errors.join(" · ");
 
   if (!getSetting(SETTING_SYSTEM_PROMPT, "") && lists.prompts.length) {
-    setSetting(SETTING_SYSTEM_PROMPT, lists.prompts[lists.prompts.length - 1]);
+    setSetting(SETTING_SYSTEM_PROMPT, lists.prompts[0]);
   }
   if (!view) return;
   renderModelButton();

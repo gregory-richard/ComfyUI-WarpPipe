@@ -626,3 +626,26 @@ def test_handle_title(server, tmp_path):
     assert "error" in pw.handle_title(
         {"base_url": server.url, "model": "m", "source": "idea"}, env={}, key_file=none
     )
+
+
+def test_system_prompts_newest_version_first(tmp_path):
+    names = [
+        "image master prompt v1.0.txt",
+        "image_master_prompt_v2.6.txt",
+        "image_master_prompt_v2.7.txt",
+        "image_master_prompt_v2.7.1.txt",
+        "image_master_prompt_v2.7.2.txt",
+        "image_master_prompt_v2.10.txt",
+        "notes.txt",
+    ]
+    for name in names:
+        (tmp_path / name).write_text("x", encoding="utf-8")
+    assert pw.system_prompt_names(str(tmp_path)) == [
+        "image_master_prompt_v2.10.txt",
+        "image_master_prompt_v2.7.2.txt",
+        "image_master_prompt_v2.7.1.txt",
+        "image_master_prompt_v2.7.txt",
+        "image_master_prompt_v2.6.txt",
+        "image master prompt v1.0.txt",
+        "notes.txt",
+    ]
