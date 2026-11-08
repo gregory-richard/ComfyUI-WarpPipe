@@ -653,7 +653,7 @@ is muted or bypassed — itself or a subgraph it sits in — or the active one h
 
 Not a node: a chat-style pop-up opened from the **✨ AI** button on the
 `text` box of every 🌀 Prompt + LoRAs. An LLM writes and rewrites an image
-prompt, and **Use in** puts a version into a Prompt + LoRAs. It lives in the
+prompt, and **Send to prompt** puts a version into a Prompt + LoRAs. It lives in the
 browser (`web/prompt_writer.js`), never appears in the prompt ComfyUI receives,
 and writing a prompt never queues an image. Every call goes through the
 `/warppipe/llm` routes, so the browser never sees a key.
@@ -677,7 +677,7 @@ is set), and **Refresh lists** (the backend caches a model list for an hour).
 **Chats and versions:** the left rail lists the chats, newest first. A request
 is shown with its images, an answer as a card `v2` with its status, e.g.
 `Finished · 0.3 ¢ · 8 s · 1,812 → 640 tokens`. The newest version is editable
-(saved on blur); older ones are one line and can be expanded. **Use in** writes
+(saved on blur); older ones are one line and can be expanded. **Send to prompt** writes
 the text unchanged into the Prompt + LoRAs chosen in the list, as one undo step,
 flashes the node and closes the pop-up; the list starts on the node the pop-up
 was opened from. **Continue from here** makes an older version the next base.

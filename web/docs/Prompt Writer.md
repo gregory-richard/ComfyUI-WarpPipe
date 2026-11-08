@@ -4,7 +4,7 @@ Have an LLM write and rewrite an image prompt in a chat, and put the version you
 
 ## Overview
 
-Every **Prompt + LoRAs** has an **✨ AI** button on the top-right corner of its text box. It opens the Prompt Writer, a pop-up with your chats on the left and the conversation on the right. Say what you want and press **Write** (or Ctrl+Enter). Each answer is a new version in the chat. Press **Use in** on a version to write it into a Prompt + LoRAs. Writing a prompt never queues an image, and the Prompt Writer takes no part in a run.
+Every **Prompt + LoRAs** has an **✨ AI** button on the top-right corner of its text box. It opens the Prompt Writer, a pop-up with your chats on the left and the conversation on the right. Say what you want and press **Write** (or Ctrl+Enter). Each answer is a new version in the chat. Press **Send to prompt** on a version to write it into a Prompt + LoRAs. Writing a prompt never queues an image, and the Prompt Writer takes no part in a run.
 
 Writing goes on in the background. You can close the pop-up (Esc or ×; clicking outside it does nothing), start something in another chat, or go back to the canvas. The **✨ AI** button turns yellow while a chat opened from that node is writing and shows a green dot when one has finished and you have not looked at it yet. A toast says when a prompt is ready.
 
@@ -29,10 +29,11 @@ Each request appears on the right with its images, and each answer as a card wit
 
 The newest version is open and editable; your edit is saved when you click away. Older versions are one line, click to read them.
 
-- **Use in** — Writes the version's text, exactly as it is, into the Prompt + LoRAs chosen beside it, as one undo step. That node flashes and the pop-up closes. The list starts on the node you opened the pop-up from, and your choice applies to every card.
+- **Send to prompt** — Writes the version's text, exactly as it is, into the Prompt + LoRAs chosen beside it, as one undo step. That node flashes and the pop-up closes. The list starts on the node you opened the pop-up from, and your choice applies to every card.
 - **Continue from here** — On older versions: the next **Write** builds on this one.
 - **↶ on a message** (appears on hover) — Goes back to that message: it moves into the input with its images, and it and everything after it leave the chat.
 - **Chat titles** — While the first version is being written, a cheap model names the chat from your message (**Title model** under the gear, about 0.002 ¢ per title). A title you typed always stays; an empty field or a failure keeps the first words of your message.
+- **⋮ on a chat** — **Rename** or **Delete** it.
 - **👁** — Shows the selected system prompt, read-only.
 
 A request that fails shows a red card with the message and **Retry**, and does not count as a version.

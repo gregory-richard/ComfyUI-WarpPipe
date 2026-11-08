@@ -247,6 +247,28 @@ function goToActive() {
   }, 0);
 }
 
+/** Back to the hub: the Warp Select of this workflow. */
+function goToSelect() {
+  const root = rootGraph();
+  const canvas = app.canvas;
+  if (!root || !canvas) return;
+  const node = nodesOfType(root, SELECT_ID)[0];
+  if (!node) {
+    warn("This workflow has no Warp Select.");
+    return;
+  }
+  const graph = node.graph ?? root;
+  if (canvas.graph !== graph) {
+    if (graph === root) canvas.setGraph(root);
+    else canvas.openSubgraph(graph, subgraphHost(root, graph));
+  }
+  setTimeout(() => {
+    canvas.centerOnNode(node);
+    canvas.selectNode?.(node, false);
+    canvas.setDirty(true, true);
+  }, 0);
+}
+
 // --- The activate button -----------------------------------------------------------
 
 const BUTTON_H = 3 * (window.LiteGraph?.NODE_WIDGET_HEIGHT ?? 20);
@@ -674,6 +696,21 @@ function registerSelect() {
 
 app.registerExtension({
   name: "WarpPipe.WarpSend",
+
+  actionBarButtons: [
+    {
+      icon: "pi pi-bullseye",
+      label: "Active group",
+      tooltip: "Jump to the active Warp Send",
+      onClick: goToActive,
+    },
+    {
+      icon: "pi pi-home",
+      label: "Workflow",
+      tooltip: "Jump to Warp Select",
+      onClick: goToSelect,
+    },
+  ],
 
   async setup() {
     // Every way to queue goes through app.queuePrompt.
