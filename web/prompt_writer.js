@@ -1456,7 +1456,7 @@ async function loadLists(refreshModels) {
   lists.error = errors.join(" · ");
 
   if (!getSetting(SETTING_SYSTEM_PROMPT, "") && lists.prompts.length) {
-    setSetting(SETTING_SYSTEM_PROMPT, lists.prompts[0]);
+    setSetting(SETTING_SYSTEM_PROMPT, lists.prompts[lists.prompts.length - 1]);
   }
   if (!view) return;
   renderModelButton();
@@ -1699,6 +1699,7 @@ export async function openPromptWriter(promptNode) {
   const id = initialChat(promptNode);
   if (id) selectChat(id);
   else newChat();
+  growInput();
   loadLists(false);
 }
 
