@@ -1,17 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import {
-  findTargetPrompt,
-  formatStatus,
-  modelLabel,
-  stripTitles,
-} from "../../web/prompt_writer_core.js";
+import * as core from "../../web/prompt_writer_core.js";
 
-test("stripTitles removes // lines and collapses blanks", () => {
-  assert.equal(stripTitles("// Overview\n- A\n\n\n  // Subject 1\n- B\n"), "- A\n\n- B");
-  assert.equal(stripTitles("a\r\n// t\r\nb"), "a\nb");
-  assert.equal(stripTitles(""), "");
+const { formatStatus, listTargets, modelLabel } = core;
+
+test("the old hub helpers are gone", () => {
+  assert.equal(core.stripTitles, undefined);
+  assert.equal(core.findTargetPrompt, undefined);
 });
 
 test("modelLabel", () => {
@@ -38,185 +34,140 @@ test("formatStatus", () => {
   assert.equal(formatStatus({ cost: null, seconds: 12.6, usage: {} }), "13 s");
 });
 
-// --- fake graphs --------------------------------------------------------------
-
-// Builds a graph whose links live in a Map (frontend 1.57) or a plain object.
-function graph(nodes, links, { map = true, groups = [] } = {}) {
-  const store = map ? new Map() : {};
-  for (const [id, origin_id, origin_slot, target_id, target_slot] of links) {
-    const link = { id, origin_id, origin_slot, target_id, target_slot };
-    if (map) store.set(id, link);
-    else store[id] = link;
-  }
-  return { _nodes: nodes, links: store, _groups: groups };
-}
-
-function node(id, type, inputLinks = [], extra = {}) {
-  return {
-    id,
-    type,
-    pos: extra.pos ?? [0, 0],
-    size: extra.size ?? [100, 100],
-    inputs: inputLinks.map((link, i) => ({ name: `in${i}`, link })),
-    widgets: extra.widgets ?? [],
-    properties: extra.properties ?? {},
-    mode: 0,
-    ...(extra.subgraph ? { subgraph: extra.subgraph } : {}),
-  };
-}
-
-function send(id, name, link, opts = {}) {
-  const n = node(id, "Warp Send", [], {
-    pos: opts.pos,
-    widgets: [
-      { name: "name", value: name },
-      { name: "index", value: opts.index ?? 1 },
-    ],
-    properties: { active: opts.active ?? true },
-  });
-  n.inputs = [{ name: "warp", link }];
-  return n;
-}
+// --- listTargets --------------------------------------------------------------
 
 const PROMPT = "Warp Lora Prompt";
 
-test("findTargetPrompt: direct links", () => {
-  const prompt = node(1, PROMPT);
-  const warp = node(2, "Warp", [10]);
-  const s = send(3, "Krea", 11);
-  const g = graph(
-    [prompt, warp, s],
+// A node of size 100x100, so its centre is pos + 50.
+function node(id, title, pos = [0, 0]) {
+  return { id, type: PROMPT, title, pos, size: [100, 100] };
+}
+
+function graph(nodes, groups = []) {
+  return { _nodes: nodes, _groups: groups };
+}
+
+function subgraphNode(id, pos, inner) {
+  return { id, type: "uuid-subgraph", title: "sg", pos, size: [100, 100], subgraph: inner };
+}
+
+const box = (title, x, y, w = 500, h = 500) => ({ title, _bounding: [x, y, w, h] });
+const labels = (root) => listTargets(root).map((t) => t.label);
+
+test("listTargets: empty and missing graphs", () => {
+  assert.deepEqual(listTargets(null), []);
+  assert.deepEqual(listTargets(graph([])), []);
+});
+
+test("listTargets: only prompt nodes, labelled by group without the bookmark", () => {
+  const prompt = node(1, "Prompt", [10, 10]);
+  const other = { ...node(2, "Other", [10, 10]), type: "Warp Send" };
+  const root = graph([prompt, other], [box("Krea [6]", 0, 0)]);
+  assert.deepEqual(listTargets(root), [{ node: prompt, label: "Krea" }]);
+});
+
+test("listTargets: the centre decides the group, else the node title", () => {
+  // pos 480 puts the corner inside the box but the centre (530) outside it.
+  const outside = node(1, "Loose", [480, 480]);
+  const inside = node(2, "Held", [430, 430]);
+  const root = graph([outside, inside], [box("G", 0, 0)]);
+  assert.deepEqual(labels(root), ["G", "Loose"]);
+});
+
+test("listTargets: groups given by pos and size, or in graph.groups", () => {
+  const n = node(1, "T", [10, 10]);
+  assert.deepEqual(labels(graph([n], [{ title: "P", pos: [0, 0], size: [200, 200] }])), ["P"]);
+  assert.deepEqual(labels({ _nodes: [n], groups: [box("L", 0, 0)] }), ["L"]);
+});
+
+test("listTargets: a typed-array bounding works", () => {
+  const n = node(1, "T", [10, 10]);
+  const group = { title: "Typed", _bounding: new Float32Array([0, 0, 200, 200]) };
+  assert.deepEqual(labels(graph([n], [group])), ["Typed"]);
+});
+
+test("listTargets: only a trailing bookmark is removed", () => {
+  const a = node(1, "T", [10, 10]);
+  assert.deepEqual(labels(graph([a], [box("[2] Krea [v2] x", 0, 0)])), ["[2] Krea [v2] x"]);
+});
+
+test("listTargets: a group that is only a bookmark falls back to the node title", () => {
+  const a = node(1, "Title", [10, 10]);
+  assert.deepEqual(labels(graph([a], [box(" [3]", 0, 0)])), ["Title"]);
+});
+
+test("listTargets: nested groups use the innermost", () => {
+  const a = node(1, "T", [110, 110]);
+  const groups = [box("Outer [1]", 0, 0, 1000, 1000), box("Inner [2]", 100, 100, 200, 200)];
+  assert.deepEqual(labels(graph([a], groups)), ["Inner"]);
+});
+
+test("listTargets: inside a subgraph uses the top-level node's centre", () => {
+  // The inner position sits in group Near, but only the subgraph node's counts.
+  const inner = node(1, "Inner", [10, 10]);
+  const sg = subgraphNode(9, [2010, 2010], graph([inner], [box("Inside", 0, 0)]));
+  const root = graph([sg], [box("Near", 0, 0), box("Far [4]", 2000, 2000)]);
+  assert.deepEqual(listTargets(root), [{ node: inner, label: "Far" }]);
+});
+
+test("listTargets: nested subgraphs use the outermost node", () => {
+  const inner = node(1, "Inner", [0, 0]);
+  const b = subgraphNode(2, [0, 0], graph([inner]));
+  const a = subgraphNode(3, [1010, 10], graph([b]));
+  assert.deepEqual(labels(graph([a], [box("Top", 1000, 0)])), ["Top"]);
+});
+
+test("listTargets: a subgraph instantiated twice lists its node once", () => {
+  const inner = node(1, "Inner", [0, 0]);
+  const def = graph([inner]);
+  const root = graph(
+    [subgraphNode(2, [10, 10], def), subgraphNode(3, [1010, 10], def)],
+    [box("First", 0, 0), box("Second", 1000, 0)]
+  );
+  const targets = listTargets(root);
+  assert.equal(targets.length, 1);
+  assert.equal(targets[0].node, inner);
+  assert.equal(targets[0].label, "First");
+});
+
+test("listTargets: sorted by bookmark, then label, unnumbered last", () => {
+  const at = (id, x) => node(id, `T${id}`, [x, 10]);
+  const root = graph(
+    [at(1, 10), at(2, 1010), at(3, 2010), at(4, 3010), at(5, 4010)],
     [
-      [10, 1, 0, 2, 0],
-      [11, 2, 0, 3, 0],
+      box("Zeta", 0, 0),
+      box("Alpha", 1000, 0),
+      box("Late [10]", 2000, 0),
+      box("Second [2]", 3000, 0),
+      box("First [2]", 4000, 0),
     ]
   );
-  assert.deepEqual(findTargetPrompt(g), { node: prompt, group: "Krea" });
-  // plain-object links work too
-  const g2 = graph(
-    [prompt, warp, s],
-    [
-      [10, 1, 0, 2, 0],
-      [11, 2, 0, 3, 0],
-    ],
-    { map: false }
+  assert.deepEqual(labels(root), ["First", "Second", "Late", "Alpha", "Zeta"]);
+});
+
+test("listTargets: duplicate labels are numbered in sort order", () => {
+  const a = node(1, "Same");
+  const b = node(2, "Same");
+  const c = node(3, "Same");
+  const targets = listTargets(graph([a, b, c]));
+  assert.deepEqual(
+    targets.map((t) => t.label),
+    ["Same", "Same (2)", "Same (3)"]
   );
-  assert.equal(findTargetPrompt(g2).node, prompt);
-});
-
-test("findTargetPrompt: group title names the group", () => {
-  const prompt = node(1, PROMPT);
-  const s = send(3, "Krea", 11, { pos: [50, 50] });
-  const g = graph([prompt, s], [[11, 1, 0, 3, 0]], {
-    groups: [{ title: "Krea 2", _bounding: [0, 0, 500, 500] }],
-  });
-  assert.deepEqual(findTargetPrompt(g), { node: prompt, group: "Krea 2" });
-});
-
-test("findTargetPrompt: prompt inside a subgraph node", () => {
-  const prompt = node(1, PROMPT);
-  const innerWarp = node(2, "Warp", [20]);
-  // Inner: prompt -> warp -> subgraph output 0 (id -20). Output 1 fed by noise.
-  const noise = node(4, "Noise");
-  const sub = graph(
-    [prompt, innerWarp, noise],
-    [
-      [20, 1, 0, 2, 0],
-      [21, 2, 0, -20, 0],
-      [22, 4, 0, -20, 1],
-    ]
+  assert.deepEqual(
+    targets.map((t) => t.node),
+    [a, b, c]
   );
-  const sgNode = node(7, "uuid-subgraph", [], { subgraph: sub });
-  const other = node(8, PROMPT); // feeds sgNode output 1's sibling: must not be found
-  const s = send(9, "ZIT", 30);
-  const root = graph([sgNode, other, s], [[30, 7, 0, 9, 0]]);
-  assert.deepEqual(findTargetPrompt(root), { node: prompt, group: "ZIT" });
 });
 
-test("findTargetPrompt: send inside a subgraph, prompt outside via subgraph input", () => {
-  const prompt = node(1, PROMPT);
-  const innerWarp = node(2, "Warp", [40]);
-  const s = send(3, "Inner", 41);
-  const sub = graph(
-    [innerWarp, s],
-    [
-      [40, -10, 0, 2, 0],
-      [41, 2, 0, 3, 0],
-    ]
-  );
-  const sgNode = node(5, "uuid-subgraph", [50], { subgraph: sub });
-  const root = graph([prompt, sgNode], [[50, 1, 0, 5, 0]]);
-  assert.deepEqual(findTargetPrompt(root), { node: prompt, group: "Inner" });
+test("listTargets: a suffix never collides with a real label", () => {
+  const out = labels(graph([node(1, "A"), node(2, "A"), node(3, "A (2)")]));
+  assert.equal(new Set(out).size, 3);
 });
 
-test("findTargetPrompt: nested subgraphs both ways", () => {
-  // root: prompt -> outer(sg A) ; A contains inner(sg B) containing the Send.
-  const prompt = node(1, PROMPT);
-  const s = send(3, "Deep", 60);
-  const subB = graph([s], [[60, -10, 0, 3, 0]]);
-  const nodeB = node(4, "sgB", [61], { subgraph: subB });
-  const subA = graph([nodeB], [[61, -10, 0, 4, 0]]);
-  const nodeA = node(5, "sgA", [62], { subgraph: subA });
-  const root = graph([prompt, nodeA], [[62, 1, 0, 5, 0]]);
-  assert.equal(findTargetPrompt(root).node, prompt);
-});
-
-test("findTargetPrompt: group fallback without links", () => {
-  const prompt = node(1, PROMPT, [], { pos: [100, 100], size: [200, 200] });
-  const outside = node(2, PROMPT, [], { pos: [2000, 2000] });
-  const s = send(3, "Krea", null, { pos: [400, 100] });
-  s.size = [100, 100];
-  const g = graph([prompt, outside, s], [], {
-    groups: [
-      { title: "Far", pos: [1900, 1900], size: [500, 500] },
-      { title: "Krea 2", pos: [0, 0], size: [800, 600] },
-    ],
-  });
-  assert.deepEqual(findTargetPrompt(g), { node: prompt, group: "Krea 2" });
-});
-
-test("findTargetPrompt: two distinct prompts upstream is an error naming the group", () => {
-  const p1 = node(1, PROMPT);
-  const p2 = node(2, PROMPT);
-  const merge = node(3, "Merge", [10, 11]);
-  const s = send(4, "ZIT", 12, { pos: [10, 10] });
-  const g = graph(
-    [p1, p2, merge, s],
-    [
-      [10, 1, 0, 3, 0],
-      [11, 2, 0, 3, 1],
-      [12, 3, 0, 4, 0],
-    ],
-    { groups: [{ title: "ZIT+ZIB", _bounding: [0, 0, 500, 500] }] }
-  );
-  const r = findTargetPrompt(g);
-  assert.ok(r.error, "expected an error");
-  assert.match(r.error, /ZIT\+ZIB/);
-});
-
-test("findTargetPrompt: same prompt reached twice is not ambiguous", () => {
-  const p = node(1, PROMPT);
-  const merge = node(3, "Merge", [10, 11]);
-  const s = send(4, "A", 12);
-  const g = graph(
-    [p, merge, s],
-    [
-      [10, 1, 0, 3, 0],
-      [11, 1, 1, 3, 1],
-      [12, 3, 0, 4, 0],
-    ]
-  );
-  assert.equal(findTargetPrompt(g).node, p);
-});
-
-test("findTargetPrompt: nothing found names the group", () => {
-  const s = send(4, "Lonely", null);
-  const r = findTargetPrompt(graph([s], []));
-  assert.match(r.error, /Lonely/);
-});
-
-test("findTargetPrompt: no active Send", () => {
-  const s = send(4, "A", null, { active: false });
-  assert.deepEqual(findTargetPrompt(graph([s], [])), { error: "Activate a Warp Send first" });
-  assert.deepEqual(findTargetPrompt(null), { error: "Activate a Warp Send first" });
+test("listTargets: does not change the graph", () => {
+  const root = graph([node(1, "T", [10, 10])], [box("G [1]", 0, 0)]);
+  const before = JSON.stringify(root);
+  listTargets(root);
+  assert.equal(JSON.stringify(root), before);
 });

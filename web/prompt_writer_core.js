@@ -1,24 +1,12 @@
-// Pure helpers for the Prompt Writer: labels, the status line, and finding
-// the Prompt + LoRAs node the active Warp Send draws from.
+// Pure helpers for the Prompt Writer: labels, the status line, and listing the
+// Prompt + LoRAs nodes a prompt can be sent to.
 //
 // No DOM and no `app`, so it can be tested under node.
 
-import { collectSends } from "./warp_route.js";
+import { allNodes } from "./warp_route.js";
 
 export const PROMPT_TYPE = "Warp Lora Prompt";
-const SUBGRAPH_INPUT_ID = -10;
-const SUBGRAPH_OUTPUT_ID = -20;
-
-/** The prompt without its `//` title lines, and with runs of blank lines collapsed. */
-export function stripTitles(text) {
-  const lines = String(text ?? "")
-    .split(/\r?\n/)
-    .filter((line) => !/^\s*\/\//.test(line));
-  return lines
-    .join("\n")
-    .replace(/\n(?:[ \t]*\n)+/g, "\n\n")
-    .trim();
-}
+const BOOKMARK = /\s*\[(\d+)\]\s*$/;
 
 function price(value) {
   return value == null ? "?" : `$${Number(value).toFixed(2)}`;
@@ -47,46 +35,7 @@ export function formatStatus(r) {
   return parts.join(" · ");
 }
 
-// --- Finding the target prompt -------------------------------------------------
-
-// Links are a Map in current frontends and a plain object in older ones.
-function linkStore(graph) {
-  return graph?.links ?? graph?._links ?? null;
-}
-
-function linksOf(graph) {
-  const links = linkStore(graph);
-  if (!links) return [];
-  return links instanceof Map ? [...links.values()] : Object.values(links);
-}
-
-function linkById(graph, id) {
-  const links = linkStore(graph);
-  if (id == null || !links) return null;
-  return (links instanceof Map ? links.get(id) : links[id]) ?? null;
-}
-
-function nodeById(graph, id) {
-  return (graph?._nodes ?? []).find((n) => String(n.id) === String(id)) ?? null;
-}
-
-// For each subgraph, the subgraph nodes that use it and the graph they sit in.
-function instancesOf(rootGraph) {
-  const out = new Map();
-  const seen = new Set();
-  const walk = (graph) => {
-    if (!graph || seen.has(graph)) return;
-    seen.add(graph);
-    for (const node of graph._nodes ?? []) {
-      if (!node.subgraph) continue;
-      if (!out.has(node.subgraph)) out.set(node.subgraph, []);
-      out.get(node.subgraph).push({ graph, node });
-      walk(node.subgraph);
-    }
-  };
-  walk(rootGraph);
-  return out;
-}
+// --- Listing the targets -------------------------------------------------------
 
 function centre(node) {
   const [x, y] = node.pos ?? [0, 0];
@@ -104,96 +53,61 @@ function inside(b, [x, y]) {
   return x >= b[0] && y >= b[1] && x <= b[0] + b[2] && y <= b[1] + b[3];
 }
 
+// The smallest group around the node's centre, so nested groups name the inner one.
 function groupAt(graph, node) {
   const c = centre(node);
-  return (graph?._groups ?? graph?.groups ?? []).find((g) => {
-    const b = bounds(g);
-    return b && inside(b, c);
+  let best = null;
+  let bestArea = Infinity;
+  for (const group of graph?._groups ?? graph?.groups ?? []) {
+    const b = bounds(group);
+    if (!b || !inside(b, c)) continue;
+    const area = b[2] * b[3];
+    if (area < bestArea) {
+      best = group;
+      bestArea = area;
+    }
+  }
+  return best;
+}
+
+// Each prompt node with the top-level node that places it on the canvas. Graphs
+// are visited once, so a subgraph used several times counts for its first use.
+function promptsWithAnchor(rootGraph) {
+  const seen = new Set([rootGraph]);
+  const out = [];
+  for (const top of rootGraph?._nodes ?? []) {
+    const nodes = top.subgraph ? allNodes(top.subgraph, [], seen) : [top];
+    for (const node of nodes) {
+      if (node.type === PROMPT_TYPE) out.push({ node, anchor: top });
+    }
+  }
+  return out;
+}
+
+const rank = (entry) => entry.number ?? Number.MAX_SAFE_INTEGER;
+
+/**
+ * Every Prompt + LoRAs node as {node, label}: the label is its group's title
+ * without the bookmark, else the node's title. Bookmarked groups come first,
+ * by number; equal labels get " (2)", " (3)".
+ */
+export function listTargets(rootGraph) {
+  const entries = promptsWithAnchor(rootGraph).map(({ node, anchor }) => {
+    const title = String(groupAt(rootGraph, anchor)?.title ?? "");
+    const number = title.match(BOOKMARK)?.[1];
+    return {
+      node,
+      number: number == null ? null : Number(number),
+      label: title.replace(BOOKMARK, "").trim() || String(node.title || PROMPT_TYPE),
+    };
   });
-}
+  entries.sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
 
-/**
- * Walk upstream from `start` through input links, into subgraph nodes (from
- * their outputs) and out of subgraphs (through their input node), collecting
- * the Prompt + LoRAs nodes. The walk does not go past a prompt.
- */
-function promptsUpstream(rootGraph, startGraph, start) {
-  const instances = instancesOf(rootGraph);
-  const graphIds = new Map();
-  const graphId = (graph) => {
-    if (!graphIds.has(graph)) graphIds.set(graph, graphIds.size);
-    return graphIds.get(graph);
-  };
-  const found = new Set();
-  const visited = new Set();
-  // `stack`: the subgraph nodes entered on the way here, innermost last.
-  const queue = [{ graph: startGraph, node: start, stack: [] }];
-
-  // Follow the link `linkId` arriving in `graph` back to its origin.
-  const follow = (graph, linkId, stack) => {
-    const link = linkById(graph, linkId);
-    if (!link) return;
-    if (link.origin_id === SUBGRAPH_INPUT_ID) {
-      // Out of this subgraph: continue from the subgraph node's matching input.
-      const parents = stack.length ? [stack[stack.length - 1]] : (instances.get(graph) ?? []);
-      const rest = stack.slice(0, -1);
-      for (const parent of parents) {
-        follow(parent.graph, parent.node.inputs?.[link.origin_slot]?.link, rest);
-      }
-      return;
-    }
-    const origin = nodeById(graph, link.origin_id);
-    if (!origin) return;
-    if (origin.subgraph) {
-      // Into the subgraph: continue from what feeds that output.
-      const inner = origin.subgraph;
-      const innerStack = [...stack, { graph, node: origin }];
-      for (const l of linksOf(inner)) {
-        if (l.target_id === SUBGRAPH_OUTPUT_ID && l.target_slot === link.origin_slot) {
-          follow(inner, l.id, innerStack);
-        }
-      }
-      return;
-    }
-    queue.push({ graph, node: origin, stack });
-  };
-
-  while (queue.length) {
-    const { graph, node, stack } = queue.shift();
-    const key = `${stack.map((s) => graphId(s.graph) + "/" + s.node.id).join(":")}|${graphId(graph)}/${node.id}`;
-    if (visited.has(key)) continue;
-    visited.add(key);
-    if (node !== start && node.type === PROMPT_TYPE) {
-      found.add(node);
-      continue;
-    }
-    for (const input of node.inputs ?? []) follow(graph, input.link, stack);
-  }
-  return [...found];
-}
-
-/**
- * The Prompt + LoRAs node of the active Warp Send's group: by link walk,
- * else the one inside the same LGraphGroup as the Send. `group` names that
- * group: its title, or the Send's name.
- */
-export function findTargetPrompt(rootGraph) {
-  const send = collectSends(rootGraph).find((s) => s.active);
-  if (!send) return { error: "Activate a Warp Send first" };
-
-  const box = groupAt(send.graph, send.node);
-  const group = box?.title || send.name;
-
-  let prompts = promptsUpstream(rootGraph, send.graph, send.node);
-  if (prompts.length === 0 && box) {
-    const b = bounds(box);
-    prompts = (send.graph._nodes ?? []).filter(
-      (n) => n.type === PROMPT_TYPE && inside(b, centre(n))
-    );
-  }
-  if (prompts.length === 0) return { error: `No Prompt + LoRAs found for "${group}"` };
-  if (prompts.length > 1) {
-    return { error: `"${group}" has ${prompts.length} Prompt + LoRAs nodes; keep one` };
-  }
-  return { node: prompts[0], group };
+  const used = new Set();
+  return entries.map(({ node, label }) => {
+    let unique = label;
+    for (let n = 2; used.has(unique); n++) unique = `${label} (${n})`;
+    used.add(unique);
+    return { node, label: unique };
+  });
 }
