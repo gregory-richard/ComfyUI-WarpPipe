@@ -120,3 +120,15 @@ It is virtual (`isVirtualNode`, like Warp Select), so it is never part of a queu
   - With the user's key, one harmless idea: **write** → **use**.
   - The prompt lands in the active group.
   - The workflow JSON is checked for the absence of the key.
+
+## Addendum 2026-11-08 (approved in chat): chat pop-up replaces the hub node
+
+The hub node meant jumping between it and the group's prompt, and its state and buttons were hard to read.
+
+- **Entry:** a small **Write** button on the `text` box of every 🌀 Prompt + LoRAs node. There is no `Warp Prompt Writer` node any more. Nothing depends on the active Warp Send.
+- **Pop-up:** a list of chats on the left. Each chat holds requests and versions; the newest is open and editable, older ones are collapsed. **Continue from here** sets the base of the next Write.
+- **Sent to the LLM:** the system prompt, the base version as `previous_result`, the new request and its images (`references`, at most 8). Not the whole chat.
+- **Current prompt:** only when added with **+ Current prompt**; it becomes the chat's seed.
+- **Use in [target]:** writes the text unchanged into the chosen Prompt + LoRAs (`listTargets`). `//` lines stay, because the node strips comments itself.
+- **Status:** per-chat jobs that survive closing the pop-up; yellow while writing with a seconds counter, a toast and a green check when finished.
+- **Storage:** chats in `user/<user>/warppipe_prompt_chats.json`; model, system prompt, temperature and base URL in ComfyUI settings. None of it in workflows or images.
