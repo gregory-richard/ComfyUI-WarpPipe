@@ -309,6 +309,37 @@ a photo in a sunlit kitchen   // try 0.6 next time
 // <lora:detail tweaker:0.8>  <- parked for now
 ```
 
+## Folding sections
+
+A line starting `////` is a section header, in the prompt and in either LoRA
+box. A section runs to the next `////` line or the end of the box. Text above
+the first header is always shown.
+
+```
+a photo in a sunlit kitchen
+//// Style
+film grain, muted colours
+//// Lighting
+warm light from the left
+```
+
+Being a note, a header line never reaches the model.
+
+A box with a header shows its sections while you are not typing in it. Click
+**▾** to fold a section down to its title and a count of its lines, **▸** to open
+it again. Click anywhere else, on the text or on a title, and you are editing:
+the full text comes back with the caret where you clicked and that line where it
+was on screen. Click away and the same sections are folded again. Clicking a
+folded title puts the caret at the end of its `////` line.
+
+**Folding only changes what is shown.** The text in the box stays whole, so a
+folded LoRA still loads and folded text still goes to the model. To stop a line
+having an effect, comment it out with `//`.
+
+What is folded is saved with the node, and Ctrl+Z takes a fold back. A section is
+remembered by its title and which of that title it is, so renaming a header opens
+it.
+
 ## Trigger words
 
 Nothing is added to your prompt. The **prompt** output is what you wrote, with

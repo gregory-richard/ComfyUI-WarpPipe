@@ -1,4 +1,5 @@
 import { app } from "../../scripts/app.js";
+import { foldMarkup, parseSections, pruneFolded } from "./fold.js";
 import { everything, forget } from "./library.js";
 import {
   connectedBase,
@@ -72,6 +73,8 @@ const boxStyle = (el) => {
 // properties because that is where a view this node keeps belongs: serialised
 // with the node, restored with it, and no slot in widgets_values.
 const ROWS_PROP = "warppipeListRows";
+// The sections folded in each box, by widget name, as keys from parseSections.
+const FOLDED_PROP = "warppipeFolded";
 // What a widget given no room to draw in returns, which is how both renderers
 // are told to leave it out: neither sizes by widget.hidden.
 const NO_ROOM = -4;
@@ -154,6 +157,29 @@ body.wpe-own-tip .p-tooltip { display: none !important; }
 /* Drawn, never typed: only its colour says it is provisional. */
 .wpe-ghost { color: #767e8b; }
 .wpe-ghost-key { color: #9aa3b0; }
+
+/* A box's //// sections, over the textarea while it is not being typed in.
+   Laid out by measure() exactly as the layer is, and above the textarea but
+   under the strip, the grip and the AI button. The scrollbar is hidden because
+   the right padding already holds whatever the textarea's gutter costs: the
+   text has to wrap where it does in the box underneath. */
+.wpf-view {
+  position: absolute; z-index: 1; overflow: hidden auto; scrollbar-width: none;
+  color: var(--input-text, #dcdcdc); background: var(--comfy-input-bg, #222);
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: normal;
+  cursor: text;
+}
+.wpf-head { position: relative; min-height: 1lh; padding-left: 20px; }
+/* Taller than the row it sits in, reaching over its neighbours, so a target
+   big enough to hit leaves the rows the height of the lines in the box. */
+.wpf-fold {
+  position: absolute; left: 0; top: 50%; width: 20px; height: 20px; margin-top: -10px;
+  display: flex; align-items: center; justify-content: center;
+  color: #9aa3b0; cursor: pointer;
+}
+.wpf-fold:hover { color: #4ec8e8; }
+.wpf-title { font-weight: 600; }
+.wpf-count { margin-left: 0.6em; opacity: 0.5; }
 
 /* One line along the bottom of the prompt field, for whichever tag the caret
    is in. It replaced a scrolling list of cards - one per LoRA - which repeated
@@ -569,13 +595,211 @@ function findTextarea(node, name) {
   return nth === -1 ? null : (root.querySelectorAll("textarea")[nth] ?? null);
 }
 
+/** Where the character `at` places into root's text is, drawn-only text aside. */
+function textPoint(root, at) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let left = at;
+  let last = null;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.parentElement.closest(".wpe-ghost")) continue;
+    if (left < node.length) return { node, offset: left };
+    left -= node.length;
+    last = node;
+  }
+  return last && { node: last, offset: last.length };
+}
+
+/** The box a character is drawn in, or null if nothing was laid out for it. */
+function charRect(root, at) {
+  const from = textPoint(root, at);
+  const to = textPoint(root, at + 1);
+  if (!from || !to) return null;
+  const range = document.createRange();
+  range.setStart(from.node, from.offset);
+  range.setEnd(to.node, to.offset);
+  return range.getClientRects()[0] ?? null;
+}
+
+/** The text position under a point on the screen, as a node and an offset. */
+function caretFromPoint(x, y) {
+  const position = document.caretPositionFromPoint?.(x, y);
+  if (position) return { node: position.offsetNode, offset: position.offset };
+  const range = document.caretRangeFromPoint?.(x, y);
+  return range ? { node: range.startContainer, offset: range.startOffset } : null;
+}
+
+/** A read-only picture of a box with its //// sections folded.
+ *
+ * A textarea cannot hide lines, and taking them out of its value is how text
+ * gets lost. So folding never touches the value: while the box is not being
+ * typed in, this lies over it and shows the sections, and a click on the text
+ * hands over to the real textarea with the caret where the click was.
+ *
+ * `folding` says which keys are folded and changes that, `paintRange` colours a
+ * stretch of the text, and `settle` brings the layer up to date.
+ */
+function foldView(textarea, layer, folding, paintRange, settle) {
+  const view = document.createElement("div");
+  view.className = "wpf-view";
+  view.style.display = "none";
+  // After the textarea, so at the same z-index this is the one on top.
+  textarea.after(view);
+
+  let sections = [];
+  let painted = "";
+
+  const place = () => {
+    const shown =
+      sections.length > 0 &&
+      document.activeElement !== textarea &&
+      getComputedStyle(textarea).display !== "none";
+    const want = shown ? "" : "none";
+    if (view.style.display !== want) view.style.display = want;
+  };
+
+  const paint = () => {
+    // A focused box shows its full text, and the next blur repaints this.
+    if (document.activeElement !== textarea) {
+      const text = textarea.value || "";
+      const parsed = parseSections(text);
+      sections = parsed.sections;
+      const html = sections.length
+        ? foldMarkup(text, parsed, new Set(folding.keys()), paintRange)
+        : "";
+      if (html !== painted) {
+        painted = html;
+        view.innerHTML = html;
+      }
+    }
+    place();
+  };
+
+  /** Which character of the text a click on the view means. */
+  const clickedOffset = (e) => {
+    const head = e.target.closest(".wpf-head");
+    const section = head ? sections[Number(head.dataset.i)] : null;
+    if (head?.classList.contains("is-folded")) return section.headerEnd;
+
+    const hit = caretFromPoint(e.clientX, e.clientY);
+    const from = hit?.node.nodeType === Node.TEXT_NODE ? hit.node.parentElement : hit?.node;
+    const hitBlock = from?.closest("[data-at]");
+    if (hitBlock && view.contains(hitBlock)) {
+      const range = document.createRange();
+      range.selectNodeContents(hitBlock);
+      range.setEnd(hit.node, hit.offset);
+      const before = range.cloneContents();
+      for (const ghost of before.querySelectorAll(".wpe-ghost")) ghost.remove();
+      const at = Number(hitBlock.dataset.at) + before.textContent.length;
+      return Math.min(at, Number(hitBlock.dataset.end));
+    }
+
+    // Nothing to read a character from: the start of the line that was clicked.
+    if (section) return section.headerStart;
+    const block = e.target.closest("[data-at]");
+    if (!block) return (textarea.value || "").length;
+    const start = Number(block.dataset.at);
+    const body = (textarea.value || "").slice(start, Number(block.dataset.end));
+    let at = 0;
+    let line = 0;
+    for (const row of body.split("\n")) {
+      const rect = charRect(block, at);
+      if (rect && rect.top > e.clientY) break;
+      line = at;
+      at += row.length + 1;
+    }
+    return start + line;
+  };
+
+  /** Hand over to the textarea, keeping the clicked line where it was. */
+  const startEditing = (e) => {
+    const at = clickedOffset(e);
+    // Set first: the focus handlers read the caret to fill the strip.
+    textarea.setSelectionRange(at, at);
+    textarea.focus({ preventScroll: true });
+    // Focus can bring in the textarea's scrollbar, which rewraps the layer.
+    settle();
+    const rect = charRect(layer, at);
+    if (!rect) return;
+    const box = layer.getBoundingClientRect();
+    const scale = box.height / layer.offsetHeight || 1;
+    const lineMiddle = (rect.top + rect.height / 2 - box.top) / scale + layer.scrollTop;
+    textarea.scrollTop = lineMiddle - (e.clientY - box.top) / scale;
+    settle();
+  };
+
+  textarea.addEventListener("focus", place);
+  // Deferred so the document has settled on where focus went: a window losing
+  // focus blurs the box but leaves it the active element.
+  textarea.addEventListener("blur", () => setTimeout(paint, 0));
+
+  view.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const control = e.target.closest(".wpf-fold");
+    if (!control) {
+      startEditing(e);
+      return;
+    }
+    folding.toggle(sections[Number(control.parentElement.dataset.i)].key, sections);
+    paint();
+  });
+  view.addEventListener("dblclick", (e) => e.stopPropagation());
+  // Not a text selection, and nothing here should move the focus.
+  view.addEventListener("mousedown", (e) => e.preventDefault());
+
+  const onClassic = () => !!view.closest(".dom-widget");
+
+  // The node would take a press for a drag and the canvas for a pan. The middle
+  // button is the exception, handed on as ComfyUI's own textarea hands it on.
+  const handlers = {
+    pointerdown: "processMouseDown",
+    pointermove: "processMouseMove",
+    pointerup: "processMouseUp",
+  };
+  for (const [type, handler] of Object.entries(handlers)) {
+    view.addEventListener(type, (e) => {
+      const middle = type === "pointermove" ? (e.buttons & 4) !== 0 : e.button === 1;
+      if (middle && onClassic()) app.canvas?.[handler]?.(e);
+      else e.stopPropagation();
+    });
+  }
+
+  // The same choices ComfyUI's own textarea makes. Nodes 2.0 only needs telling
+  // when to keep it: anything let through bubbles to the node, which decides.
+  view.addEventListener(
+    "wheel",
+    (e) => {
+      const classic = onClassic();
+      const trackpad =
+        classic &&
+        app.extensionManager?.setting?.get?.("LiteGraph.Pointer.TrackpadGestures") &&
+        (Math.abs(e.deltaX) > 0 || Math.abs(e.deltaY) < 50);
+      const forCanvas =
+        e.ctrlKey || e.metaKey || trackpad || Math.abs(e.deltaX) > Math.abs(e.deltaY);
+      if (!forCanvas && view.scrollHeight > view.clientHeight) {
+        e.stopPropagation();
+        return;
+      }
+      if (classic) {
+        e.preventDefault();
+        e.stopPropagation();
+        app.canvas?.processMouseWheel?.(e);
+      }
+    },
+    { passive: false }
+  );
+
+  return { view, paint, place };
+}
+
 /** Colour ComfyUI's own textarea by putting a layer behind it.
  *
  * The widget is rendered by a Vue component, so the textarea can be replaced
  * at any time; the caller re-runs this when that happens. Nothing here changes
  * the value, which keeps serialising through ComfyUI as before.
+ *
+ * `folding` is { keys(), toggle(key, sections) } for the box's folded sections.
  */
-function light(textarea) {
+function light(textarea, folding) {
   const holder = textarea.parentElement;
   if (!holder) return null;
   // Return the controls, not the element: handing back the layer itself left
@@ -597,6 +821,22 @@ function light(textarea) {
   let triggers = [];
   let ghost = null;
   let linked = new Set();
+
+  const fold = foldView(
+    textarea,
+    layer,
+    folding,
+    (start, end) => {
+      // The one stretch the suggestion falls in draws it, at its own offset.
+      const here = ghost && ghost.at >= start && ghost.at <= end;
+      const local = here ? { ...ghost, at: ghost.at - start } : null;
+      return highlight((textarea.value || "").slice(start, end), status, triggers, local, linked);
+    },
+    () => {
+      measure();
+      paint();
+    }
+  );
 
   // Everything is read before anything is written. Reading a size after
   // writing a style lays out the half-written layer, and it used to be laid
@@ -635,7 +875,10 @@ function light(textarea) {
 
     for (const [prop, value] of Object.entries(next)) {
       if (layer.style[prop] !== value) layer.style[prop] = value;
+      // The view is laid out as the layer is, and shown on terms of its own.
+      if (prop !== "display" && fold.view.style[prop] !== value) fold.view.style[prop] = value;
     }
+    fold.place();
     // A change of width rewraps the layer, which can clamp its scroll.
     syncScroll();
   };
@@ -648,13 +891,16 @@ function light(textarea) {
   // Rewriting innerHTML with identical markup still costs a reflow and can be
   // seen as a flicker, and the timer calls this every second regardless.
   let painted = null;
+  let paintedValue = null;
   const paint = () => {
+    paintedValue = textarea.value;
     const html = highlight(textarea.value || "", status, triggers, ghost, linked);
     if (html !== painted) {
       painted = html;
       layer.innerHTML = html;
     }
     syncScroll();
+    fold.paint();
   };
 
   // A textarea scrolls itself to follow the caret, at moments no event
@@ -678,9 +924,11 @@ function light(textarea) {
       layer.offsetWidth !== textarea.offsetWidth ||
       layer.offsetHeight !== textarea.offsetHeight ||
       textarea.clientWidth !== seenClientWidth;
-    // Once a second regardless, so a theme change is picked up too - those
-    // alter the font without altering the size.
-    if (resized || ++tick % 10 === 0) {
+    // A value set from outside fires no event, and the view lying over the box
+    // would otherwise go on showing the old text. Once a second regardless, so
+    // a theme change is picked up too - those alter the font without altering
+    // the size.
+    if (resized || textarea.value !== paintedValue || ++tick % 10 === 0) {
       measure();
       paint();
     }
@@ -720,6 +968,7 @@ function light(textarea) {
 
   const controls = {
     layer,
+    view: fold.view,
     textarea,
     paint,
     measure,
@@ -744,6 +993,7 @@ function light(textarea) {
     detach: () => {
       clearInterval(ticker);
       layer.remove();
+      fold.view.remove();
       showTitle(ownTitle);
       textarea.classList.remove("wpe-live", "is-lit");
       delete textarea._wpeLayer;
@@ -1802,7 +2052,10 @@ app.registerExtension({
 
     const wire = (box) => {
       const el = box.el;
-      box.lit = light(el);
+      box.lit = light(el, {
+        keys: () => foldedKeys(box),
+        toggle: (key, sections) => toggleFold(box, key, sections),
+      });
       el.addEventListener("input", commit);
       // The strip follows the caret, which moves for reasons other than typing.
       const moved = () => {
@@ -1909,6 +2162,29 @@ app.registerExtension({
       node.properties = { ...(node.properties ?? {}), [ROWS_PROP]: held };
       sizeBoxes();
       node.setDirtyCanvas?.(true, true);
+    };
+
+    /** The keys of the sections folded in a box, as saved with the node. */
+    const foldedKeys = (box) => {
+      const keys = node.properties?.[FOLDED_PROP]?.[box.name];
+      return Array.isArray(keys) ? keys : [];
+    };
+
+    /** Fold or open one section, as one step of undo.
+     *
+     * Bracketed for the same reason a height set by hand is: nothing about a
+     * click here tells ComfyUI the graph changed. Sections no longer in the
+     * text fall out of the list now, while it is being rewritten anyway.
+     */
+    const toggleFold = (box, key, sections) => {
+      const kept = pruneFolded(foldedKeys(box), sections);
+      const next = kept.includes(key) ? kept.filter((k) => k !== key) : [...kept, key];
+      app.canvas?.emitBeforeChange?.();
+      const held = { ...(node.properties?.[FOLDED_PROP] ?? {}) };
+      if (next.length) held[box.name] = next;
+      else delete held[box.name];
+      node.properties = { ...(node.properties ?? {}), [FOLDED_PROP]: held };
+      app.canvas?.emitAfterChange?.();
     };
 
     /** The prompt's height as the canvas laid it out, in canvas pixels. */
@@ -2146,6 +2422,8 @@ app.registerExtension({
       configured = true;
       for (const box of [list, list2]) if (box) box.loading = true;
       sizeBoxes();
+      // What is folded came with the properties just restored.
+      for (const box of boxes.values()) box.lit?.paint();
       return result;
     };
 
@@ -2226,7 +2504,8 @@ app.registerExtension({
           (box) =>
             t === box.el ||
             t === box.grip ||
-            (box.lit?.layer && (box.lit.layer.contains(t) || t === box.lit.layer))
+            (box.lit?.layer && (box.lit.layer.contains(t) || t === box.lit.layer)) ||
+            box.lit?.view.contains(t)
         );
       });
 
