@@ -12,6 +12,7 @@ written, and are scrubbed from any error text.
 import base64
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -405,6 +406,150 @@ def make_title(
     return clean_title(parse_reply(payload))
 
 
+# --- LoRAs ------------------------------------------------------------------
+
+LORAS_MARKER = "===LORAS==="
+MAX_AVAILABLE_LORAS = 1000
+MAX_TRIGGER_CHARS = 120
+TRIGGER_JOIN = ", "
+MAX_SUGGESTIONS = 5
+MAX_REASON_CHARS = 80
+MIN_STRENGTH = 0.1
+MAX_STRENGTH = 1.5
+DEFAULT_STRENGTH = 0.8
+_MARKER_DECORATION = " \t\r*#`"
+_REF_PREFIX = re.compile(r"^[\s>*#`•-]*(?:\d+[.)]\s*)?[*`]*")
+_REF_SUFFIX = " \t\r*`:"
+
+
+def _one_line(text: str) -> str:
+    """Titles and triggers come from downloaded sidecars and must stay on their line."""
+    return " ".join(text.split())
+
+
+def _clean_triggers(raw) -> list:
+    """The strings, cut so that joined they fit in MAX_TRIGGER_CHARS."""
+    kept = []
+    used = 0
+    for word in raw if isinstance(raw, list) else ():
+        word = _one_line(word) if isinstance(word, str) else ""
+        if not word:
+            continue
+        room = MAX_TRIGGER_CHARS - used - (len(TRIGGER_JOIN) if kept else 0)
+        if room <= 0:
+            break
+        word = word[:room].rstrip()
+        kept.append(word)
+        used += len(word) + (len(TRIGGER_JOIN) if len(kept) > 1 else 0)
+    return kept
+
+
+def _clean_lora(raw) -> Optional[dict]:
+    title = _one_line(raw["title"]) if isinstance(raw, dict) and isinstance(raw.get("title"), str) else ""
+    return {"title": title, "triggers": _clean_triggers(raw.get("triggers"))} if title else None
+
+
+def _list_of(raw) -> list:
+    return raw if isinstance(raw, list) else []
+
+
+def clean_loras(raw) -> Optional[dict]:
+    """The `loras` of a request, fit to go in a prompt. None means it was not sent."""
+    if not isinstance(raw, dict):
+        return None
+    available = []
+    for item in _list_of(raw.get("available")):
+        lora = _clean_lora(item)
+        ref = _one_line(item["ref"]) if lora and isinstance(item.get("ref"), str) else ""
+        if ref:
+            available.append({"ref": ref, **lora})
+        if len(available) == MAX_AVAILABLE_LORAS:
+            break
+    active = [lora for lora in map(_clean_lora, _list_of(raw.get("active"))) if lora]
+    return {"available": available, "active": active}
+
+
+def _lora_line(lora: dict) -> str:
+    parts = [lora["ref"]] if "ref" in lora else []
+    parts.append(lora["title"])
+    if lora.get("triggers"):
+        parts.append("triggers: " + TRIGGER_JOIN.join(lora["triggers"]))
+    return " | ".join(parts)
+
+
+def lora_instructions(loras: dict) -> str:
+    """The rules and lists that follow the master prompt; empty when there are no LoRAs."""
+    available = loras.get("available") or []
+    active = loras.get("active") or []
+    if not available and not active:
+        return ""
+    blocks = ["LoRAs: a LoRA is an add-on for the image model that teaches it a subject or a style."]
+    if active:
+        blocks.append(
+            "ACTIVE LoRAs are loaded for this image. Use their trigger words in the prompt "
+            "where they fit:\n" + "\n".join(map(_lora_line, active))
+        )
+    blocks.append(
+        "Never use trigger words of LoRAs that are not active, "
+        "and never mention LoRAs in the prompt."
+    )
+    blocks.append(
+        f"After the complete prompt, even if you were told to write only the prompt, write a "
+        f"line containing exactly {LORAS_MARKER} and then at most {MAX_SUGGESTIONS} lines of the "
+        "form REF | strength | reason for AVAILABLE LoRAs that would clearly help this image. "
+        "The strength is between 0.4 and 1.2 and the reason is at most 6 words. "
+        "If none would help, write only the marker line."
+    )
+    blocks.append(
+        "AVAILABLE LoRAs:\n" + ("\n".join(map(_lora_line, available)) if available else "(none)")
+    )
+    return "\n\n".join(blocks)
+
+
+def _is_marker(line: str) -> bool:
+    return line.strip(_MARKER_DECORATION).upper() == LORAS_MARKER
+
+
+def _bare_ref(text: str) -> str:
+    return _REF_PREFIX.sub("", text).rstrip(_REF_SUFFIX)
+
+
+def _strength(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        return DEFAULT_STRENGTH
+    if not math.isfinite(value):
+        return DEFAULT_STRENGTH
+    return round(min(MAX_STRENGTH, max(MIN_STRENGTH, value)), 2)
+
+
+def split_suggestions(text: str, valid_refs) -> tuple:
+    """(the prompt, [{ref, strength, reason}]), split at the last marker line."""
+    lines = text.split("\n")
+    at = next((i for i in range(len(lines) - 1, -1, -1) if _is_marker(lines[i])), None)
+    if at is None:
+        return text, []
+    found = []
+    seen = set()
+    for line in lines[at + 1:]:
+        ref, strength, reason = (line.split("|", 2) + ["", ""])[:3]
+        ref = _bare_ref(ref)
+        if ref in seen or ref not in valid_refs:
+            continue
+        seen.add(ref)
+        found.append(
+            {
+                "ref": ref,
+                "strength": _strength(strength.strip()),
+                "reason": reason.strip()[:MAX_REASON_CHARS].rstrip(),
+            }
+        )
+        if len(found) == MAX_SUGGESTIONS:
+            break
+    return "\n".join(lines[:at]).strip(), found
+
+
 # --- request handling (no aiohttp) -----------------------------------------
 
 
@@ -517,6 +662,10 @@ def handle_write(
         system = read_system_prompt(
             (settings or {}).get(SETTING_DIR), str(body.get("system_prompt") or "")
         )
+        loras = clean_loras(body.get("loras"))
+        extra = lora_instructions(loras) if loras else ""
+        if extra:
+            system = f"{system.rstrip()}\n\n{extra}"
         images = [
             _image_data_url(name, image_path) for name in _reference_names(body.get("references"))
         ]
@@ -526,10 +675,17 @@ def handle_write(
             model = next((m for m in models if m["id"] == model_id), None)
         except PromptWriterError:
             model = None
-        return write(
+        out = write(
             base_url, model_id, system, temperature, idea, previous, images,
             api_key=key, model=model, opener=opener,
         )
+        out["suggestions"] = []
+        if loras is not None:
+            refs = {lora["ref"] for lora in loras["available"]}
+            out["text"], out["suggestions"] = split_suggestions(out["text"], refs)
+            if not out["text"].strip():
+                raise PromptWriterError("The model returned no text")
+        return out
     except PromptWriterError as exc:
         return {"error": _scrub(str(exc), key)}
 

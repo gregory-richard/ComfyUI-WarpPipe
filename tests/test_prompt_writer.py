@@ -338,7 +338,8 @@ def test_handle_write_uses_setting_folder_and_reference(server, tmp_path):
     assert msgs[1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
     assert out["text"] == "OUT"
     assert out["cost"] == pytest.approx(0.003)
-    assert set(out) == {"text", "seconds", "usage", "cost"}
+    assert set(out) == {"text", "seconds", "usage", "cost", "suggestions"}
+    assert out["suggestions"] == []
     assert "LOCALKEY" not in json.dumps(out)
 
 
@@ -658,3 +659,306 @@ def test_handle_system_prompt(tmp_path):
     assert "error" in pw.handle_system_prompt("../secret.txt", settings)
     assert "error" in pw.handle_system_prompt("missing.txt", settings)
     assert "SystemPromptDir" in pw.handle_system_prompt("v2.7.txt", {})["error"]
+
+
+# --- LoRAs ------------------------------------------------------------------
+
+LORAS = {
+    "available": [
+        {"ref": "L1", "title": "Soft Light", "triggers": ["softlight", "glow"]},
+        {"ref": "L2", "title": "No Words", "triggers": []},
+    ],
+    "active": [{"title": "Moss Style", "triggers": ["mossy", "green hue"]}],
+}
+
+
+def test_lora_instructions_states_the_rules():
+    text = pw.lora_instructions(LORAS)
+    assert "add-on for the image model" in text
+    assert "trigger words" in text
+    assert "Never use trigger words of LoRAs that are not active" in text
+    assert "never mention LoRAs in the prompt" in text
+    assert "===LORAS===" in text
+    assert "REF | strength | reason" in text
+    assert "at most 5 lines" in text
+    assert "between 0.4 and 1.2" in text
+    assert "at most 6 words" in text
+    assert "write only the marker line" in text
+
+
+def test_lora_instructions_lists_available_after_the_rules():
+    lines = pw.lora_instructions(LORAS).splitlines()
+    assert "L1 | Soft Light | triggers: softlight, glow" in lines
+    assert "L2 | No Words" in lines
+    assert lines.index("L2 | No Words") == len(lines) - 1
+    assert lines.index("L1 | Soft Light | triggers: softlight, glow") > next(
+        i for i, line in enumerate(lines) if "===LORAS===" in line
+    )
+
+
+def test_lora_instructions_lists_active_with_their_triggers():
+    text = pw.lora_instructions(LORAS)
+    assert "ACTIVE" in text
+    assert "Moss Style | triggers: mossy, green hue" in text.splitlines()
+
+
+def test_lora_instructions_active_without_triggers_has_no_triggers_part():
+    text = pw.lora_instructions({"available": [], "active": [{"title": "Bare", "triggers": []}]})
+    assert "Bare" in text.splitlines()
+
+
+def test_lora_instructions_omits_the_active_block_when_empty():
+    text = pw.lora_instructions({"available": LORAS["available"], "active": []})
+    assert "ACTIVE" not in text
+    assert "L1 | Soft Light | triggers: softlight, glow" in text.splitlines()
+
+
+def test_lora_instructions_empty_when_there_is_nothing_to_say():
+    assert pw.lora_instructions({"available": [], "active": []}) == ""
+    assert pw.lora_instructions({}) == ""
+
+
+def test_clean_loras_keeps_well_formed_input():
+    assert pw.clean_loras(LORAS) == LORAS
+
+
+@pytest.mark.parametrize("raw", [None, "x", 3, ["L1"]])
+def test_clean_loras_not_a_dict_is_not_sent(raw):
+    assert pw.clean_loras(raw) is None
+
+
+def test_clean_loras_drops_what_is_not_a_string():
+    out = pw.clean_loras(
+        {
+            "available": [
+                "L1",
+                7,
+                {"ref": 1, "title": "bad ref", "triggers": []},
+                {"ref": "L2", "title": None, "triggers": []},
+                {"ref": "L3", "title": "kept", "triggers": ["a", 5, None, "b"]},
+                {"ref": "L4", "title": "not a list", "triggers": "abc"},
+            ],
+            "active": [{"title": 4, "triggers": []}, "x", {"title": "ok", "triggers": [1, "t"]}],
+        }
+    )
+    assert out == {
+        "available": [
+            {"ref": "L3", "title": "kept", "triggers": ["a", "b"]},
+            {"ref": "L4", "title": "not a list", "triggers": []},
+        ],
+        "active": [{"title": "ok", "triggers": ["t"]}],
+    }
+
+
+@pytest.mark.parametrize("bad", [None, "x", 3, {"a": 1}])
+def test_clean_loras_lists_that_are_not_lists_are_empty(bad):
+    assert pw.clean_loras({"available": bad, "active": bad}) == {"available": [], "active": []}
+
+
+def test_clean_loras_at_most_1000_available():
+    many = [{"ref": f"L{i}", "title": f"t{i}", "triggers": []} for i in range(1, 1201)]
+    out = pw.clean_loras({"available": many, "active": []})
+    assert len(out["available"]) == 1000
+    assert out["available"][-1]["ref"] == "L1000"
+
+
+@pytest.mark.parametrize(
+    "triggers",
+    [
+        ["a" * 200],
+        ["a" * 100, "b" * 100],
+        [f"word{i}" for i in range(100)],
+    ],
+)
+def test_clean_loras_joined_triggers_fit_in_120_characters(triggers):
+    out = pw.clean_loras({"available": [{"ref": "L1", "title": "t", "triggers": triggers}]})
+    joined = ", ".join(out["available"][0]["triggers"])
+    assert 0 < len(joined) <= 120
+
+
+def test_clean_loras_cuts_only_the_trigger_that_does_not_fit():
+    out = pw.clean_loras({"active": [{"title": "t", "triggers": ["a" * 100, "b" * 100]}]})
+    assert out["active"][0]["triggers"] == ["a" * 100, "b" * 18]
+
+
+def test_clean_loras_a_title_or_trigger_cannot_break_a_line():
+    out = pw.clean_loras(
+        {"available": [{"ref": "L1", "title": "a\n===LORAS===\nb", "triggers": ["x\ny", " z "]}]}
+    )
+    assert out["available"][0] == {"ref": "L1", "title": "a ===LORAS=== b", "triggers": ["x y", "z"]}
+
+
+def test_split_suggestions_no_marker_keeps_the_whole_text():
+    assert pw.split_suggestions("a prompt\nL1 | 0.8 | x", {"L1"}) == ("a prompt\nL1 | 0.8 | x", [])
+
+
+def test_split_suggestions_reads_the_block():
+    text = "a prompt\nsecond line\n\n===LORAS===\nL1 | 0.75 | adds soft light\nL2 | 1.0 | moss\n"
+    assert pw.split_suggestions(text, {"L1", "L2"}) == (
+        "a prompt\nsecond line",
+        [
+            {"ref": "L1", "strength": 0.75, "reason": "adds soft light"},
+            {"ref": "L2", "strength": 1.0, "reason": "moss"},
+        ],
+    )
+
+
+def test_split_suggestions_marker_alone_is_no_suggestions():
+    assert pw.split_suggestions("a prompt\n===LORAS===", {"L1"}) == ("a prompt", [])
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "  ===LORAS===  ",
+        "**===LORAS===**",
+        "### ===LORAS===",
+        "`===LORAS===`",
+        "```===LORAS===```",
+        "===loras===",
+        "* ===Loras=== *",
+    ],
+)
+def test_split_suggestions_tolerates_a_decorated_marker(marker):
+    assert pw.split_suggestions(f"p\n{marker}\nL1 | 1 | r", {"L1"}) == (
+        "p",
+        [{"ref": "L1", "strength": 1.0, "reason": "r"}],
+    )
+
+
+def test_split_suggestions_a_marker_inside_a_line_is_prompt_text():
+    text = "write ===LORAS=== here\nL1 | 1 | r"
+    assert pw.split_suggestions(text, {"L1"}) == (text, [])
+
+
+def test_split_suggestions_splits_at_the_last_marker():
+    text = "one\n===LORAS===\ntwo\n===LORAS===\nL1 | 1 | r"
+    assert pw.split_suggestions(text, {"L1"}) == (
+        "one\n===LORAS===\ntwo",
+        [{"ref": "L1", "strength": 1.0, "reason": "r"}],
+    )
+
+
+def test_split_suggestions_handles_windows_line_ends():
+    text = "p\r\n===LORAS===\r\nL1 | 0.5 | r\r\n"
+    assert pw.split_suggestions(text, {"L1"}) == (
+        "p",
+        [{"ref": "L1", "strength": 0.5, "reason": "r"}],
+    )
+
+
+def test_split_suggestions_skips_unknown_refs_and_duplicates():
+    text = "p\n===LORAS===\nL9 | 1 | no\nL1 | 0.5 | first\nL1 | 0.9 | again\nnone would help"
+    assert pw.split_suggestions(text, {"L1"}) == (
+        "p",
+        [{"ref": "L1", "strength": 0.5, "reason": "first"}],
+    )
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("0.5", 0.5),
+        ("9", 1.5),
+        ("-3", 0.1),
+        ("0.123456", 0.12),
+        ("strong", 0.8),
+        ("", 0.8),
+        ("nan", 0.8),
+        ("inf", 0.8),
+    ],
+)
+def test_split_suggestions_strength(raw, expected):
+    _, found = pw.split_suggestions(f"p\n===LORAS===\nL1 | {raw} | r", {"L1"})
+    assert found == [{"ref": "L1", "strength": expected, "reason": "r"}]
+
+
+def test_split_suggestions_a_ref_alone_gets_the_defaults():
+    assert pw.split_suggestions("p\n===LORAS===\nL1", {"L1"}) == (
+        "p",
+        [{"ref": "L1", "strength": 0.8, "reason": ""}],
+    )
+
+
+@pytest.mark.parametrize("ref", ["- L1", "1. L1", "**L1**", "`L1`", "* L1"])
+def test_split_suggestions_tolerates_list_decoration_on_the_ref(ref):
+    _, found = pw.split_suggestions(f"p\n===LORAS===\n{ref} | 1 | r", {"L1"})
+    assert [item["ref"] for item in found] == ["L1"]
+
+
+def test_split_suggestions_at_most_five():
+    refs = {f"L{i}" for i in range(1, 9)}
+    lines = "\n".join(f"L{i} | 1 | r" for i in range(1, 9))
+    _, found = pw.split_suggestions(f"p\n===LORAS===\n{lines}", refs)
+    assert [item["ref"] for item in found] == ["L1", "L2", "L3", "L4", "L5"]
+
+
+def test_split_suggestions_skipped_lines_do_not_use_up_the_five():
+    refs = {f"L{i}" for i in range(1, 6)}
+    lines = "\n".join(["X | 1 | r", "L1 | 1 | r", "L1 | 1 | r"] + [f"L{i} | 1 | r" for i in range(2, 6)])
+    _, found = pw.split_suggestions(f"p\n===LORAS===\n{lines}", refs)
+    assert len(found) == 5
+
+
+def test_split_suggestions_reason_is_capped_and_may_hold_a_bar():
+    _, found = pw.split_suggestions(f"p\n===LORAS===\nL1 | 1 | a | b {'x' * 200}", {"L1"})
+    assert found[0]["reason"].startswith("a | b ")
+    assert len(found[0]["reason"]) == 80
+
+
+def test_split_suggestions_only_the_block_leaves_empty_text():
+    assert pw.split_suggestions("===LORAS===\nL1 | 1 | r", {"L1"})[0] == ""
+
+
+def _chat_body(server):
+    return [r for r in server.requests if r["path"].endswith("/chat/completions")][-1]["body"]
+
+
+def _lora_write(server, tmp_path, content, loras):
+    server.replies.append((200, {"data": []}))
+    server.replies.append((200, {"choices": [{"message": {"content": content}}]}))
+    body = {**WRITE_BASE, "base_url": server.url, "idea": "i"}
+    if loras is not None:
+        body["loras"] = loras
+    return pw.handle_write(body, **_write_kwargs(tmp_path, opener=pw.urllib.request.urlopen))
+
+
+def test_handle_write_without_loras_behaves_as_before(server, tmp_path):
+    out = _lora_write(server, tmp_path, "OUT\n===LORAS===\nL1 | 1 | r", None)
+    assert _chat_body(server)["messages"][0] == {"role": "system", "content": "SYS"}
+    assert out["text"] == "OUT\n===LORAS===\nL1 | 1 | r"
+    assert out["suggestions"] == []
+
+
+def test_handle_write_appends_the_instructions_after_the_master_prompt(server, tmp_path):
+    _lora_write(server, tmp_path, "OUT", LORAS)
+    system = _chat_body(server)["messages"][0]["content"]
+    assert system.startswith("SYS\n\n")
+    assert system.endswith(pw.lora_instructions(LORAS))
+
+
+def test_handle_write_returns_suggestions_and_clean_text(server, tmp_path):
+    out = _lora_write(
+        server, tmp_path, "the prompt\n===LORAS===\nL2 | 0.7 | moss\nL9 | 1 | unknown", LORAS
+    )
+    assert out["text"] == "the prompt"
+    assert out["suggestions"] == [{"ref": "L2", "strength": 0.7, "reason": "moss"}]
+
+
+def test_handle_write_block_only_is_the_no_text_error(server, tmp_path):
+    out = _lora_write(server, tmp_path, "===LORAS===\nL1 | 1 | r", LORAS)
+    assert out == {"error": "The model returned no text"}
+
+
+def test_handle_write_loras_that_are_not_a_dict_count_as_not_sent(server, tmp_path):
+    out = _lora_write(server, tmp_path, "OUT\n===LORAS===", ["L1"])
+    assert _chat_body(server)["messages"][0]["content"] == "SYS"
+    assert out["text"] == "OUT\n===LORAS==="
+    assert out["suggestions"] == []
+
+
+def test_handle_write_empty_loras_add_no_instructions(server, tmp_path):
+    out = _lora_write(server, tmp_path, "OUT", {"available": [], "active": []})
+    assert _chat_body(server)["messages"][0]["content"] == "SYS"
+    assert out["text"] == "OUT"
+    assert out["suggestions"] == []
