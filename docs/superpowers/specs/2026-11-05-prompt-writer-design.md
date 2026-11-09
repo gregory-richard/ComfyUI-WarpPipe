@@ -132,3 +132,10 @@ The hub node meant jumping between it and the group's prompt, and its state and 
 - **Use in [target]:** writes the text unchanged into the chosen Prompt + LoRAs (`listTargets`). `//` lines stay, because the node strips comments itself.
 - **Status:** per-chat jobs that survive closing the pop-up; yellow while writing with a seconds counter, a toast and a green check when finished.
 - **Storage:** chats in `user/<user>/warppipe_prompt_chats.json`; model, system prompt, temperature and base URL in ComfyUI settings. None of it in workflows or images.
+
+## Addendum 2026-11-09 (approved in chat): LoRAs and sections
+
+- **For:** the target Prompt + LoRAs moves to the pop-up header and is kept per chat. Version cards keep only **Send to prompt**.
+- **LoRAs:** an optional toggle sends the LoRAs fitting the target's base model plus the active ones. Active LoRAs' trigger words may be used; suggestions come back after a `===LORAS===` marker by reference (`L12`), so a name cannot be invented.
+- **Never automatic:** a suggestion reaches the list only through **+** on its chip, which also puts the trigger words on the first line of that version. Pressing it again removes both.
+- **Sections:** `////` lines in the Prompt + LoRAs boxes start foldable sections. A textarea cannot hide lines, so a read-only view is shown while the box is not focused; the value never changes. Folded state lives in `node.properties.warppipeFolded`.

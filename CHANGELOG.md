@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **LoRA suggestions in the Prompt Writer**: optional list of the LoRAs for the chosen model; trigger words of active LoRAs are used and others suggested, added only with **+**
+- **Sections in the Prompt + LoRAs boxes**: `////` lines start a section that can be folded, without changing the text
+- **Ctrl+/ on a selection** comments or uncomments every selected line
 - **Top bar buttons**: **Active group** jumps to the active Warp Send, **Workflow** jumps to Warp Select
 - **Prompt Writer**: a chat-style pop-up, opened from the **✨ AI** button on every Prompt + LoRAs, where an LLM writes an image prompt from your request, images and own system prompt file. Each answer is a version you can edit, continue from, or send to any Prompt + LoRAs with **Use in** as one undo step. Status shows the cost, duration and tokens (`0.3 ¢ · 8 s · 1,812 → 640 tokens`). Several chats write at once and keep going after the pop-up closes, with a yellow button, a green dot and a toast to say where they are; **Stop** cancels. Chats are stored in the ComfyUI user folder, never in a workflow or images. NanoGPT is the default, with its model list, prices and vision marks; any OpenAI-compatible server (LM Studio, Ollama, llama.cpp) works through the base URL
 - **Keys stay on the server**: typed once under ⚙ (saved to `user/warppipe_llm_keys.json` for that host, kept across restarts, never readable from the browser), or `NANOGPT_API_KEY`. A key is sent only to its own host, and no key is ever stored in a workflow, an image or the browser

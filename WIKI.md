@@ -217,6 +217,15 @@ while you are only looking.
 Each of these is an ordinary edit to the text, which is why a tag gets a line to
 itself. It also means the browser's own undo understands all of them.
 
+#### Sections
+
+A line starting with `////` is a section header, and the section runs to the next
+one. A box with headers shows ▾/▸ on them while you are not typing in it; click
+anywhere else in the text to edit, with the full text in the box. Folding only
+changes what is shown, so folded LoRAs still load and folded text still reaches the
+model. To switch something off, select the lines and press `Ctrl+/`. The folded
+sections are saved in the node.
+
 #### Trigger words
 
 Nothing is added to your prompt. `Tab` on a tag offers that LoRA's words, and
@@ -658,7 +667,8 @@ browser (`web/prompt_writer.js`), never appears in the prompt ComfyUI receives,
 and writing a prompt never queues an image. Every call goes through the
 `/warppipe/llm` routes, so the browser never sees a key.
 
-**Header:** the chat title (click to rename), the model with a text filter, shown
+**Header:** the chat title (click to rename), **For** (the Prompt + LoRAs this chat
+writes for, kept per chat), the model with a text filter, shown
 as `name · $in/$out · 👁` (prices per million tokens, 👁 for vision), the system
 prompt, ⚙ and close. Under ⚙: base URL, temperature, the API key field with
 **Save key** (the field is cleared after sending and only reports whether a key
@@ -678,9 +688,16 @@ is set), and **Refresh lists** (the backend caches a model list for an hour).
 is shown with its images, an answer as a card `v2` with its status, e.g.
 `Finished · 0.3 ¢ · 8 s · 1,812 → 640 tokens`. The newest version is editable
 (saved on blur); older ones are one line and can be expanded. **Send to prompt** writes
-the text unchanged into the Prompt + LoRAs chosen in the list, as one undo step,
-flashes the node and closes the pop-up; the list starts on the node the pop-up
-was opened from. **Continue from here** makes an older version the next base.
+the text unchanged into the Prompt + LoRAs chosen under **For**, as one undo step,
+flashes the node and closes the pop-up. **Continue from here** makes an older
+version the next base.
+
+**LoRAs:** the composer's **LoRAs on** chip (setting `SendLoras`) sends the list of
+LoRAs that fit the target's base model along with the ones already active. The LLM
+uses the trigger words of active LoRAs and may suggest up to five others, shown as
+chips under the version. Nothing is added by itself: **+** on a chip appends the
+tag to the target's `loras` box and puts its trigger words on the first line of
+that version; pressing it again removes both.
 
 **Writing:** the composer takes up to 8 images (**Add image**, drag and drop or
 Ctrl+V, uploaded to `input/`), left out with a notice when the model has no
@@ -688,7 +705,7 @@ vision. The base chip sets what the next write starts from and is sent as
 `previous_result`: **+ Current prompt** in a new empty chat, then `Builds on v3`,
 which × clears. Ctrl+Enter sends; **Write** becomes **Stop** while it runs.
 Writes are held per chat outside the pop-up, so several run at once and survive
-closing it. The **Write** button on the node is yellow while a chat opened from
+closing it. The **✨ AI** button on the node is yellow while a chat opened from
 that node writes, and has a green dot when one finished unseen. A failed request
 shows a red card with **Retry** and is not stored.
 
