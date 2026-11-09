@@ -10,7 +10,23 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { formatStatus, listTargets, modelLabel } from "./prompt_writer_core.js";
+import { loras as loraLibrary } from "./library.js";
+import { connectedBase } from "./model_base.js";
+import {
+  addTriggerLine,
+  appendLoraTag,
+  buildLoraLists,
+  formatStatus,
+  isLoraListed,
+  listTargets,
+  loraToggleState,
+  modelLabel,
+  removeLoraTag,
+  removeTriggerLine,
+  resolveSuggestions,
+  resolveTarget,
+  targetLoraTags,
+} from "./prompt_writer_core.js";
 import {
   CHATS_FILE,
   addVersion,
@@ -18,6 +34,7 @@ import {
   createChat,
   deleteChat,
   emptyStore,
+  latestChatFor,
   normalizeStore,
   renameChat,
   rewindChat,
@@ -31,11 +48,15 @@ const SETTING_MODEL = "WarpPipe.PromptWriter.Model";
 const SETTING_SYSTEM_PROMPT = "WarpPipe.PromptWriter.SystemPrompt";
 const SETTING_TEMPERATURE = "WarpPipe.PromptWriter.Temperature";
 const SETTING_TITLE_MODEL = "WarpPipe.PromptWriter.TitleModel";
+const SETTING_SEND_LORAS = "WarpPipe.PromptWriter.SendLoras";
 const DEFAULT_TITLE_MODEL = "gemma-4-26b-a4b-it-chimeraxheretic";
 
 const DEFAULT_BASE_URL = "https://nano-gpt.com/api/v1";
 const DEFAULT_TEMPERATURE = 0.6;
 const TEXT_WIDGET = "text";
+const LORAS_WIDGET = "loras";
+// The node's text boxes in the order they are drawn, the way prompt_ui.js finds them.
+const BOX_WIDGETS = [TEXT_WIDGET, LORAS_WIDGET, "loras_2"];
 const NOT_LISTED = " (not listed)";
 const MAX_IMAGES = 8;
 const FLASH_MS = 600;
@@ -112,6 +133,15 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
   height: 32px; box-sizing: border-box; background: var(--wpw-panel);
   border: 1px solid var(--wpw-rule); border-radius: 6px; padding: 0 8px;
 }
+.wpw-for { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.wpw-modal .wpw-target {
+  height: 32px; box-sizing: border-box; min-width: 120px; max-width: 240px; padding: 0 8px; cursor: pointer;
+  font-weight: 500; background: color-mix(in srgb, var(--wpw-warp) 30%, var(--wpw-ground));
+  border: 1px solid var(--wpw-warp); border-radius: 6px;
+}
+.wpw-modal .wpw-target:hover { background: color-mix(in srgb, var(--wpw-warp) 45%, var(--wpw-ground)); }
+.wpw-modal .wpw-target:disabled { opacity: 0.6; cursor: default; }
+.wpw-target option { background: var(--wpw-ground); color: var(--wpw-ink); }
 .wpw-combo {
   flex: 1 1 320px; min-width: 0; cursor: pointer; text-align: left;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -254,12 +284,34 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 .wpw-text { margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .wpw-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex: none; }
 .wpw-actions.is-block { margin-top: 7px; }
-.wpw-use-combo { display: inline-flex; align-items: center; gap: 6px; }
-.wpw-target {
-  height: 32px; max-width: 190px; padding: 0 8px; background: var(--wpw-raised); cursor: pointer;
-  border: 0; border-radius: 6px;
-}
 .wpw-error-text { margin-top: 3px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.wpw-suggest { margin-top: 8px; }
+.wpw-suggest-label { font-size: 12px; opacity: 0.75; margin-bottom: 4px; }
+.wpw-suggest-row { display: flex; flex-wrap: wrap; gap: 6px; }
+/* A fixed box, and + and the check share one size: pressing moves nothing. */
+.wpw-lora {
+  display: flex; align-items: center; gap: 7px; box-sizing: border-box;
+  width: 290px; max-width: 100%; height: 48px; padding: 4px 6px 4px 4px;
+  background: var(--wpw-ground); border: 1px solid var(--wpw-rule); border-radius: 6px;
+}
+.wpw-lora.is-added { border-color: var(--wpw-warp); }
+.wpw-lora-thumb {
+  flex: none; display: block; width: 38px; height: 38px; object-fit: cover;
+  border-radius: 4px; background: var(--wpw-raised);
+}
+.wpw-lora-body { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+.wpw-lora-top { display: flex; align-items: baseline; gap: 6px; font-size: 12px; font-weight: 500; }
+.wpw-lora-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wpw-lora-strength { flex: none; font-size: 11px; font-weight: 400; opacity: 0.75; font-variant-numeric: tabular-nums; }
+.wpw-lora-reason { font-size: 11px; opacity: 0.62; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wpw-lora-add {
+  flex: none; width: 26px; height: 26px; padding: 0; cursor: pointer;
+  background: var(--wpw-raised); border: 0; border-radius: 5px; font-size: 15px; line-height: 26px;
+}
+.wpw-lora-add:hover { background: var(--wpw-raised-hover); }
+.wpw-lora.is-added .wpw-lora-add { background: var(--wpw-warp); color: #fff; }
+.wpw-lora.is-added .wpw-lora-add:hover { background: var(--wpw-warp-hover); }
 
 .wpw-composer { flex: none; border-top: 1px solid var(--wpw-rule); padding: 9px 14px 11px; }
 .wpw-composer.is-drag { box-shadow: inset 0 0 0 2px var(--wpw-warp); }
@@ -269,7 +321,7 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
   background: var(--wpw-panel); border: 1px solid var(--wpw-rule); border-radius: 13px; font-size: 12px;
 }
 .wpw-chip img { width: 20px; height: 20px; object-fit: cover; border-radius: 3px; display: block; }
-.wpw-chip.is-base { border-color: var(--wpw-warp); color: var(--wpw-warp); }
+.wpw-chip.is-base, .wpw-chip.is-on { border-color: var(--wpw-warp); color: var(--wpw-warp); }
 .wpw-chip.is-off { opacity: 0.7; }
 .wpw-chip-btn { cursor: pointer; }
 .wpw-chip-btn:hover { border-color: var(--wpw-warp); color: var(--wpw-warp); }
@@ -295,8 +347,8 @@ let storeLoad = null;
 let saving = false;
 let saveAgain = false;
 let ticker = null;
-let lastChatId = null;
 let listsRun = 0;
+let loraRun = 0;
 
 /** chat id → the running job. */
 const jobs = new Map();
@@ -583,6 +635,34 @@ function setNote(chatId, text, isError = false) {
   if (view?.chatId === chatId) renderNote();
 }
 
+// --- What the LLM is told about LoRAs -----------------------------------------
+
+function sendsLoras() {
+  return getSetting(SETTING_SEND_LORAS, true) !== false;
+}
+
+/** The lists a write for this node would send; null when there is nothing to send. */
+async function loraListsFor(node) {
+  try {
+    const [entries, base] = await Promise.all([loraLibrary(), connectedBase(node)]);
+    return buildLoraLists(entries, base, targetLoraTags(node));
+  } catch (error) {
+    console.warn("[WarpPipe] LoRA library", error);
+    return null;
+  }
+}
+
+/** Done once per request, so a Retry repeats what failed. */
+async function attachLoras(spec) {
+  if (spec.loraRefs) return;
+  spec.loraRefs = new Map();
+  if (!spec.sendLoras) return;
+  const lists = await loraListsFor(spec.loraNode);
+  if (!lists) return;
+  spec.payload.loras = { available: lists.available, active: lists.active };
+  spec.loraRefs = lists.refs;
+}
+
 // --- Writing ------------------------------------------------------------------
 
 function findModel(id) {
@@ -625,6 +705,8 @@ function startWrite(chat) {
     model,
     systemPrompt,
     originNode: view.promptNode,
+    sendLoras: sendsLoras(),
+    loraNode: view.targetNode,
     payload: {
       base_url: baseUrl(),
       model,
@@ -663,6 +745,7 @@ async function launch(chat, spec) {
   let message = null;
   let cancelled = false;
   try {
+    await attachLoras(spec);
     out = await postJson("/warppipe/llm/write", spec.payload, controller.signal);
     if (out?.error) message = String(out.error);
     else if (!String(out?.text ?? "").trim()) message = "The model returned no text.";
@@ -698,6 +781,7 @@ function finish(chat, spec, out) {
     cost: out.cost,
     seconds: out.seconds,
     usage: out.usage,
+    suggestions: resolveSuggestions(out.suggestions, spec.loraRefs),
   });
   // The first version titles the chat with its first words; a generated title wins.
   if (spec.aiTitle) setAutoTitle(chat, spec.aiTitle);
@@ -1042,40 +1126,101 @@ function requestBubble(request, images, onRewind) {
   );
 }
 
+/** The chat's target, by its label: the graph may have changed since it was chosen. */
 function refreshTargets() {
   view.targets = listTargets(app.rootGraph) ?? [];
-  if (!view.targets.some((target) => target.node === view.targetNode)) {
-    view.targetNode =
-      view.targets.find((target) => target.node === view.promptNode)?.node ??
-      view.targets[0]?.node ??
-      null;
-  }
+  const label = currentChat()?.targetLabel;
+  view.targetNode = resolveTarget(view.targets, label, view.promptNode)?.node ?? null;
+  renderTargets();
 }
 
 function targetIndex() {
   return view.targets.findIndex((target) => target.node === view.targetNode);
 }
 
-function useCombo(version) {
-  const select = el("select", {
-    class: "wpw-target",
-    title: "The Prompt + LoRAs to write into",
-    disabled: !view.targets.length,
-    onChange: () => {
-      view.targetNode = view.targets[select.selectedIndex]?.node ?? null;
-      for (const other of view.modal.querySelectorAll(".wpw-target")) {
-        other.selectedIndex = select.selectedIndex;
-      }
-    },
-  });
+/** The options are rebuilt only when they change, so a re-render cannot close an open list. */
+function renderTargets() {
+  const select = view.target;
   const labels = view.targets.length
     ? view.targets.map((target) => target.label)
     : ["No Prompt + LoRAs"];
-  select.append(...labels.map((label) => el("option", { text: label })));
+  const key = labels.join("\n");
+  if (select.dataset.labels !== key) {
+    select.dataset.labels = key;
+    select.replaceChildren(...labels.map((label) => el("option", { text: label })));
+  }
+  select.disabled = !view.targets.length;
   select.selectedIndex = Math.max(0, targetIndex());
+}
+
+function chooseTarget() {
+  const chat = currentChat();
+  const target = view.targets[view.target.selectedIndex];
+  if (!chat || !target) return;
+  chat.targetLabel = target.label;
+  save();
+  renderConvo(false);
+  renderChips();
+}
+
+function labelOfNode(node) {
+  return (listTargets(app.rootGraph) ?? []).find((target) => target.node === node)?.label ?? null;
+}
+
+function sendButton(version) {
   const use = button("Send to prompt", () => useVersion(version), "wpw-btn wpw-primary");
   use.disabled = !view.targets.length;
-  return el("span", { class: "wpw-use-combo" }, select, use);
+  return use;
+}
+
+function targetLoraWidget() {
+  return targetNow()?.node?.widgets?.find((w) => w.name === LORAS_WIDGET) ?? null;
+}
+
+function suggestionChip(chat, version, suggestion) {
+  const list = targetLoraWidget();
+  const added = !!list && isLoraListed(list.value, suggestion.tag);
+  const where = targetNow()?.label ?? "the chosen node";
+  const title = suggestion.title || suggestion.name || suggestion.tag;
+  const words = suggestion.triggers.join(", ");
+  return el(
+    "div",
+    { class: `wpw-lora${added ? " is-added" : ""}`, title: words ? `${title}\n${words}` : title },
+    suggestion.thumbnail
+      ? el("img", { class: "wpw-lora-thumb", src: suggestion.thumbnail, alt: "", loading: "lazy" })
+      : el("span", { class: "wpw-lora-thumb" }),
+    el(
+      "span",
+      { class: "wpw-lora-body" },
+      el(
+        "span",
+        { class: "wpw-lora-top" },
+        el("span", { class: "wpw-lora-title", text: title }),
+        el("span", { class: "wpw-lora-strength", text: suggestion.strength.toFixed(2) })
+      ),
+      el("span", { class: "wpw-lora-reason", text: suggestion.reason })
+    ),
+    button(
+      added ? "✓" : "+",
+      () => toggleSuggestion(chat, version, suggestion),
+      "wpw-lora-add",
+      `${added ? "Remove from" : "Add to"} the LoRA list of ${where}`
+    )
+  );
+}
+
+function suggestionRow(chat, version) {
+  if (!version.suggestions?.length) return null;
+  return el(
+    "div",
+    { class: "wpw-suggest" },
+    el("div", { class: "wpw-suggest-label", text: "Suggested LoRAs" }),
+    el(
+      "div",
+      { class: "wpw-suggest-row" },
+      ...version.suggestions.map((item) => suggestionChip(chat, version, item))
+    )
+  );
 }
 
 function statusText(version) {
@@ -1110,7 +1255,8 @@ function versionCard(chat, version, index) {
         el("span", { class: "wpw-status is-new", text: finishedText(version), title })
       ),
       editor,
-      el("div", { class: "wpw-actions is-block" }, useCombo(version))
+      suggestionRow(chat, version),
+      el("div", { class: "wpw-actions is-block" }, sendButton(version))
     );
   }
 
@@ -1125,7 +1271,7 @@ function versionCard(chat, version, index) {
     "div",
     { class: `wpw-actions${open ? " is-block" : ""}`, onClick: stop },
     button("Continue from here", () => continueFrom(chat, version)),
-    useCombo(version)
+    sendButton(version)
   );
   return el(
     "div",
@@ -1140,6 +1286,7 @@ function versionCard(chat, version, index) {
       !open && actions
     ),
     open && el("div", { class: "wpw-text", text: version.text }),
+    open && suggestionRow(chat, version),
     open && actions
   );
 }
@@ -1280,8 +1427,33 @@ function renderChips() {
     button("Add image", pickImages, "wpw-chip wpw-chip-btn"),
     ...images,
     ...uploading,
-    baseChip(chat, draft)
+    baseChip(chat, draft),
+    view.loraToggle
   );
+  renderLoraToggle();
+}
+
+function drawLoraToggle(lists) {
+  const on = sendsLoras();
+  const state = loraToggleState(on, lists);
+  view.loraToggle.textContent = state.text;
+  view.loraToggle.classList.toggle("is-on", state.accent);
+  view.loraToggle.title = on
+    ? "The LLM is told which LoRAs exist for this model and may suggest some. Click to stop."
+    : "The LLM is told nothing about LoRAs. Click to tell it.";
+}
+
+/** Asks anew each time: the count follows the target and what is in its lists. */
+async function renderLoraToggle() {
+  const run = ++loraRun;
+  const lists = sendsLoras() ? await loraListsFor(view.targetNode) : undefined;
+  if (view && run === loraRun) drawLoraToggle(lists);
+}
+
+function toggleLoras() {
+  setSetting(SETTING_SEND_LORAS, !sendsLoras());
+  drawLoraToggle(undefined);
+  renderLoraToggle();
 }
 
 function renderSend() {
@@ -1329,7 +1501,6 @@ function selectChat(id) {
   view.chatId = id;
   view.confirmDelete = null;
   view.expanded.clear();
-  lastChatId = id;
   if (unseen.has(id)) {
     const node = unseen.get(id);
     unseen.delete(id);
@@ -1345,13 +1516,29 @@ function selectChat(id) {
   renderNote();
 }
 
-/** A chat with nothing in it is reused, so "New chat" cannot pile them up. */
-function newChat() {
-  const empty = sortedChats(store).find(
+/**
+ * A chat with nothing in it is reused, so "New chat" cannot pile them up. One
+ * that holds a draft or a seed is only reused for its own target: those were
+ * written for that node.
+ */
+function reusableChat(label) {
+  const empty = sortedChats(store).filter(
     (chat) => !chat.versions.length && !jobs.has(chat.id) && !failures.has(chat.id)
   );
-  const chat = empty ?? createChat(store, { id: uid(), now: Date.now(), seedPrompt: null });
-  if (!empty) save();
+  const untouched = (chat) => {
+    const draft = drafts.get(chat.id);
+    return !chat.seedPrompt && !draft?.text && !draft?.images.length && !draft?.uploading;
+  };
+  return empty.find((chat) => chat.targetLabel === label) ?? empty.find(untouched) ?? null;
+}
+
+function newChat() {
+  const label = labelOfNode(view.promptNode);
+  const chat =
+    reusableChat(label) ??
+    createChat(store, { id: uid(), now: Date.now(), seedPrompt: null, targetLabel: label });
+  chat.targetLabel = label;
+  save();
   selectChat(chat.id);
   view.input.focus();
 }
@@ -1424,6 +1611,59 @@ function useVersion(version) {
   checkpoint();
   toast("success", "Prompt used", target.label);
   closeView();
+}
+
+/** The textarea showing a widget, if one is on screen. Nodes 2.0 gives the widget no handle. */
+function textareaOf(node, widget) {
+  const own = widget.inputEl ?? widget.element;
+  if (own?.tagName === "TEXTAREA" && own.isConnected) return own;
+  const root = document.querySelector(`[data-node-id="${node.id}"]`);
+  const shown = (node.widgets ?? []).filter((w) => BOX_WIDGETS.includes(w.name) && !w._wpeHidden);
+  return root?.querySelectorAll("textarea")[shown.indexOf(widget)] ?? null;
+}
+
+/** The node colours its tags on `input`, which setting a widget's value does not fire. */
+function writeLoraList(node, widget, value) {
+  widget.value = value;
+  widget.callback?.(value);
+  const area = textareaOf(node, widget);
+  if (!area) return;
+  // A framework's listener reads the box back, so the box has to hold the new text first.
+  area.value = value;
+  area.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/** The open editor is written too, or re-rendering would save its old text back. */
+function setVersionText(version, text) {
+  version.text = text;
+  const open = view.editors.find((item) => item.version === version);
+  if (open) open.editor.value = text;
+}
+
+/** The only way a suggestion reaches a list: pressing its + adds it, pressing again removes it. */
+function toggleSuggestion(chat, version, suggestion) {
+  flushEdits();
+  refreshTargets();
+  const target = targetNow();
+  const widget = targetLoraWidget();
+  if (!widget) {
+    setNote(chat.id, "That node has no LoRA list to add to.", true);
+    return;
+  }
+  const { tag, strength, triggers } = suggestion;
+  const list = String(widget.value ?? "");
+  const listed = isLoraListed(list, tag);
+  const next = listed ? removeLoraTag(list, tag) : appendLoraTag(list, tag, strength);
+  const text = (listed ? removeTriggerLine : addTriggerLine)(version.text, triggers);
+  writeLoraList(target.node, widget, next);
+  if (text !== version.text) {
+    setVersionText(version, text);
+    save();
+  }
+  redraw();
+  checkpoint();
+  renderConvo(false);
+  renderChips();
 }
 
 function beginRename() {
@@ -1708,6 +1948,11 @@ function dismiss() {
 function buildView(promptNode) {
   const stop = (event) => event.stopPropagation();
   const title = button("New chat", beginRename, "wpw-title", "Click to rename");
+  const target = el("select", {
+    class: "wpw-target",
+    title: "The Prompt + LoRAs this chat writes for",
+    onChange: chooseTarget,
+  });
   const model = button("", toggleModels, "wpw-field wpw-combo");
   const prompts = el("select", {
     class: "wpw-field wpw-prompts",
@@ -1723,6 +1968,7 @@ function buildView(promptNode) {
     "div",
     { class: "wpw-head" },
     title,
+    el("label", { class: "wpw-for" }, "For", target),
     model,
     prompts,
     eye,
@@ -1740,6 +1986,7 @@ function buildView(promptNode) {
 
   const convo = el("div", { class: "wpw-convo" });
   const chips = el("div", { class: "wpw-chips" });
+  const loraToggle = button("", toggleLoras, "wpw-chip wpw-chip-btn");
   const note = el("div", { class: "wpw-note" });
   const input = el("textarea", {
     class: "wpw-input",
@@ -1853,6 +2100,7 @@ function buildView(promptNode) {
     modal,
     head,
     title,
+    target,
     model,
     prompts,
     eye,
@@ -1860,6 +2108,7 @@ function buildView(promptNode) {
     chats,
     convo,
     chips,
+    loraToggle,
     note,
     input,
     send,
@@ -1876,19 +2125,24 @@ function buildView(promptNode) {
     confirmDelete: null,
   };
   document.body.appendChild(backdrop);
+  drawLoraToggle(undefined);
   renderModelButton();
   renderPrompts();
   growInput();
   input.focus();
 }
 
-/** The chat to show: one this node is waiting on, else where the user left off. */
+/** The chat to show: one this node is waiting on, else its most recent, else null for a new one. */
 function initialChat(promptNode) {
   const finished = [...unseen].find(([, node]) => node === promptNode)?.[0];
   const writing = [...jobs.values()].find((job) => job.originNode === promptNode)?.chatId;
-  const chats = sortedChats(store);
-  const last = chats.some((chat) => chat.id === lastChatId) ? lastChatId : chats[0]?.id;
-  return finished ?? writing ?? last ?? null;
+  return finished ?? writing ?? latestChatFor(store, labelOfNode(promptNode))?.id ?? null;
+}
+
+function showChatOf(promptNode) {
+  const id = initialChat(promptNode);
+  if (id) selectChat(id);
+  else newChat();
 }
 
 function showLoadFailure(promptNode, error) {
@@ -1912,7 +2166,7 @@ export async function openPromptWriter(promptNode) {
   ensureStyle();
   if (view) {
     view.promptNode = promptNode;
-    view.targetNode = promptNode;
+    if (store) showChatOf(promptNode);
     return;
   }
   buildView(promptNode);
@@ -1924,9 +2178,7 @@ export async function openPromptWriter(promptNode) {
     return;
   }
   if (!view) return;
-  const id = initialChat(promptNode);
-  if (id) selectChat(id);
-  else newChat();
+  showChatOf(view.promptNode);
   growInput();
   loadLists(false);
 }
@@ -1967,6 +2219,12 @@ app.registerExtension({
       name: "Prompt Writer temperature",
       type: "hidden",
       defaultValue: DEFAULT_TEMPERATURE,
+    },
+    {
+      id: SETTING_SEND_LORAS,
+      name: "Prompt Writer sends LoRAs",
+      type: "hidden",
+      defaultValue: true,
     },
   ],
 });
