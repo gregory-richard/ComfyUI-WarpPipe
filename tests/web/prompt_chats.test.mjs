@@ -8,6 +8,7 @@ import {
   createChat,
   deleteChat,
   emptyStore,
+  latestChatFor,
   normalizeStore,
   renameChat,
   rewindChat,
@@ -52,11 +53,119 @@ test("createChat adds a fresh chat to the store", () => {
     created: 5,
     updated: 5,
     seedPrompt: null,
+    targetLabel: null,
     versions: [],
   });
   assert.equal(store.chats[0], chat);
   assert.equal(createChat(store, { id: "b", now: 6, seedPrompt: "seed" }).seedPrompt, "seed");
   assert.equal(store.chats.length, 2);
+});
+
+test("createChat accepts the label of its target", () => {
+  const chat = createChat(emptyStore(), { id: "a", now: 5, targetLabel: "Hero" });
+  assert.equal(chat.targetLabel, "Hero");
+});
+
+test("normalizeStore keeps a chat's targetLabel and defaults a missing one", () => {
+  const raw = {
+    version: 1,
+    chats: [
+      { id: "a", versions: [], targetLabel: "Hero" },
+      { id: "b", versions: [] },
+      { id: "c", versions: [], targetLabel: 7 },
+    ],
+  };
+  assert.deepEqual(
+    normalizeStore(raw).chats.map((c) => c.targetLabel),
+    ["Hero", null, null]
+  );
+});
+
+test("latestChatFor finds the most recently updated chat with that label", () => {
+  const store = emptyStore();
+  createChat(store, { id: "old", now: 1, targetLabel: "Hero" });
+  createChat(store, { id: "new", now: 3, targetLabel: "Hero" });
+  createChat(store, { id: "other", now: 9, targetLabel: "Sky" });
+  createChat(store, { id: "none", now: 10 });
+  assert.equal(latestChatFor(store, "Hero").id, "new");
+  assert.equal(latestChatFor(store, "Sky").id, "other");
+  assert.equal(latestChatFor(store, "Gone"), null);
+});
+
+test("latestChatFor never matches an unknown label to a chat without one", () => {
+  const store = emptyStore();
+  createChat(store, { id: "none", now: 10 });
+  assert.equal(latestChatFor(store, null), null);
+  assert.equal(latestChatFor(store, undefined), null);
+});
+
+const SUGGESTION = {
+  id: "sub/soft.safetensors",
+  name: "soft",
+  title: "Soft Light",
+  tag: "soft",
+  thumbnail: "/t?name=soft",
+  triggers: ["softlight"],
+  strength: 0.75,
+  reason: "adds light",
+};
+
+test("addVersion stores its suggestions as copies", () => {
+  const chat = createChat(emptyStore(), { id: "c", now: 1 });
+  const given = [{ ...SUGGESTION, triggers: ["softlight"] }];
+  const v = addVersion(chat, version("v1", 2, { suggestions: given }));
+  assert.deepEqual(v.suggestions, [SUGGESTION]);
+  given[0].triggers.push("changed");
+  assert.deepEqual(v.suggestions[0].triggers, ["softlight"]);
+});
+
+test("addVersion defaults to no suggestions", () => {
+  const chat = createChat(emptyStore(), { id: "c", now: 1 });
+  assert.deepEqual(addVersion(chat, version("v1", 2)).suggestions, []);
+});
+
+function storeWithSuggestions(suggestions) {
+  return {
+    version: 1,
+    chats: [{ id: "c", versions: [{ id: "v", text: "t", suggestions }] }],
+  };
+}
+
+test("normalizeStore keeps well-formed suggestions", () => {
+  const out = normalizeStore(storeWithSuggestions([SUGGESTION]));
+  assert.deepEqual(out.chats[0].versions[0].suggestions, [SUGGESTION]);
+});
+
+test("normalizeStore tolerates versions without suggestions", () => {
+  const out = normalizeStore({ version: 1, chats: [{ id: "c", versions: [{ id: "v", text: "t" }] }] });
+  assert.deepEqual(out.chats[0].versions[0].suggestions, []);
+  const odd = normalizeStore(storeWithSuggestions("nope"));
+  assert.deepEqual(odd.chats[0].versions[0].suggestions, []);
+});
+
+test("normalizeStore drops malformed suggestions and repairs the optional fields", () => {
+  const out = normalizeStore(
+    storeWithSuggestions([
+      null,
+      "x",
+      { ...SUGGESTION, tag: "" },
+      { ...SUGGESTION, id: 3 },
+      { ...SUGGESTION, strength: "0.8" },
+      { id: "a", tag: "a", strength: 1, triggers: ["t", 4], thumbnail: 7 },
+    ])
+  );
+  assert.deepEqual(out.chats[0].versions[0].suggestions, [
+    {
+      id: "a",
+      name: "",
+      title: "",
+      tag: "a",
+      thumbnail: null,
+      triggers: ["t"],
+      strength: 1,
+      reason: "",
+    },
+  ]);
 });
 
 test("addVersion fills every field and numbers from 1", () => {
@@ -87,6 +196,7 @@ test("addVersion fills every field and numbers from 1", () => {
     cost: 0.1,
     seconds: 2,
     usage: { prompt_tokens: 1, completion_tokens: 2 },
+    suggestions: [],
   });
   assert.equal(chat.versions[0], v);
   assert.equal(chat.updated, 7);
@@ -337,6 +447,7 @@ test("normalizeStore: repairs the fields it can", () => {
     cost: null,
     seconds: null,
     usage: {},
+    suggestions: [],
   });
 });
 

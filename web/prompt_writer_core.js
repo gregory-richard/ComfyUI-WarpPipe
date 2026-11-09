@@ -1,12 +1,22 @@
-// Pure helpers for the Prompt Writer: labels, the status line, and listing the
-// Prompt + LoRAs nodes a prompt can be sent to.
+// Pure helpers for the Prompt Writer: labels, the status line, listing the
+// Prompt + LoRAs nodes a prompt can be sent to, and what the LLM is told about
+// LoRAs.
 //
 // No DOM and no `app`, so it can be tested under node.
 
+import { fitsBase } from "./model_base.js";
+import { stemOf } from "./text.js";
 import { allNodes } from "./warp_route.js";
 
 export const PROMPT_TYPE = "Warp Lora Prompt";
 const BOOKMARK = /\s*\[(\d+)\]\s*$/;
+
+// The same tag the prompt colours and the backend loads.
+const TAG_RE = /<lora:([^:>]+):(-?[0-9]*\.?[0-9]+)([^>]*)>/gi;
+const COMMENT = "//";
+const TRIGGER_JOIN = ", ";
+// What the server takes; more would only be numbers it throws away.
+const MAX_AVAILABLE = 1000;
 
 function price(value) {
   return value == null ? "?" : `$${Number(value).toFixed(2)}`;
@@ -110,4 +120,170 @@ export function listTargets(rootGraph) {
     used.add(unique);
     return { node, label: unique };
   });
+}
+
+/** The chat's chosen target, else the node the pop-up was opened from, else the first. */
+export function resolveTarget(targets, label, originNode) {
+  return (
+    targets.find((target) => target.label === label) ??
+    targets.find((target) => target.node === originNode) ??
+    targets[0] ??
+    null
+  );
+}
+
+// --- The LoRAs of a target -----------------------------------------------------
+
+function commentedAt(text, index) {
+  const lineStart = text.lastIndexOf("\n", index - 1) + 1;
+  return text.slice(lineStart, index).includes(COMMENT);
+}
+
+/** Every <lora:NAME:WEIGHT> that is not behind a // on its line, as {name, weight}. */
+export function activeLoraTags(text) {
+  const value = String(text ?? "");
+  const found = [];
+  for (const match of value.matchAll(TAG_RE)) {
+    if (commentedAt(value, match.index)) continue;
+    found.push({ name: match[1].trim(), weight: parseFloat(match[2]) });
+  }
+  return found;
+}
+
+/** The tags a target has switched on: its prompt, its list, and list 2 while that is on. */
+export function targetLoraTags(node) {
+  const valueOf = (name) => node?.widgets?.find((widget) => widget.name === name)?.value;
+  const names = ["text", "loras"];
+  if (valueOf("loras_2_on") === true) names.push("loras_2");
+  return names.flatMap((name) => activeLoraTags(valueOf(name)));
+}
+
+/** Every name a tag might use for a file; the first file of a name keeps it. */
+export function loraIndex(entries) {
+  const index = new Map();
+  for (const entry of entries) {
+    const noExt = entry.id.replace(/\.[^.]+$/, "");
+    for (const key of [stemOf(entry.id), noExt, noExt.replace(/\\/g, "/")]) {
+      const at = key.toLowerCase();
+      if (!index.has(at)) index.set(at, entry);
+    }
+  }
+  return index;
+}
+
+/** The library entry a tag's name means, or null. */
+export function findLora(index, name) {
+  const at = (name || "").trim().toLowerCase();
+  return index.get(at) ?? index.get(stemOf(at)) ?? null;
+}
+
+const titleOf = (entry) => entry.title || entry.name || stemOf(entry.id);
+const triggersOf = (entry) => (Array.isArray(entry.triggers) ? [...entry.triggers] : []);
+
+/**
+ * What a write tells the LLM: {available, active, refs}, where refs maps each
+ * "L1" to its library entry. Null when the base is unknown or no LoRA fits it.
+ */
+export function buildLoraLists(entries, base, tags) {
+  const fitting = entries.filter((entry) => fitsBase(entry, base) === true);
+  if (!fitting.length) return null;
+
+  const index = loraIndex(entries);
+  const activeEntries = new Set(tags.map((tag) => findLora(index, tag.name)).filter(Boolean));
+  const refs = new Map();
+  const available = fitting
+    .filter((entry) => !activeEntries.has(entry))
+    .slice(0, MAX_AVAILABLE)
+    .map((entry, i) => {
+      const ref = `L${i + 1}`;
+      refs.set(ref, entry);
+      return { ref, title: titleOf(entry), triggers: triggersOf(entry) };
+    });
+  const active = [...activeEntries].map((entry) => ({
+    title: titleOf(entry),
+    triggers: triggersOf(entry),
+  }));
+  return { available, active, refs };
+}
+
+/** The server's [{ref, strength, reason}] as a version stores them. */
+export function resolveSuggestions(raw, refs) {
+  if (!Array.isArray(raw) || !refs) return [];
+  return raw.flatMap((item) => {
+    const entry = refs.get(item?.ref);
+    if (!entry) return [];
+    return [
+      {
+        id: entry.id,
+        name: entry.name ?? "",
+        title: titleOf(entry),
+        tag: stemOf(entry.id),
+        thumbnail: entry.thumbnail ?? null,
+        triggers: triggersOf(entry),
+        strength: item.strength,
+        reason: String(item.reason ?? ""),
+      },
+    ];
+  });
+}
+
+/** What the composer's chip says. `lists` is undefined until it is known. */
+export function loraToggleState(on, lists) {
+  if (!on) return { text: "LoRAs off", accent: false };
+  if (lists === undefined) return { text: "LoRAs on · …", accent: true };
+  if (lists === null) return { text: "LoRAs: none for this model", accent: false };
+  return { text: `LoRAs on · ${lists.available.length}`, accent: true };
+}
+
+// --- Adding a suggestion to a list ---------------------------------------------
+
+// A tag may carry a folder or an extension the bare stem does not have.
+function namesLora(name, tag) {
+  const wanted = tag.toLowerCase();
+  const last = name.trim().toLowerCase().replace(/\\/g, "/").split("/").pop();
+  return last === wanted || stemOf(last) === wanted;
+}
+
+/** Is an uncommented tag with this name in the text? */
+export function isLoraListed(text, tag) {
+  return activeLoraTags(text).some((found) => namesLora(found.name, tag));
+}
+
+/** The text with <lora:TAG:STRENGTH> as its own last line. */
+export function appendLoraTag(text, tag, strength) {
+  const line = `<lora:${tag}:${Number(strength).toFixed(2)}>`;
+  const value = String(text ?? "");
+  if (!value) return line;
+  return value.endsWith("\n") ? value + line : `${value}\n${line}`;
+}
+
+/**
+ * The text without any uncommented tag of this name. A line that held only the
+ * tag goes with it; anything else on the line stays.
+ */
+export function removeLoraTag(text, tag) {
+  const kept = [];
+  for (const line of String(text ?? "").split("\n")) {
+    const left = line.replace(TAG_RE, (raw, name, _weight, _rest, at) =>
+      !line.slice(0, at).includes(COMMENT) && namesLora(name, tag) ? "" : raw
+    );
+    if (left === line) kept.push(line);
+    else if (left.trim()) kept.push(left.trim());
+  }
+  return kept.join("\n");
+}
+
+/** The text with the trigger words as a new first line, unless they already are one. */
+export function addTriggerLine(text, triggers) {
+  if (!triggers.length) return text;
+  const line = triggers.join(TRIGGER_JOIN);
+  return text.split("\n", 1)[0] === line ? text : `${line}\n${text}`;
+}
+
+/** The text without its first line, if that line is still exactly the trigger words. */
+export function removeTriggerLine(text, triggers) {
+  if (!triggers.length) return text;
+  const line = triggers.join(TRIGGER_JOIN);
+  if (text === line) return "";
+  return text.startsWith(`${line}\n`) ? text.slice(line.length + 1) : text;
 }

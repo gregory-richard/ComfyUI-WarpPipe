@@ -23,6 +23,27 @@ function normalizeImages(raw) {
   return raw.filter((image) => isId(image) || isObject(image));
 }
 
+function isSuggestion(raw) {
+  return isObject(raw) && isId(raw.id) && isId(raw.tag) && Number.isFinite(raw.strength);
+}
+
+/** Only what names the LoRA and its weight is required: the rest is for display. */
+function normalizeSuggestions(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(isSuggestion).map((item) => ({
+    id: item.id,
+    name: stringOr(item.name, ""),
+    title: stringOr(item.title, ""),
+    tag: item.tag,
+    thumbnail: stringOr(item.thumbnail, null),
+    triggers: Array.isArray(item.triggers)
+      ? item.triggers.filter((word) => typeof word === "string")
+      : [],
+    strength: item.strength,
+    reason: stringOr(item.reason, ""),
+  }));
+}
+
 function normalizeVersion(raw, n) {
   return {
     id: raw.id,
@@ -37,6 +58,7 @@ function normalizeVersion(raw, n) {
     cost: numberOrNull(raw.cost),
     seconds: numberOrNull(raw.seconds),
     usage: isObject(raw.usage) ? { ...raw.usage } : {},
+    suggestions: normalizeSuggestions(raw.suggestions),
   };
 }
 
@@ -59,6 +81,7 @@ function normalizeChat(raw) {
     created: stampOf(raw.created),
     updated: stampOf(raw.updated),
     seedPrompt: stringOr(raw.seedPrompt, null),
+    targetLabel: stringOr(raw.targetLabel, null),
     versions: versions.map((v, i) => normalizeVersion(v, i + 1)),
   };
 }
@@ -72,7 +95,7 @@ export function normalizeStore(raw) {
   return { version: STORE_VERSION, chats: chats.map(normalizeChat) };
 }
 
-export function createChat(store, { id, now, seedPrompt = null }) {
+export function createChat(store, { id, now, seedPrompt = null, targetLabel = null }) {
   const chat = {
     id,
     title: DEFAULT_TITLE,
@@ -80,6 +103,7 @@ export function createChat(store, { id, now, seedPrompt = null }) {
     created: now,
     updated: now,
     seedPrompt,
+    targetLabel,
     versions: [],
   };
   store.chats.push(chat);
@@ -115,6 +139,7 @@ export function addVersion(
     cost = null,
     seconds = null,
     usage = {},
+    suggestions = [],
   }
 ) {
   const version = {
@@ -130,6 +155,7 @@ export function addVersion(
     cost,
     seconds,
     usage: { ...usage },
+    suggestions: normalizeSuggestions(suggestions),
   };
   chat.versions.push(version);
   chat.updated = now;
@@ -190,4 +216,10 @@ function timeOf(stamp) {
 /** A new array, newest updated first. */
 export function sortedChats(store) {
   return [...store.chats].sort((a, b) => timeOf(b.updated) - timeOf(a.updated));
+}
+
+/** The most recently updated chat for this target, or null. */
+export function latestChatFor(store, label) {
+  if (label == null) return null;
+  return sortedChats(store).find((chat) => chat.targetLabel === label) ?? null;
 }
