@@ -17,6 +17,8 @@ const COMMENT = "//";
 const TRIGGER_JOIN = ", ";
 // What the server takes; more would only be numbers it throws away.
 const MAX_AVAILABLE = 1000;
+// The extensions ComfyUI gives a model file. Any other dot is part of the name.
+const MODEL_EXT = /\.(?:safetensors|ckpt|pt2?|pth|bin|pkl|sft)$/i;
 
 function price(value) {
   return value == null ? "?" : `$${Number(value).toFixed(2)}`;
@@ -191,50 +193,80 @@ export function loraIndex(entries) {
   return index;
 }
 
+/** What a tag calls a LoRA, without folders or a model file's extension. */
+function bareName(name) {
+  return String(name ?? "")
+    .trim()
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop()
+    .replace(MODEL_EXT, "");
+}
+
 /** The library entry a tag's name means, or null. */
 export function findLora(index, name) {
   const at = (name || "").trim().toLowerCase();
-  return index.get(at) ?? index.get(stemOf(at)) ?? null;
+  return index.get(at) ?? index.get(bareName(at)) ?? null;
 }
 
 const titleOf = (entry) => entry.title || entry.name || stemOf(entry.id);
 const triggersOf = (entry) => (Array.isArray(entry.triggers) ? [...entry.triggers] : []);
 
+/** A LoRA as a version stores it: what its chip shows and what its tag says. */
+function chipOf(entry, strength, reason = "") {
+  return {
+    id: entry.id,
+    name: entry.name ?? "",
+    title: titleOf(entry),
+    tag: stemOf(entry.id),
+    thumbnail: entry.thumbnail ?? null,
+    triggers: triggersOf(entry),
+    strength,
+    reason,
+  };
+}
+
 /**
- * What a write tells the LLM: {available, active, refs}, where refs maps each
- * "L1" to its library entry. Scope "all" offers every LoRA that fits the base and
- * is null when the base is unknown or none fits; scope "list" offers the LoRAs
- * switched off in the target's own lists. `listed` is those tags: a LoRA in it
- * keeps the weight written there.
+ * What a write tells the LLM: {available, active, refs, activeChips}, where refs
+ * maps each "L1" to its library entry and activeChips is what a version stores of
+ * the LoRAs that are on. Scope "all" offers every LoRA that fits the base; scope
+ * "list" offers the LoRAs switched off in the target's own lists. `listed` is
+ * those tags: a LoRA in it keeps the weight written there. Null when there is
+ * nothing to offer and nothing on.
  */
 export function buildLoraLists(entries, base, tags, { scope = "all", listed = [] } = {}) {
   const index = loraIndex(entries);
-  const weights = new Map();
-  for (const tag of listed) {
-    const entry = findLora(index, tag.name);
-    if (entry && !weights.has(entry)) weights.set(entry, tag.weight);
-  }
+  const firstWeights = (found) => {
+    const weights = new Map();
+    for (const tag of found) {
+      const entry = findLora(index, tag.name);
+      if (entry && !weights.has(entry)) weights.set(entry, tag.weight);
+    }
+    return weights;
+  };
+  const weights = firstWeights(listed);
+  const activeWeights = firstWeights(tags);
   const pool =
     scope === "list"
       ? [...weights.keys()]
       : entries.filter((entry) => fitsBase(entry, base) === true);
-  if (scope !== "list" && !pool.length) return null;
+  if (scope !== "list" && !pool.length && !activeWeights.size) return null;
 
-  const activeEntries = new Set(tags.map((tag) => findLora(index, tag.name)).filter(Boolean));
   const refs = new Map();
   const available = pool
-    .filter((entry) => !activeEntries.has(entry))
+    .filter((entry) => !activeWeights.has(entry))
     .slice(0, MAX_AVAILABLE)
     .map((entry, i) => {
       const ref = `L${i + 1}`;
       refs.set(ref, weights.has(entry) ? { ...entry, listedWeight: weights.get(entry) } : entry);
       return { ref, title: titleOf(entry), triggers: triggersOf(entry) };
     });
-  const active = [...activeEntries].map((entry) => ({
+  const active = [...activeWeights.keys()].map((entry) => ({
     title: titleOf(entry),
     triggers: triggersOf(entry),
   }));
-  return { available, active, refs };
+  const activeChips = [...activeWeights].map(([entry, weight]) => chipOf(entry, weight));
+  return { available, active, refs, activeChips };
 }
 
 /** The server's [{ref, strength, reason}] as a version stores them. */
@@ -243,18 +275,7 @@ export function resolveSuggestions(raw, refs) {
   return raw.flatMap((item) => {
     const entry = refs.get(item?.ref);
     if (!entry) return [];
-    return [
-      {
-        id: entry.id,
-        name: entry.name ?? "",
-        title: titleOf(entry),
-        tag: stemOf(entry.id),
-        thumbnail: entry.thumbnail ?? null,
-        triggers: triggersOf(entry),
-        strength: entry.listedWeight ?? item.strength,
-        reason: String(item.reason ?? ""),
-      },
-    ];
+    return [chipOf(entry, entry.listedWeight ?? item.strength, String(item.reason ?? ""))];
   });
 }
 
@@ -268,9 +289,7 @@ export function loraScopeLabels(counts) {
 
 // A tag may carry a folder or an extension the bare stem does not have.
 function namesLora(name, tag) {
-  const wanted = tag.toLowerCase();
-  const last = name.trim().toLowerCase().replace(/\\/g, "/").split("/").pop();
-  return last === wanted || stemOf(last) === wanted;
+  return bareName(name).toLowerCase() === tag.toLowerCase();
 }
 
 /** Is an uncommented tag with this name in the text? */

@@ -24,7 +24,7 @@ Writing goes on in the background. You can close the pop-up (Esc or ×; clicking
 
 The **✨ AI** button of a node opens the most recent chat for that node, or a new empty chat if it has none; while the pop-up is open it switches the same way. A node that is writing or has an unseen result opens that chat first.
 
-**New chat** is at the top of the left rail. Each chat shows how many versions it has and when it last changed, a yellow `Writing 4 s` while it writes, and a green check until you open it after it finished. Hover over a chat for its delete button, which asks first. Several chats can write at the same time.
+**New chat** is at the top of the left rail. Each chat shows how many versions it has and when it last changed, a yellow `Writing 4 s` while it writes, and a green check until you open it after it finished. Its **⋮** menu renames or deletes it; deleting asks first. Several chats can write at the same time.
 
 ## Versions
 
@@ -60,11 +60,13 @@ With **Suggest LoRAs** on **List** or **All**, each **Write** tells the LLM abou
 
 - **Available, with All** — The LoRAs in your library made for the model wired into the **For** node, minus the ones already in use. Only LoRAs whose base model is known to match are listed, up to 1000.
 - **Available, with List** — Only the LoRAs switched off with `//` in that node's LoRA list, and in the model 2 list while it is switched on.
-- **Active** — The LoRAs in that node's prompt and LoRA list, and in the model 2 list while it is switched on, leaving out lines switched off with `//`. The LLM uses their trigger words where they fit, and leaves out the trigger words of anything else.
+- **Active** — The LoRAs in that node's prompt and LoRA list, and in the model 2 list while it is switched on, leaving out lines switched off with `//`. They count as your choice: the LLM writes the prompt to work with them, uses their trigger words where they fit, and leaves out the trigger words of anything else.
 
 With **Off**, the LLM hears nothing about LoRAs and suggests none.
 
-The LLM may answer with up to five LoRAs that would clearly help the image. They appear under the version as **Suggested LoRAs**, each with its preview, a strength and a short reason. **Nothing is added on its own.** Press **+** on a suggestion to:
+Under each version, **Active LoRAs** shows what was on when it was written, with its strength and a check while it is still on. Press the check to comment its line out and **+** to switch it on again; the version's text stays as it is. A LoRA written in the prompt text shows a check but is not switched from here.
+
+The LLM may answer with LoRAs that would clearly help the image: with LoRAs active at most two, and only for something they do not already cover; with none active up to five. They appear under the version as **Suggested LoRAs**, each with its preview, a strength and a short reason. **Nothing is added on its own.** Press **+** on a suggestion to:
 
 - switch on its commented line if the LoRA is already in the list, keeping the weight written there, or otherwise add `<lora:name:0.80>` as a new last line of the LoRA list of the **For** node, as one undo step;
 - put the LoRA's trigger words, if it has any, as a new first line of that version.

@@ -327,8 +327,8 @@ Being a note, a header line never reaches the model.
 
 Sections fold while you type, like a code editor. A header gets **▾** in a slim
 margin on the left of the box, as soon as there is something under it. Click it
-to fold the section down to its header and a count of its lines,
-`//// Style ··· 6 lines`, and click **▸** or the count to open it again. The caret
+to fold the section down to its header and a count of its LoRAs, or of its lines
+if it has none, `//// Style ··· 6 lines`, and click **▸** or the count to open it again. The caret
 moving into a folded section opens it. A box with no header has no margin, and
 its text sits where it always did.
 
@@ -343,8 +343,8 @@ title it is. A fold is one step of the workflow's undo; in a box, `Ctrl+Z` and
 Every box is a code editor, and each thing you do to it - a weight, a moved line,
 a comment, a tag from `/` - is one step of its undo. To have plain text boxes
 instead, turn off **WarpPipe > Prompt boxes > Code editor** in the settings
-(`WarpPipe.CodeEditor`). A plain box only shows its sections while you are not
-typing in it: click the text to edit it whole, click away to see them folded again.
+(`WarpPipe.CodeEditor`). A plain box does not fold: its `////` lines are ordinary
+notes there.
 
 ## Trigger words
 

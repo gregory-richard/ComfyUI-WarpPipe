@@ -336,12 +336,48 @@ test("buildLoraLists: a base found from a folder matches the LoRA folder", () =>
   assert.equal(lists.refs.get("L1"), moss);
 });
 
-test("buildLoraLists: unknown base or nothing fitting sends nothing", () => {
+test("buildLoraLists: nothing fitting and nothing active sends nothing", () => {
   const entries = [lora("a.safetensors", "Flux.1 D"), lora("b.safetensors", "")];
-  const active = [{ name: "a", weight: 1 }];
-  assert.equal(buildLoraLists(entries, null, active), null);
-  assert.equal(buildLoraLists(entries, { name: "Pony" }, active), null);
-  assert.equal(buildLoraLists([], BASE, active), null);
+  assert.equal(buildLoraLists(entries, null, []), null);
+  assert.equal(buildLoraLists(entries, { name: "Pony" }, []), null);
+  assert.equal(buildLoraLists([], BASE, [{ name: "a", weight: 1 }]), null);
+});
+
+test("buildLoraLists: an unknown base offers nothing but still says what is active", () => {
+  const entries = [lora("a.safetensors", "Flux.1 D", { title: "A" })];
+  const lists = buildLoraLists(entries, null, [{ name: "a", weight: 1 }]);
+  assert.deepEqual(lists.available, []);
+  assert.deepEqual(lists.active, [{ title: "A", triggers: [] }]);
+  assert.equal(lists.activeChips.length, 1);
+});
+
+test("buildLoraLists: activeChips hold each active LoRA once, at the weight written there", () => {
+  const entries = [
+    lora("dir\\a.v2.safetensors", "Flux.1 D", {
+      name: "a",
+      title: "Soft A",
+      triggers: ["ta"],
+      thumbnail: "/t?a",
+    }),
+    lora("b.safetensors", "Flux.1 D"),
+  ];
+  const tags = [
+    { name: "a.v2", weight: 0.6 },
+    { name: "A.V2", weight: 1 },
+    { name: "not in the library", weight: 1 },
+  ];
+  assert.deepEqual(buildLoraLists(entries, BASE, tags).activeChips, [
+    {
+      id: "dir\\a.v2.safetensors",
+      name: "a",
+      title: "Soft A",
+      tag: "a.v2",
+      thumbnail: "/t?a",
+      triggers: ["ta"],
+      strength: 0.6,
+      reason: "",
+    },
+  ]);
 });
 
 test("buildLoraLists: every fitting LoRA active leaves an empty available list", () => {
@@ -388,6 +424,18 @@ test("resolveSuggestions stores what the chips need, from the job's map", () => 
       reason: "adds light",
     },
   ]);
+});
+
+test("a dot in a LoRA's name is part of its name", () => {
+  assert.equal(isLoraListed("<lora:skin_v1.5:1.00>", "skin_v1"), false);
+  assert.equal(isLoraListed("<lora:skin_v1.5:1.00>", "skin_v1.5"), true);
+  assert.equal(isLoraListed("<lora:skin_v1.5.safetensors:1.00>", "skin_v1.5"), true);
+  assert.equal(isLoraListed("<lora:sub/skin_v1.5:1.00>", "skin_v1.5"), true);
+  assert.equal(enableLoraTag("// <lora:skin_v1.5:1.00>", "skin_v1"), null);
+  assert.equal(disableLoraTag("<lora:skin_v1.5:1.00>", "skin_v1"), "<lora:skin_v1.5:1.00>");
+  assert.equal(removeLoraTag("<lora:skin_v1.5:1.00>", "skin_v1"), "<lora:skin_v1.5:1.00>");
+  assert.equal(findLora(loraIndex([lora("skin_v1.safetensors", "X")]), "skin_v1.5"), null);
+  assert.equal(findLora(loraIndex([lora("skin_v1.safetensors", "X")]), "dir/skin_v1.pt").id, "skin_v1.safetensors");
 });
 
 test("resolveSuggestions without an answer or a map is empty", () => {

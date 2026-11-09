@@ -4,10 +4,7 @@ import { test } from "node:test";
 import {
   countLoras,
   foldLabelParts,
-  foldMarkup,
   parseSections,
-  pruneFolded,
-  sectionSummary,
 } from "../../web/fold.js";
 
 const slice = (text, start, end) => text.slice(start, end);
@@ -144,89 +141,12 @@ test("blank lines between sections are in the body but not in the count", () => 
   assert.equal(a.lineCount, 3);
 });
 
-test("pruneFolded keeps only keys that still name a section", () => {
-  const { sections } = parseSections("//// A\n//// B");
-  assert.deepEqual(pruneFolded(["B#0", "Gone#0", "A#0", "A#1"], sections), ["B#0", "A#0"]);
-});
-
-test("pruneFolded does not trust what a saved workflow holds", () => {
-  assert.deepEqual(pruneFolded(undefined, []), []);
-  assert.deepEqual(pruneFolded("A#0", parseSections("//// A").sections), []);
-});
-
-function markup(text, folded = []) {
-  return foldMarkup(text, parseSections(text), new Set(folded), (start, end) =>
-    text.slice(start, end)
-  );
-}
-
-test("the view shows a preamble, a header and its body", () => {
-  const html = markup("lead\n//// Style\nfoo");
-  assert.match(html, /^<div class="wpf-text" data-at="0" data-end="4">lead<\/div>/);
-  assert.match(html, /<div class="wpf-head" data-i="0">/);
-  assert.match(html, /<span class="wpf-title" data-at="10" data-end="15">Style<\/span>/);
-  assert.match(html, /<div class="wpf-text" data-at="16" data-end="19">foo<\/div>$/);
-  assert.match(html, /▾/);
-});
-
-test("a folded section shows its header and a count, and no body", () => {
-  const html = markup("//// Style\nfoo\nbar\n//// Next\nbaz", ["Style#0"]);
-  assert.match(html, /is-folded/);
-  assert.match(html, /▸/);
-  assert.match(html, /· 2 lines/);
-  assert.doesNotMatch(html, /foo/);
-  assert.match(html, /baz/);
-});
-
-test("the count says one line in the singular", () => {
-  assert.match(markup("//// A\nx", ["A#0"]), /· 1 line</);
-});
-
-test("a preamble is left out only when the first header starts the text", () => {
-  assert.doesNotMatch(markup("//// A\nx"), /data-at="0" data-end="0"/);
-  assert.match(markup("\n//// A\nx"), /<div class="wpf-text" data-at="0" data-end="0">/);
-});
-
-test("an empty body is drawn only when there is a blank line to draw", () => {
-  const noLine = '<div class="wpf-text"';
-  assert.equal(markup("//// A\n//// B").includes(noLine), false);
-  assert.equal(markup("//// A").includes(noLine), false);
-  assert.equal(markup("//// A\n\n//// B").includes(noLine), true);
-  assert.equal(markup("//// A\n").includes(noLine), true);
-});
-
-test("a title is escaped, and its offsets skip trailing space", () => {
-  const html = markup("//// <b>  \nx");
-  assert.match(html, /data-at="5" data-end="8">&lt;b&gt;<\/span>/);
-});
-
-test("an offset into a title lands on the title even when it repeats a slash", () => {
-  assert.match(markup("/////"), /data-at="4" data-end="5">\/<\/span>/);
-});
-
-test("folded text is still in the source: folding never changes the value", () => {
-  const text = "lead\n//// A\nsecret";
-  const before = text;
-  markup(text, ["A#0"]);
-  assert.equal(text, before);
-  assert.equal(bodyOf(text, parseSections(text).sections[0]), "secret");
-});
-
 test("countLoras counts every tag and those not behind a //", () => {
   assert.deepEqual(countLoras("<lora:a:1.00>\n// <lora:b:0.5>\n<lora:c:1> // note <lora:d:1>"), {
     total: 4,
     active: 2,
   });
   assert.deepEqual(countLoras("plain words\n// a note"), { total: 0, active: 0 });
-});
-
-test("sectionSummary counts LoRAs when a section holds any, otherwise lines", () => {
-  const body = "//// S\n<lora:a:1.00>\n// <lora:b:0.5>\n// <lora:c:0.5>";
-  assert.equal(sectionSummary(parseSections(body).sections[0]), "3 LoRAs · 1 active");
-  const one = "//// S\n// <lora:a:1.00>";
-  assert.equal(sectionSummary(parseSections(one).sections[0]), "1 LoRA · 0 active");
-  assert.equal(sectionSummary(parseSections("//// S\none\ntwo").sections[0]), "2 lines");
-  assert.equal(sectionSummary(parseSections("//// S\none").sections[0]), "1 line");
 });
 
 function lorasText(total, active) {

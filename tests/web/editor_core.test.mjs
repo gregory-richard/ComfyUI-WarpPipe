@@ -8,6 +8,7 @@ import {
   foldPlan,
   foldedKeysOf,
   keyBelongsToEditor,
+  lineChanges,
   nudgeEmphasis,
   sameKeys,
   sectionAtLine,
@@ -17,6 +18,9 @@ import { parseSections } from "../../web/fold.js";
 import {
   EditorState,
   Transaction,
+  codeFolding,
+  foldEffect,
+  foldedRanges,
   history,
   isolateHistory,
   redo,
@@ -141,6 +145,36 @@ test("TextSync: a failing listener does not leave the guard up", () => {
   rig.value = "after";
   rig.sync.fromTextarea();
   assert.deepEqual(rig.shown, ["after"]);
+});
+
+// --- lineChanges -------------------------------------------------------------
+
+test("lineChanges: the same number of lines gives one change per changed line", () => {
+  assert.deepEqual(lineChanges("a\nb\nc", "// a\nb\n// c"), [
+    { from: 0, to: 0, insert: "// " },
+    { from: 4, to: 4, insert: "// " },
+  ]);
+  assert.deepEqual(lineChanges("a\nb", "a\nb"), []);
+});
+
+test("lineChanges: positions are shifted by the offset given", () => {
+  assert.deepEqual(lineChanges("a\nb", "a\nXb", 10), [{ from: 12, to: 12, insert: "X" }]);
+});
+
+test("lineChanges: a different number of lines is one change", () => {
+  assert.deepEqual(lineChanges("a\nb", "a\nb\nc", 5), [{ from: 8, to: 8, insert: "\nc" }]);
+});
+
+test("lineChanges: commenting every line leaves a fold standing", () => {
+  const before = "//// A\none\ntwo\n//// B\nthree";
+  const after = "//// A\n// one\n// two\n//// B\n// three";
+  let state = EditorState.create({ doc: before, extensions: [codeFolding()] });
+  state = state.update({ effects: foldEffect.of({ from: 6, to: 14 }) }).state;
+  state = state.update({ changes: lineChanges(before, after) }).state;
+  assert.equal(state.doc.toString(), after);
+  const folded = [];
+  foldedRanges(state).between(0, state.doc.length, (from, to) => folded.push([from, to]));
+  assert.deepEqual(folded, [[6, 20]]);
 });
 
 // --- BoxFacade ---------------------------------------------------------------

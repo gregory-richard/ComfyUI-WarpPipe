@@ -1,4 +1,6 @@
+import http.client
 import importlib.util
+import inspect
 import json
 import threading
 from collections import deque
@@ -40,12 +42,14 @@ class _Server:
                         "body": json.loads(raw) if raw else None,
                     }
                 )
-                status, body = outer.replies.popleft() if outer.replies else (200, {})
+                status, body, *extra = outer.replies.popleft() if outer.replies else (200, {})
                 data = body.encode() if isinstance(body, str) else json.dumps(body).encode()
                 self.send_response(status)
                 ctype = "text/plain" if isinstance(body, str) else "application/json"
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(data)))
+                for name, value in (extra[0] if extra else {}).items():
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(data)
 
@@ -189,8 +193,10 @@ def test_build_messages():
         {"role": "user", "content": "idea"},
     ]
     m = pw.build_messages("S", "warmer light", "OLD", ["data:image/png;base64,AAA"])
-    assert m[1] == {"role": "assistant", "content": "OLD"}
-    assert m[2] == {
+    assert [message["role"] for message in m] == ["system", "user", "assistant", "user"]
+    assert m[1] == {"role": "user", "content": pw.BASE_REQUEST}
+    assert m[2] == {"role": "assistant", "content": "OLD"}
+    assert m[3] == {
         "role": "user",
         "content": [
             {"type": "text", "text": "warmer light"},
@@ -210,9 +216,9 @@ def test_build_messages_one_part_per_image():
 
 def test_build_messages_empty_idea_improves_previous():
     m = pw.build_messages("S", "", "OLD", [])
-    assert m[1] == {"role": "assistant", "content": "OLD"}
-    assert m[2] == {"role": "user", "content": "Improve this prompt. Keep what it describes."}
-    with_image = pw.build_messages("S", "", "OLD", ["data:image/png;base64,AAA"])[2]["content"]
+    assert m[2] == {"role": "assistant", "content": "OLD"}
+    assert m[3] == {"role": "user", "content": "Improve this prompt. Keep what it describes."}
+    with_image = pw.build_messages("S", "", "OLD", ["data:image/png;base64,AAA"])[3]["content"]
     assert with_image[0] == {"type": "text", "text": "Improve this prompt. Keep what it describes."}
 
 
@@ -226,6 +232,8 @@ def test_parse_reply_strips_thinking():
         pw.parse_reply(msg(content="", reasoning_content="only thoughts"))
     with pytest.raises(pw.PromptWriterError, match="returned no text"):
         pw.parse_reply(msg(content="<think>only</think>"))
+    with pytest.raises(pw.PromptWriterError, match="returned no text"):
+        pw.parse_reply(msg(content="<think>cut off before it closed"))
     with pytest.raises(pw.PromptWriterError, match="returned no text"):
         pw.parse_reply({})
 
@@ -356,7 +364,7 @@ def test_handle_write_model_list_failure_keeps_write(server, tmp_path):
     )
     assert out["text"] == "OUT" and out["cost"] is None
     chat = server.requests[-1]
-    assert chat["body"]["messages"][1] == {"role": "assistant", "content": "PREV"}
+    assert chat["body"]["messages"][2] == {"role": "assistant", "content": "PREV"}
     assert chat["body"]["temperature"] == 0.6
 
 
@@ -483,8 +491,8 @@ def test_handle_write_empty_idea_improves_previous(server, tmp_path):
     )
     assert out["text"] == "OUT"
     msgs = server.requests[-1]["body"]["messages"]
-    assert msgs[1] == {"role": "assistant", "content": "OLD"}
-    assert msgs[2] == {"role": "user", "content": "Improve this prompt. Keep what it describes."}
+    assert msgs[2] == {"role": "assistant", "content": "OLD"}
+    assert msgs[3] == {"role": "user", "content": "Improve this prompt. Keep what it describes."}
 
 
 @pytest.mark.parametrize("previous", [None, "", "  \n "])
@@ -514,7 +522,7 @@ def test_handle_write_foreign_host_never_gets_key(tmp_path):
     assert "NANOKEY" not in out["error"]
 
 
-def test_handle_write_nanogpt_without_key_says_set_env(tmp_path):
+def test_handle_write_nanogpt_without_key_says_how_to_add_one(tmp_path):
     (tmp_path / "s.txt").write_text("SYS", encoding="utf-8")
     out = pw.handle_write(
         {"base_url": "https://nano-gpt.com/api/v1", "model": "m", "system_prompt": "s.txt", "idea": "i"},
@@ -523,6 +531,7 @@ def test_handle_write_nanogpt_without_key_says_set_env(tmp_path):
         image_path=lambda name: None, opener=lambda *a, **k: pytest.fail("no request expected"),
     )
     assert "NANOGPT_API_KEY" in out["error"]
+    assert "\u2699" in out["error"]
 
 
 def test_handle_models(server, tmp_path):
@@ -597,6 +606,7 @@ def test_clean_title():
     assert pw.clean_title("<think>hm</think>Title: Red bicycle") == "Red bicycle"
     assert len(pw.clean_title("word " * 40)) <= 60
     assert pw.clean_title("   ") == ""
+    assert pw.clean_title("<think>Okay, the user wants") == ""
 
 
 def test_make_title_request(server):
@@ -680,7 +690,7 @@ def test_lora_instructions_states_the_rules():
     assert "never mention LoRAs in the prompt" in text
     assert "===LORAS===" in text
     assert "REF | strength | reason" in text
-    assert "at most 5 lines" in text
+    assert "at most 2 lines" in text
     assert "between 0.4 and 1.2" in text
     assert "at most 6 words" in text
     assert "write only the marker line" in text
@@ -966,3 +976,84 @@ def test_handle_write_empty_loras_add_no_instructions(server, tmp_path):
 def test_lora_instructions_end_with_the_output_rule():
     text = pw.lora_instructions({"available": [{"ref": "L1", "title": "Film", "triggers": []}]})
     assert text.index("AVAILABLE LoRAs") < text.index(pw.LORAS_MARKER)
+
+
+def test_lora_instructions_keep_close_to_what_is_active():
+    text = pw.lora_instructions(LORAS)
+    assert "the user chose them" in text
+    assert "do not already cover" in text
+    assert "does the same job as an active LoRA" in text
+    assert "Often none is needed" in text
+
+
+def test_lora_instructions_without_active_loras_have_no_such_limit():
+    text = pw.lora_instructions({"available": LORAS["available"], "active": []})
+    assert "at most 5 lines" in text
+    assert "do not already cover" not in text
+
+
+def test_split_suggestions_takes_a_limit():
+    refs = {f"L{i}" for i in range(1, 6)}
+    lines = "\n".join(f"L{i} | 1 | r" for i in range(1, 6))
+    _, found = pw.split_suggestions(f"p\n===LORAS===\n{lines}", refs, limit=2)
+    assert [item["ref"] for item in found] == ["L1", "L2"]
+
+
+def test_handle_write_with_active_loras_returns_at_most_two(server, tmp_path):
+    many = {**LORAS, "available": [{"ref": f"L{i}", "title": f"T{i}", "triggers": []} for i in range(1, 6)]}
+    lines = "\n".join(f"L{i} | 1 | r" for i in range(1, 6))
+    out = _lora_write(server, tmp_path, f"p\n===LORAS===\n{lines}", many)
+    assert [item["ref"] for item in out["suggestions"]] == ["L1", "L2"]
+
+
+# --- redirects --------------------------------------------------------------
+
+
+def test_a_redirect_to_another_host_loses_the_key(server, tmp_path):
+    other = _Server()
+    try:
+        # 127.0.0.1 and localhost are two hosts as far as a key is concerned.
+        target = other.url.replace("127.0.0.1", "localhost")
+        server.replies.append((302, "", {"Location": f"{target}/models"}))
+        other.replies.append((200, {"data": [{"id": "m"}]}))
+        out = pw.handle_models(server.url, True, env={}, key_file=_key_file(tmp_path))
+        assert out["models"][0]["id"] == "m"
+        assert server.requests[0]["headers"]["Authorization"] == "Bearer k"
+        assert "Authorization" not in other.requests[0]["headers"]
+    finally:
+        other.close()
+
+
+def test_a_redirect_on_the_same_host_keeps_the_key(server, tmp_path):
+    server.replies.append((302, "", {"Location": f"{server.url}/elsewhere"}))
+    server.replies.append((200, {"data": []}))
+    pw.handle_models(server.url, True, env={}, key_file=_key_file(tmp_path))
+    assert server.requests[1]["path"] == "/api/v1/elsewhere"
+    assert server.requests[1]["headers"]["Authorization"] == "Bearer k"
+
+
+def test_a_redirect_must_meet_the_rules_of_a_base_url(server, tmp_path):
+    server.replies.append((302, "", {"Location": "http://example.invalid/steal"}))
+    out = pw.handle_models(server.url, True, env={}, key_file=_key_file(tmp_path))
+    assert "Plain http" in out["error"]
+
+
+def test_every_request_goes_through_the_redirect_rules():
+    for function in (pw.list_models, pw.write, pw.make_title, pw.handle_models, pw.handle_title, pw.handle_write):
+        assert inspect.signature(function).parameters["opener"].default is pw._open, function.__name__
+
+
+# --- errors -----------------------------------------------------------------
+
+
+def test_a_connection_that_breaks_off_is_an_error_the_user_can_read():
+    def opener(request, timeout):
+        raise http.client.IncompleteRead(b"partial")
+
+    with pytest.raises(pw.PromptWriterError, match="nano-gpt.com"):
+        pw._request("https://nano-gpt.com/api/v1/models", api_key="k", timeout=5, opener=opener)
+
+
+@pytest.mark.parametrize("body", [["x"], "x", 3, None])
+def test_handle_title_refuses_a_body_that_is_not_an_object(body):
+    assert pw.handle_title(body, env={}, key_file=None) == {"error": "Invalid request"}

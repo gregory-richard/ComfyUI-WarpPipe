@@ -10,6 +10,7 @@ written, and are scrubbed from any error text.
 """
 
 import base64
+import http.client
 import json
 import logging
 import math
@@ -38,6 +39,10 @@ MODELS_TTL = 3600
 DEFAULT_TEMPERATURE = 0.6
 MAX_REFERENCES = 8
 IMPROVE_REQUEST = "Improve this prompt. Keep what it describes."
+# Many chat templates refuse a conversation whose first turn is the model's.
+BASE_REQUEST = "Write the current version of the prompt."
+# A thought cut off by a token limit never closes, and is still only a thought.
+_THINK = re.compile(r"(?s)<think>.*?(?:</think>|\Z)")
 
 
 def _read_version() -> str:
@@ -102,6 +107,20 @@ def check_url(url: str) -> None:
         )
 
 
+class _KeySafeRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect has to meet the rules a base URL meets, and the key stays with its host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        check_url(newurl)
+        follow = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if follow is not None and _host(newurl) not in _key_hosts(req.full_url):
+            follow.remove_header("Authorization")
+        return follow
+
+
+_open = urllib.request.build_opener(_KeySafeRedirect).open
+
+
 def _scrub(text: str, api_key: Optional[str]) -> str:
     if api_key:
         text = text.replace(api_key, "***")
@@ -154,6 +173,10 @@ def _request(url, *, api_key, body=None, timeout, opener):
         raise PromptWriterError(_scrub(f"Could not reach {host}: {reason}", api_key)) from None
     except OSError as exc:
         raise PromptWriterError(_scrub(f"Could not reach {host}: {exc}", api_key)) from None
+    except http.client.HTTPException as exc:
+        raise PromptWriterError(
+            f"The connection to {host} broke off ({type(exc).__name__})"
+        ) from None
     try:
         return json.loads(raw.decode("utf-8"))
     except ValueError:
@@ -203,7 +226,7 @@ def list_models(
     *,
     api_key: Optional[str],
     refresh: bool = False,
-    opener=urllib.request.urlopen,
+    opener=_open,
 ) -> list:
     check_url(base_url)
     cached = _MODEL_CACHE.get(base_url)
@@ -268,6 +291,7 @@ def build_messages(
 ) -> list:
     messages = [{"role": "system", "content": system}]
     if previous_result:
+        messages.append({"role": "user", "content": BASE_REQUEST})
         messages.append({"role": "assistant", "content": previous_result})
     text = IMPROVE_REQUEST if previous_result and not idea else idea
     if image_data_urls:
@@ -292,7 +316,7 @@ def parse_reply(payload: dict) -> str:
         )
     if not isinstance(content, str):
         content = ""
-    text = re.sub(r"(?s)<think>.*?</think>", "", content).strip()
+    text = _THINK.sub("", content).strip()
     if not text:
         raise PromptWriterError("The model returned no text")
     return text
@@ -331,7 +355,7 @@ def write(
     *,
     api_key: Optional[str],
     model: Optional[dict],
-    opener=urllib.request.urlopen,
+    opener=_open,
 ) -> dict:
     body = {
         "model": model_id,
@@ -371,7 +395,7 @@ TITLE_SYSTEM = (
 
 def clean_title(text: str) -> str:
     """One short line from whatever the model returned; empty when nothing usable is left."""
-    text = re.sub(r"(?s)<think>.*?</think>", "", text or "").strip()
+    text = _THINK.sub("", text or "").strip()
     line = text.split("\n", 1)[0].strip()
     line = re.sub(r"^title\s*:\s*", "", line, flags=re.IGNORECASE)
     line = line.strip(" \t\"'`*\u201c\u201d\u2018\u2019").rstrip(" .")
@@ -384,7 +408,7 @@ def make_title(
     source: str,
     *,
     api_key: Optional[str],
-    opener=urllib.request.urlopen,
+    opener=_open,
 ) -> str:
     body = {
         "model": model_id,
@@ -413,6 +437,8 @@ MAX_AVAILABLE_LORAS = 1000
 MAX_TRIGGER_CHARS = 120
 TRIGGER_JOIN = ", "
 MAX_SUGGESTIONS = 5
+# With LoRAs already chosen, a suggestion is a small change to that choice.
+MAX_SUGGESTIONS_WITH_ACTIVE = 2
 MAX_REASON_CHARS = 80
 MIN_STRENGTH = 0.1
 MAX_STRENGTH = 1.5
@@ -477,6 +503,10 @@ def _lora_line(lora: dict) -> str:
     return " | ".join(parts)
 
 
+def _suggestion_limit(loras: dict) -> int:
+    return MAX_SUGGESTIONS_WITH_ACTIVE if loras.get("active") else MAX_SUGGESTIONS
+
+
 def lora_instructions(loras: dict) -> str:
     """The rules and lists that follow the master prompt; empty when there are no LoRAs."""
     available = loras.get("available") or []
@@ -490,17 +520,26 @@ def lora_instructions(loras: dict) -> str:
     ]
     if active:
         blocks.append(
-            "ACTIVE LoRAs are loaded for this image. Use their trigger words in the prompt "
-            "where they fit:\n" + "\n".join(map(_lora_line, active))
+            "ACTIVE LoRAs are already loaded for this image, and the user chose them. Write the "
+            "prompt to work with them, and use their trigger words where they fit:\n"
+            + "\n".join(map(_lora_line, active))
         )
     blocks.append(
         "Never use trigger words of LoRAs that are not active, "
         "and never mention LoRAs in the prompt."
     )
+    keep_close = (
+        "Keep close to the ACTIVE LoRAs: suggest a LoRA only for something they do not already "
+        "cover, and never one that does the same job as an active LoRA or works against it. "
+        "Often none is needed. "
+        if active
+        else ""
+    )
     blocks.append(
         f"After the complete prompt, even if you were told to write only the prompt, write a "
-        f"line containing exactly {LORAS_MARKER} and then at most {MAX_SUGGESTIONS} lines of the "
-        "form REF | strength | reason for AVAILABLE LoRAs that would clearly help this image. "
+        f"line containing exactly {LORAS_MARKER} and then at most {_suggestion_limit(loras)} "
+        "lines of the form REF | strength | reason for AVAILABLE LoRAs that would clearly help "
+        f"this image. {keep_close}"
         "The strength is between 0.4 and 1.2 and the reason is at most 6 words. "
         "If none would help, write only the marker line."
     )
@@ -525,7 +564,7 @@ def _strength(text: str) -> float:
     return round(min(MAX_STRENGTH, max(MIN_STRENGTH, value)), 2)
 
 
-def split_suggestions(text: str, valid_refs) -> tuple:
+def split_suggestions(text: str, valid_refs, limit: int = MAX_SUGGESTIONS) -> tuple:
     """(the prompt, [{ref, strength, reason}]), split at the last marker line."""
     lines = text.split("\n")
     at = next((i for i in range(len(lines) - 1, -1, -1) if _is_marker(lines[i])), None)
@@ -546,7 +585,7 @@ def split_suggestions(text: str, valid_refs) -> tuple:
                 "reason": reason.strip()[:MAX_REASON_CHARS].rstrip(),
             }
         )
-        if len(found) == MAX_SUGGESTIONS:
+        if len(found) == limit:
             break
     return "\n".join(lines[:at]).strip(), found
 
@@ -558,11 +597,14 @@ def _key_or_error(base_url: str, env, key_file) -> Optional[str]:
     check_url(base_url)
     key = key_for(base_url, env, key_file)
     if key is None and _host(base_url) in NANOGPT_HOSTS:
-        raise PromptWriterError(f"No API key for {_host(base_url)}: set {NANOGPT_ENV}")
+        raise PromptWriterError(
+            f"No API key for {_host(base_url)}: save one under ⚙ in the Prompt Writer, "
+            f"or set {NANOGPT_ENV}"
+        )
     return key
 
 
-def handle_models(base_url: str, refresh: bool, *, env, key_file, opener=urllib.request.urlopen) -> dict:
+def handle_models(base_url: str, refresh: bool, *, env, key_file, opener=_open) -> dict:
     base_url = (base_url or DEFAULT_BASE_URL).strip()
     try:
         check_url(base_url)
@@ -572,8 +614,10 @@ def handle_models(base_url: str, refresh: bool, *, env, key_file, opener=urllib.
         return {"error": str(exc)}
 
 
-def handle_title(body: dict, *, env, key_file, opener=urllib.request.urlopen) -> dict:
+def handle_title(body: dict, *, env, key_file, opener=_open) -> dict:
     try:
+        if not isinstance(body, dict):
+            raise PromptWriterError("Invalid request")
         base_url = str(body.get("base_url") or DEFAULT_BASE_URL).strip()
         model_id = str(body.get("model") or "").strip()
         source = str(body.get("source") or "").strip()
@@ -640,7 +684,7 @@ def handle_write(
     key_file: Optional[Path],
     settings: dict,
     image_path: Callable[[str], Optional[str]],
-    opener=urllib.request.urlopen,
+    opener=_open,
 ) -> dict:
     key = None
     try:
@@ -683,7 +727,9 @@ def handle_write(
         out["suggestions"] = []
         if loras is not None:
             refs = {lora["ref"] for lora in loras["available"]}
-            out["text"], out["suggestions"] = split_suggestions(out["text"], refs)
+            out["text"], out["suggestions"] = split_suggestions(
+                out["text"], refs, _suggestion_limit(loras)
+            )
             if not out["text"].strip():
                 raise PromptWriterError("The model returned no text")
         return out

@@ -1,4 +1,4 @@
-// 🌀 Prompt Writer: a chat-style pop-up, opened from the Write button on each
+// 🌀 Prompt Writer: a chat-style pop-up, opened from the ✨ AI button on each
 // 🌀 Prompt + LoRAs, where an LLM writes and rewrites an image prompt.
 //
 // It exists only in the frontend, so it never takes part in a queued prompt.
@@ -37,7 +37,9 @@ import {
   createChat,
   deleteChat,
   emptyStore,
+  isStore,
   latestChatFor,
+  mergedDraft,
   normalizeStore,
   renameChat,
   rewindChat,
@@ -316,6 +318,11 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 .wpw-lora-add:hover { background: var(--wpw-raised-hover); }
 .wpw-lora.is-added .wpw-lora-add { background: var(--wpw-warp); color: #fff; }
 .wpw-lora.is-added .wpw-lora-add:hover { background: var(--wpw-warp-hover); }
+.wpw-lora-add:disabled { cursor: default; opacity: 0.6; }
+/* What is on already takes little room, so what is new stands out. */
+.wpw-lora.is-compact { width: auto; max-width: 260px; height: 30px; padding: 2px 4px 2px 2px; gap: 6px; }
+.wpw-lora.is-compact .wpw-lora-thumb { width: 24px; height: 24px; }
+.wpw-lora.is-compact .wpw-lora-add { width: 22px; height: 22px; font-size: 13px; line-height: 22px; }
 
 .wpw-composer { flex: none; border-top: 1px solid var(--wpw-rule); padding: 9px 14px 11px; }
 .wpw-composer.is-drag { box-shadow: inset 0 0 0 2px var(--wpw-warp); }
@@ -534,7 +541,9 @@ async function readStore() {
     return;
   }
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  store = normalizeStore(await response.json());
+  const raw = await response.json();
+  if (!isStore(raw)) throw new Error("not a chat file this version can read");
+  store = normalizeStore(raw);
 }
 
 /** A failed read is left unloaded, so a later save cannot overwrite the file. */
@@ -677,6 +686,7 @@ async function attachLoras(spec) {
   if (!lists) return;
   spec.payload.loras = { available: lists.available, active: lists.active };
   spec.loraRefs = lists.refs;
+  spec.activeLoras = lists.activeChips;
 }
 
 // --- Writing ------------------------------------------------------------------
@@ -798,6 +808,7 @@ function finish(chat, spec, out) {
     seconds: out.seconds,
     usage: out.usage,
     suggestions: resolveSuggestions(out.suggestions, spec.loraRefs),
+    activeLoras: spec.activeLoras ?? [],
   });
   // The first version titles the chat with its first words; a generated title wins.
   if (spec.aiTitle) setAutoTitle(chat, spec.aiTitle);
@@ -849,9 +860,20 @@ function restoreDraft(chat, spec) {
 /** Put a request back into the composer, with its images and what it built on. */
 function fillDraft(chat, spec) {
   const draft = draftOf(chat.id);
-  draft.text = spec.request ?? "";
-  draft.images = (spec.images ?? []).filter((name) => typeof name === "string");
+  const merged = mergedDraft(
+    draft,
+    {
+      text: spec.request ?? "",
+      images: (spec.images ?? []).filter((name) => typeof name === "string"),
+    },
+    MAX_IMAGES
+  );
+  draft.text = merged.text;
+  draft.images = merged.images;
   draft.base = spec.baseId === "seed" ? null : (spec.baseId ?? NO_BASE);
+  if (merged.overflow) {
+    draft.note = { text: `At most ${MAX_IMAGES} images per request.`, isError: true };
+  }
   if (view?.chatId === chat.id) {
     view.input.value = draft.text;
     growInput();
@@ -1198,16 +1220,36 @@ function targetLoraWidgets() {
   return list.filter(Boolean);
 }
 
-function suggestionChip(chat, version, suggestion) {
-  const added = targetLoraWidgets().some((w) => isLoraListed(w.value, suggestion.tag));
+/** A tag written in the prompt itself is on, but sits in a line of prose. */
+function isInPromptText(tag) {
+  const widgets = targetNow()?.node?.widgets ?? [];
+  return isLoraListed(widgets.find((w) => w.name === TEXT_WIDGET)?.value, tag);
+}
+
+/** One LoRA under a version. `compact` is for one that was on when the version was written. */
+function loraChip(chat, version, item, compact) {
+  const listed = targetLoraWidgets().some((w) => isLoraListed(w.value, item.tag));
+  const inText = !listed && isInPromptText(item.tag);
+  const on = listed || inText;
   const where = targetNow()?.label ?? "the chosen node";
-  const title = suggestion.title || suggestion.name || suggestion.tag;
-  const words = suggestion.triggers.join(", ");
+  const title = item.title || item.name || item.tag;
+  const words = item.triggers.join(", ");
+  const verb = compact ? (on ? "Switch off in" : "Switch on in") : on ? "Remove from" : "Add to";
+  const toggle = button(
+    on ? "✓" : "+",
+    () => toggleSuggestion(chat, version, item, { keepText: compact }),
+    "wpw-lora-add",
+    inText ? "Written in the prompt text" : `${verb} the LoRA list of ${where}`
+  );
+  toggle.disabled = inText;
   return el(
     "div",
-    { class: `wpw-lora${added ? " is-added" : ""}`, title: words ? `${title}\n${words}` : title },
-    suggestion.thumbnail
-      ? el("img", { class: "wpw-lora-thumb", src: suggestion.thumbnail, alt: "", loading: "lazy" })
+    {
+      class: `wpw-lora${on ? " is-added" : ""}${compact ? " is-compact" : ""}`,
+      title: words ? `${title}\n${words}` : title,
+    },
+    item.thumbnail
+      ? el("img", { class: "wpw-lora-thumb", src: item.thumbnail, alt: "", loading: "lazy" })
       : el("span", { class: "wpw-lora-thumb" }),
     el(
       "span",
@@ -1216,31 +1258,32 @@ function suggestionChip(chat, version, suggestion) {
         "span",
         { class: "wpw-lora-top" },
         el("span", { class: "wpw-lora-title", text: title }),
-        el("span", { class: "wpw-lora-strength", text: suggestion.strength.toFixed(2) })
+        el("span", { class: "wpw-lora-strength", text: item.strength.toFixed(2) })
       ),
-      el("span", { class: "wpw-lora-reason", text: suggestion.reason })
+      !compact && el("span", { class: "wpw-lora-reason", text: item.reason })
     ),
-    button(
-      added ? "✓" : "+",
-      () => toggleSuggestion(chat, version, suggestion),
-      "wpw-lora-add",
-      `${added ? "Remove from" : "Add to"} the LoRA list of ${where}`
-    )
+    toggle
   );
 }
 
-function suggestionRow(chat, version) {
-  if (!version.suggestions?.length) return null;
+function loraRow(label, chips) {
+  if (!chips.length) return null;
   return el(
     "div",
     { class: "wpw-suggest" },
-    el("div", { class: "wpw-suggest-label", text: "Suggested LoRAs" }),
-    el(
-      "div",
-      { class: "wpw-suggest-row" },
-      ...version.suggestions.map((item) => suggestionChip(chat, version, item))
-    )
+    el("div", { class: "wpw-suggest-label", text: label }),
+    el("div", { class: "wpw-suggest-row" }, ...chips)
   );
+}
+
+/** What was on when this version was written, then what the LLM would add. */
+function loraRows(chat, version) {
+  const chips = (items, compact) =>
+    (items ?? []).map((item) => loraChip(chat, version, item, compact));
+  return [
+    loraRow("Active LoRAs", chips(version.activeLoras, true)),
+    loraRow("Suggested LoRAs", chips(version.suggestions, false)),
+  ];
 }
 
 function statusText(version) {
@@ -1275,7 +1318,7 @@ function versionCard(chat, version, index) {
         el("span", { class: "wpw-status is-new", text: finishedText(version), title })
       ),
       editor,
-      suggestionRow(chat, version),
+      ...loraRows(chat, version),
       el("div", { class: "wpw-actions is-block" }, sendButton(version))
     );
   }
@@ -1306,7 +1349,7 @@ function versionCard(chat, version, index) {
       !open && actions
     ),
     open && el("div", { class: "wpw-text", text: version.text }),
-    open && suggestionRow(chat, version),
+    ...(open ? loraRows(chat, version) : []),
     open && actions
   );
 }
@@ -1671,8 +1714,12 @@ function setVersionText(version, text) {
   if (open) open.editor.value = text;
 }
 
-/** The only way a suggestion reaches a list: pressing its + adds it, pressing again removes it. */
-function toggleSuggestion(chat, version, suggestion) {
+/**
+ * The only way a suggestion reaches a list: pressing its + adds it, pressing again
+ * removes it. `keepText` leaves the version alone: a LoRA that was on when it was
+ * written has its trigger words in there already, where the LLM put them.
+ */
+function toggleSuggestion(chat, version, suggestion, { keepText = false } = {}) {
   flushEdits();
   refreshTargets();
   const target = targetNow();
@@ -1702,8 +1749,10 @@ function toggleSuggestion(chat, version, suggestion) {
       suggestion.addedHow = "appended";
     }
   }
-  const text = (holder ? removeTriggerLine : addTriggerLine)(version.text, triggers);
-  if (text !== version.text) setVersionText(version, text);
+  if (!keepText) {
+    const text = (holder ? removeTriggerLine : addTriggerLine)(version.text, triggers);
+    if (text !== version.text) setVersionText(version, text);
+  }
   save();
   redraw();
   checkpoint();

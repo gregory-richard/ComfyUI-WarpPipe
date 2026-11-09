@@ -230,8 +230,7 @@ folded sections are saved in the node.
 The boxes are a code editor (CodeMirror 6) laid over ComfyUI's own text box, which
 stays in place, hidden, and is still what ComfyUI saves and queues from. The setting
 `WarpPipe.CodeEditor`, under WarpPipe, turns the editor off and takes effect at once.
-Off, or if the editor cannot load, a box is a plain text box that shows its sections
-only while you are not typing in it.
+Off, or if the editor cannot load, a box is a plain text box without folding.
 
 #### Trigger words
 
@@ -702,7 +701,7 @@ version the next base.
 **LoRAs:** **Suggest LoRAs** in the composer (setting `LoraScope`) is **Off**, **List**
 (the LoRAs switched off in the target's own lists) or **All** (every LoRA that fits the
 target's base model). The ones already active are sent with either. The LLM
-uses the trigger words of active LoRAs and may suggest up to five others, shown as
+uses the trigger words of active LoRAs and may suggest others (at most two while LoRAs are active, otherwise five), shown as
 chips under the version. Nothing is added by itself: **+** on a chip switches on a
 commented line that holds the tag, or appends the tag to the `loras` box, and puts
 its trigger words on the first line of that version; pressing it again undoes both.

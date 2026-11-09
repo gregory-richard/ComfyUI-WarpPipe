@@ -8,7 +8,9 @@ import {
   createChat,
   deleteChat,
   emptyStore,
+  isStore,
   latestChatFor,
+  mergedDraft,
   normalizeStore,
   renameChat,
   rewindChat,
@@ -119,6 +121,17 @@ test("addVersion stores its suggestions as copies", () => {
   assert.deepEqual(v.suggestions[0].triggers, ["softlight"]);
 });
 
+test("a version remembers which LoRAs were active when it was written", () => {
+  const chat = createChat(emptyStore(), { id: "c", now: 1 });
+  assert.deepEqual(addVersion(chat, version("v1", 2)).activeLoras, []);
+  const v = addVersion(chat, version("v2", 3, { activeLoras: [SUGGESTION] }));
+  assert.deepEqual(v.activeLoras, [SUGGESTION]);
+  const raw = { version: 1, chats: [{ id: "c", versions: [{ id: "v", text: "t" }] }] };
+  assert.deepEqual(normalizeStore(raw).chats[0].versions[0].activeLoras, []);
+  raw.chats[0].versions[0].activeLoras = [SUGGESTION, { id: "x" }];
+  assert.deepEqual(normalizeStore(raw).chats[0].versions[0].activeLoras, [SUGGESTION]);
+});
+
 test("addVersion defaults to no suggestions", () => {
   const chat = createChat(emptyStore(), { id: "c", now: 1 });
   assert.deepEqual(addVersion(chat, version("v1", 2)).suggestions, []);
@@ -197,6 +210,7 @@ test("addVersion fills every field and numbers from 1", () => {
     seconds: 2,
     usage: { prompt_tokens: 1, completion_tokens: 2 },
     suggestions: [],
+    activeLoras: [],
   });
   assert.equal(chat.versions[0], v);
   assert.equal(chat.updated, 7);
@@ -347,6 +361,34 @@ test("normalizeStore: junk gives an empty store", () => {
   for (const raw of junk) assert.deepEqual(normalizeStore(raw), emptyStore());
 });
 
+test("isStore tells a store this version can read from anything else", () => {
+  assert.equal(isStore(emptyStore()), true);
+  for (const raw of [null, [], {}, { version: 2, chats: [] }, { version: 1, chats: {} }]) {
+    assert.equal(isStore(raw), false);
+  }
+});
+
+test("mergedDraft: a request put back joins what was already typed", () => {
+  const empty = { text: "", images: [] };
+  assert.deepEqual(mergedDraft(empty, { text: "back", images: ["a"] }, 8), {
+    text: "back",
+    images: ["a"],
+    overflow: false,
+  });
+  assert.deepEqual(
+    mergedDraft({ text: "typed", images: ["b", "a"] }, { text: "back", images: ["a"] }, 8),
+    { text: "back\n\ntyped", images: ["a", "b"], overflow: false }
+  );
+  assert.equal(mergedDraft({ text: "  ", images: [] }, { text: "back", images: [] }, 8).text, "back");
+  assert.equal(mergedDraft({ text: "typed", images: [] }, { text: "", images: [] }, 8).text, "typed");
+});
+
+test("mergedDraft says when the images no longer fit", () => {
+  const out = mergedDraft({ text: "", images: ["c", "d"] }, { text: "", images: ["a", "b"] }, 3);
+  assert.deepEqual(out.images, ["a", "b", "c"]);
+  assert.equal(out.overflow, true);
+});
+
 test("normalizeStore: a valid store survives unchanged", () => {
   const store = emptyStore();
   const chat = createChat(store, { id: "c", now: 1, seedPrompt: "S" });
@@ -448,6 +490,7 @@ test("normalizeStore: repairs the fields it can", () => {
     seconds: null,
     usage: {},
     suggestions: [],
+    activeLoras: [],
   });
 });
 

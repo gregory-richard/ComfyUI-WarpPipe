@@ -35,6 +35,29 @@ export function diffText(before, after) {
 }
 
 /**
+ * The changes that turn `before` into `after`, placed at `offset`. Line by line
+ * when the lines still match up, so one edit of many lines is many small changes
+ * and a fold between them survives; a single replacement across it would end it.
+ */
+export function lineChanges(before, after, offset = 0) {
+  const place = (change, at) => ({ ...change, from: at + change.from, to: at + change.to });
+  const old = before.split("\n");
+  const next = after.split("\n");
+  if (old.length !== next.length) {
+    const change = diffText(before, after);
+    return change ? [place(change, offset)] : [];
+  }
+  const changes = [];
+  let at = offset;
+  old.forEach((line, i) => {
+    const change = diffText(line, next[i]);
+    if (change) changes.push(place(change, at));
+    at += line.length + 1;
+  });
+  return changes;
+}
+
+/**
  * Keeps the textarea and the editor saying the same thing, without either one
  * setting the other off.
  *
@@ -116,12 +139,9 @@ export class BoxFacade {
 
   /** One edit, one step of undo, the caret left at `caret`. */
   replaceRange(from, to, text, caret = from + text.length) {
-    const change = diffText(this.view.state.sliceDoc(from, to), text);
     this.view.dispatch({
       ...this.verb,
-      changes: change
-        ? { from: from + change.from, to: from + change.to, insert: change.insert }
-        : undefined,
+      changes: lineChanges(this.view.state.sliceDoc(from, to), text, from),
       selection: { anchor: caret },
       scrollIntoView: true,
     });

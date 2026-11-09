@@ -62,6 +62,7 @@ function normalizeVersion(raw, n) {
     seconds: numberOrNull(raw.seconds),
     usage: isObject(raw.usage) ? { ...raw.usage } : {},
     suggestions: normalizeSuggestions(raw.suggestions),
+    activeLoras: normalizeSuggestions(raw.activeLoras),
   };
 }
 
@@ -89,11 +90,14 @@ function normalizeChat(raw) {
   };
 }
 
+/** Is this a chat file this version can read? One it cannot must not be saved over. */
+export function isStore(raw) {
+  return isObject(raw) && raw.version === STORE_VERSION && Array.isArray(raw.chats);
+}
+
 /** A valid store from anything: bad input is empty, malformed entries are dropped. */
 export function normalizeStore(raw) {
-  if (!isObject(raw) || raw.version !== STORE_VERSION || !Array.isArray(raw.chats)) {
-    return emptyStore();
-  }
+  if (!isStore(raw)) return emptyStore();
   const chats = validUnique(raw.chats, (c) => Array.isArray(c.versions));
   return { version: STORE_VERSION, chats: chats.map(normalizeChat) };
 }
@@ -143,6 +147,7 @@ export function addVersion(
     seconds = null,
     usage = {},
     suggestions = [],
+    activeLoras = [],
   }
 ) {
   const version = {
@@ -159,6 +164,7 @@ export function addVersion(
     seconds,
     usage: { ...usage },
     suggestions: normalizeSuggestions(suggestions),
+    activeLoras: normalizeSuggestions(activeLoras),
   };
   chat.versions.push(version);
   chat.updated = now;
@@ -187,6 +193,20 @@ export function rewindChat(chat, versionId, now) {
   const [version] = chat.versions.splice(index);
   chat.updated = now;
   return version;
+}
+
+/**
+ * A request put back into a composer that may already hold something: the
+ * request comes first and nothing typed is lost. `overflow` says images were
+ * left out because more than `maxImages` would not be sent.
+ */
+export function mergedDraft(held, back, maxImages) {
+  const images = [...new Set([...back.images, ...held.images])];
+  return {
+    text: [back.text, held.text].filter((part) => part.trim()).join("\n\n"),
+    images: images.slice(0, maxImages),
+    overflow: images.length > maxImages,
+  };
 }
 
 /** A generated title; one the user typed always stays. */
