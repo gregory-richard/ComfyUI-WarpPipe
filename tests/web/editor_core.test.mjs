@@ -179,10 +179,8 @@ function facadeRig(doc = "hello world") {
     annotations: [isolateHistory.of("full"), Transaction.userEvent.of("input.verb")],
   };
   const box = new BoxFacade({ view, textarea, verb });
-  const doUndo = () =>
-    undo({ state: view.state, dispatch: (tr) => (view.state = tr.state) });
-  const doRedo = () =>
-    redo({ state: view.state, dispatch: (tr) => (view.state = tr.state) });
+  const doUndo = () => undo({ state: view.state, dispatch: (tr) => (view.state = tr.state) });
+  const doRedo = () => redo({ state: view.state, dispatch: (tr) => (view.state = tr.state) });
   return { view, textarea, box, undo: doUndo, redo: doRedo };
 }
 
@@ -522,6 +520,9 @@ test("fold: comparing keys ignores order", () => {
 });
 
 test("fold: the placeholder counts lines", () => {
-  assert.equal(foldCountLabel(6), "··· 6 lines");
-  assert.equal(foldCountLabel(1), "··· 1 line");
+  assert.equal(foldCountLabel({ lineCount: 6, loraCount: 0, activeLoras: 0 }), "··· 6 lines");
+  assert.equal(
+    foldCountLabel({ lineCount: 3, loraCount: 3, activeLoras: 2 }),
+    "··· 3 LoRAs · 2 active"
+  );
 });

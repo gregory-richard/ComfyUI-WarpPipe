@@ -13,7 +13,10 @@ const {
   isLoraListed,
   listTargets,
   loraIndex,
-  loraToggleState,
+  loraScopeLabels,
+  enableLoraTag,
+  disableLoraTag,
+  switchedOffLoraTags,
   modelLabel,
   removeLoraTag,
   removeTriggerLine,
@@ -253,7 +256,10 @@ test("targetLoraTags reads text and loras, and loras_2 only when it is on", () =
 
 const lora = (id, base, extra = {}) => ({
   id,
-  name: id.split(/[\\/]/).pop().replace(/\.[^.]+$/, ""),
+  name: id
+    .split(/[\\/]/)
+    .pop()
+    .replace(/\.[^.]+$/, ""),
   title: null,
   base_model: base,
   folder: id.includes("\\") ? id.split("\\")[0] : "",
@@ -339,7 +345,9 @@ test("buildLoraLists: unknown base or nothing fitting sends nothing", () => {
 });
 
 test("buildLoraLists: every fitting LoRA active leaves an empty available list", () => {
-  const lists = buildLoraLists([lora("a.safetensors", "Flux.1 D")], BASE, [{ name: "a", weight: 1 }]);
+  const lists = buildLoraLists([lora("a.safetensors", "Flux.1 D")], BASE, [
+    { name: "a", weight: 1 },
+  ]);
   assert.deepEqual(lists.available, []);
   assert.equal(lists.active.length, 1);
 });
@@ -390,16 +398,13 @@ test("resolveSuggestions without an answer or a map is empty", () => {
 
 // --- the composer's chip -------------------------------------------------------
 
-test("loraToggleState", () => {
-  const lists = { available: new Array(201), active: [], refs: new Map() };
-  assert.deepEqual(loraToggleState(true, lists), { text: "LoRAs on · 201", accent: true });
-  assert.deepEqual(loraToggleState(false, lists), { text: "LoRAs off", accent: false });
-  assert.deepEqual(loraToggleState(false, null), { text: "LoRAs off", accent: false });
-  assert.deepEqual(loraToggleState(true, null), {
-    text: "LoRAs: none for this model",
-    accent: false,
+test("loraScopeLabels", () => {
+  assert.deepEqual(loraScopeLabels({ list: 18, all: 193 }), {
+    list: "List · 18",
+    all: "All · 193",
   });
-  assert.deepEqual(loraToggleState(true, undefined), { text: "LoRAs on · …", accent: true });
+  assert.deepEqual(loraScopeLabels(undefined), { list: "List · …", all: "All · …" });
+  assert.deepEqual(loraScopeLabels({ list: 0, all: null }), { list: "List · 0", all: "All · 0" });
 });
 
 // --- adding and removing a suggestion ------------------------------------------
@@ -423,7 +428,10 @@ test("isLoraListed sees only uncommented tags with that name", () => {
 });
 
 test("removeLoraTag removes the tag's line and nothing else", () => {
-  assert.equal(removeLoraTag("<lora:a:1>\n<lora:soft:0.80>\n<lora:b:1>", "soft"), "<lora:a:1>\n<lora:b:1>");
+  assert.equal(
+    removeLoraTag("<lora:a:1>\n<lora:soft:0.80>\n<lora:b:1>", "soft"),
+    "<lora:a:1>\n<lora:b:1>"
+  );
   assert.equal(removeLoraTag("<lora:a:1>\n<lora:soft:0.80>", "soft"), "<lora:a:1>");
   assert.equal(removeLoraTag("<lora:soft:0.80>", "soft"), "");
   assert.equal(removeLoraTag("<lora:a:1>", "soft"), "<lora:a:1>");
@@ -435,10 +443,7 @@ test("removeLoraTag removes every live copy, so the chip goes back to +", () => 
 
 test("removeLoraTag leaves comments alone", () => {
   assert.equal(removeLoraTag("// <lora:soft:1>", "soft"), "// <lora:soft:1>");
-  assert.equal(
-    removeLoraTag("// <lora:soft:1>\n<lora:soft:1>", "soft"),
-    "// <lora:soft:1>"
-  );
+  assert.equal(removeLoraTag("// <lora:soft:1>\n<lora:soft:1>", "soft"), "// <lora:soft:1>");
 });
 
 test("removeLoraTag on a line shared with something else takes only the tag", () => {
@@ -470,4 +475,59 @@ test("removeTriggerLine removes only a first line that is still exactly the word
 test("removeTriggerLine undoes addTriggerLine", () => {
   const added = addTriggerLine("line one\nline two", ["x", "y"]);
   assert.equal(removeTriggerLine(added, ["x", "y"]), "line one\nline two");
+});
+
+test("switchedOffLoraTags finds only tags behind a //", () => {
+  assert.deepEqual(switchedOffLoraTags("<lora:a:1.00>\n// <lora:b:0.50>\n//<lora:c:0.25>"), [
+    { name: "b", weight: 0.5 },
+    { name: "c", weight: 0.25 },
+  ]);
+});
+
+test("buildLoraLists with scope list offers the switched-off LoRAs of the list", () => {
+  const entries = [
+    lora("a.safetensors", "Flux.1 D"),
+    lora("b.safetensors", "Pony"),
+    lora("c.safetensors", "Flux.1 D"),
+  ];
+  const lists = buildLoraLists(entries, null, [{ name: "c", weight: 1 }], {
+    scope: "list",
+    listed: [
+      { name: "b", weight: 0.3 },
+      { name: "c", weight: 0.5 },
+      { name: "missing", weight: 1 },
+    ],
+  });
+  assert.deepEqual(
+    lists.available.map((item) => item.ref),
+    ["L1"]
+  );
+  assert.equal(lists.refs.get("L1").id, "b.safetensors");
+  assert.equal(lists.refs.get("L1").listedWeight, 0.3);
+  assert.equal(lists.active.length, 1);
+});
+
+test("buildLoraLists with scope all keeps the weight of a switched-off LoRA", () => {
+  const entries = [lora("a.safetensors", "Flux.1 D")];
+  const lists = buildLoraLists(entries, BASE, [], {
+    scope: "all",
+    listed: [{ name: "a", weight: 0.4 }],
+  });
+  const [suggestion] = resolveSuggestions([{ ref: "L1", strength: 0.9, reason: "r" }], lists.refs);
+  assert.equal(suggestion.strength, 0.4);
+});
+
+test("enableLoraTag switches the first commented line back on", () => {
+  assert.equal(
+    enableLoraTag("x\n// <lora:a:0.40>\n  //<lora:b:1.00>", "b"),
+    "x\n// <lora:a:0.40>\n  <lora:b:1.00>"
+  );
+  assert.equal(enableLoraTag("// <lora:a:0.40>", "a"), "<lora:a:0.40>");
+  assert.equal(enableLoraTag("<lora:a:0.40>", "a"), null);
+  assert.equal(enableLoraTag("//// <lora:a:0.40>", "a"), null);
+});
+
+test("disableLoraTag comments the line that holds the tag", () => {
+  assert.equal(disableLoraTag("x\n  <lora:a:0.40>\ny", "a"), "x\n  // <lora:a:0.40>\ny");
+  assert.equal(disableLoraTag("// <lora:a:0.40>", "a"), "// <lora:a:0.40>");
 });

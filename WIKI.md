@@ -699,12 +699,13 @@ the text unchanged into the Prompt + LoRAs chosen under **For**, as one undo ste
 flashes the node and closes the pop-up. **Continue from here** makes an older
 version the next base.
 
-**LoRAs:** the composer's **LoRAs on** chip (setting `SendLoras`) sends the list of
-LoRAs that fit the target's base model along with the ones already active. The LLM
+**LoRAs:** **Suggest LoRAs** in the composer (setting `LoraScope`) is **Off**, **List**
+(the LoRAs switched off in the target's own lists) or **All** (every LoRA that fits the
+target's base model). The ones already active are sent with either. The LLM
 uses the trigger words of active LoRAs and may suggest up to five others, shown as
-chips under the version. Nothing is added by itself: **+** on a chip appends the
-tag to the target's `loras` box and puts its trigger words on the first line of
-that version; pressing it again removes both.
+chips under the version. Nothing is added by itself: **+** on a chip switches on a
+commented line that holds the tag, or appends the tag to the `loras` box, and puts
+its trigger words on the first line of that version; pressing it again undoes both.
 
 **Writing:** the composer takes up to 8 images (**Add image**, drag and drop or
 Ctrl+V, uploaded to `input/`), left out with a notice when the model has no

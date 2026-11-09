@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { foldMarkup, parseSections, pruneFolded } from "../../web/fold.js";
+import {
+  countLoras,
+  foldMarkup,
+  parseSections,
+  pruneFolded,
+  sectionSummary,
+} from "../../web/fold.js";
 
 const slice = (text, start, end) => text.slice(start, end);
 
@@ -42,6 +48,8 @@ test("offsets are exact for a preamble and two sections", () => {
       bodyStart: 16,
       bodyEnd: 23,
       lineCount: 2,
+      loraCount: 0,
+      activeLoras: 0,
     },
     {
       key: "Subject#0",
@@ -51,6 +59,8 @@ test("offsets are exact for a preamble and two sections", () => {
       bodyStart: 37,
       bodyEnd: 40,
       lineCount: 1,
+      loraCount: 0,
+      activeLoras: 0,
     },
   ]);
   assert.equal(slice(text, 5, 15), "//// Style");
@@ -199,4 +209,21 @@ test("folded text is still in the source: folding never changes the value", () =
   markup(text, ["A#0"]);
   assert.equal(text, before);
   assert.equal(bodyOf(text, parseSections(text).sections[0]), "secret");
+});
+
+test("countLoras counts every tag and those not behind a //", () => {
+  assert.deepEqual(countLoras("<lora:a:1.00>\n// <lora:b:0.5>\n<lora:c:1> // note <lora:d:1>"), {
+    total: 4,
+    active: 2,
+  });
+  assert.deepEqual(countLoras("plain words\n// a note"), { total: 0, active: 0 });
+});
+
+test("sectionSummary counts LoRAs when a section holds any, otherwise lines", () => {
+  const body = "//// S\n<lora:a:1.00>\n// <lora:b:0.5>\n// <lora:c:0.5>";
+  assert.equal(sectionSummary(parseSections(body).sections[0]), "3 LoRAs · 1 active");
+  const one = "//// S\n// <lora:a:1.00>";
+  assert.equal(sectionSummary(parseSections(one).sections[0]), "1 LoRA · 0 active");
+  assert.equal(sectionSummary(parseSections("//// S\none\ntwo").sections[0]), "2 lines");
+  assert.equal(sectionSummary(parseSections("//// S\none").sections[0]), "1 line");
 });

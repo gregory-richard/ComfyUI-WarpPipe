@@ -103,8 +103,8 @@ Help for each: `web/docs/Warp Send.md`, `Warp Select.md`, `Warp Compare.md`.
 Every **Prompt + LoRAs** has an **✨ AI** button on its text box. It opens
 a pop-up where you chat with an LLM about the prompt: say what you want, add
 images, and each answer becomes a version you can edit or continue from. **Send to
-prompt** writes a version into the Prompt + LoRAs chosen at the top. With LoRAs on,
-the LLM knows the LoRAs for that model, uses the trigger words of active ones and
+prompt** writes a version into the Prompt + LoRAs chosen at the top. With LoRA suggestions
+on, the LLM knows your LoRAs for that model or only those in the node's list, uses the trigger words of active ones and
 suggests others, which only reach a list when you press **+**. Writing carries on after the pop-up
 is closed, and several chats can write at once. Chats are stored in the ComfyUI
 user folder, never in the workflow or in images. NanoGPT is the default; any

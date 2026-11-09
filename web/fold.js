@@ -9,6 +9,29 @@ import { escapeHTML } from "./text.js";
 // Matched one line at a time, so \s cannot run on into the line after.
 const HEADER_LINE = /^\s*\/\/\/\/\s*(.*)$/;
 
+const LORA_TAG = /<lora:[^<>\n]*>/gi;
+
+/** How many LoRA tags a stretch of text holds, and how many are not behind a //. */
+export function countLoras(text) {
+  let total = 0;
+  let active = 0;
+  for (const line of String(text ?? "").split("\n")) {
+    const note = line.indexOf("//");
+    for (const match of line.matchAll(LORA_TAG)) {
+      total += 1;
+      if (note === -1 || match.index < note) active += 1;
+    }
+  }
+  return { total, active };
+}
+
+/** What a folded section says it holds: its LoRAs if it has any, otherwise its lines. */
+export function sectionSummary({ lineCount, loraCount, activeLoras }) {
+  if (loraCount > 0)
+    return `${loraCount} LoRA${loraCount === 1 ? "" : "s"} · ${activeLoras} active`;
+  return `${lineCount} line${lineCount === 1 ? "" : "s"}`;
+}
+
 /**
  * The sections of a text, with exact character offsets.
  *
@@ -40,6 +63,8 @@ export function parseSections(text) {
         bodyStart: Math.min(headerEnd + 1, value.length),
         bodyEnd: value.length,
         lineCount: 0,
+        loraCount: 0,
+        activeLoras: 0,
       });
     }
     at += line.length + 1;
@@ -49,6 +74,9 @@ export function parseSections(text) {
     if (next) section.bodyEnd = Math.max(section.bodyStart, next.headerStart - 1);
     const body = value.slice(section.bodyStart, section.bodyEnd).trimEnd();
     section.lineCount = body ? body.split("\n").length : 0;
+    const loras = countLoras(body);
+    section.loraCount = loras.total;
+    section.activeLoras = loras.active;
   });
   const end = sections.length ? Math.max(0, sections[0].headerStart - 1) : value.length;
   return { preamble: { start: 0, end, text: value.slice(0, end) }, sections };
@@ -74,10 +102,10 @@ export function foldMarkup(text, { preamble, sections }, folded, paintRange) {
 
   let html = sections[0]?.headerStart > 0 ? block(preamble.start, preamble.end) : "";
   sections.forEach((section, i) => {
-    const { headerStart, headerEnd, bodyStart, bodyEnd, lineCount, title } = section;
+    const { headerStart, headerEnd, bodyStart, bodyEnd, title } = section;
     const shut = folded.has(section.key);
     const titleEnd = headerStart + text.slice(headerStart, headerEnd).trimEnd().length;
-    const count = lineCount === 1 ? "1 line" : `${lineCount} lines`;
+    const count = sectionSummary(section);
     html +=
       `<div class="wpf-head${shut ? " is-folded" : ""}" data-i="${i}">` +
       `<span class="wpf-fold" title="${shut ? "Unfold" : "Fold"}">${shut ? "▸" : "▾"}</span>` +

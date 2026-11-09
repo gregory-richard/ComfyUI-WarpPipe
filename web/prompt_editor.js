@@ -13,6 +13,8 @@ import {
 } from "./editor_core.js";
 import { parseSections } from "./fold.js";
 
+const PLACEHOLDER_GAP = 10;
+
 // A prompt box as a code editor, so //// sections fold while you type.
 //
 // CodeMirror is laid over ComfyUI's textarea and the textarea stays where it
@@ -368,7 +370,46 @@ export function mountCodeEditor(textarea, holder, folding, tokenise) {
     show,
   });
 
+  // A folded section keeps saying what it holds as the text changes, and the
+  // folded sections of a box line up in one column after the longest header.
+  const placeholders = {};
+  const refreshPlaceholders = () => {
+    view.requestMeasure({
+      key: placeholders,
+      read: () => {
+        const sections = sectionsOf(view.state.doc);
+        return [...view.contentDOM.querySelectorAll(".cm-foldPlaceholder")].map((element) => {
+          const at = view.posAtDOM(element);
+          const section = sections.find((item) => item.headerEnd === at);
+          const margin = parseFloat(getComputedStyle(element).marginLeft) || 0;
+          return {
+            element,
+            label: section ? foldCountLabel(section) : null,
+            left: element.offsetLeft - margin,
+          };
+        });
+      },
+      write: (items) => {
+        if (!items.length) return;
+        const column = Math.max(...items.map((item) => item.left));
+        for (const { element, label, left } of items) {
+          if (label && element.textContent !== label) element.textContent = label;
+          const margin = `${column - left + PLACEHOLDER_GAP}px`;
+          if (element.style.marginLeft !== margin) element.style.marginLeft = margin;
+        }
+      },
+    });
+  };
+
   const onUpdate = (update) => {
+    if (
+      update.docChanged ||
+      update.viewportChanged ||
+      update.geometryChanged ||
+      cm.foldedRanges(update.startState) !== cm.foldedRanges(update.state)
+    ) {
+      refreshPlaceholders();
+    }
     if (update.transactions.some((tr) => tr.annotation(External))) return;
     if (update.docChanged) sync.fromEditor(update.state.doc.toString());
     if (cm.foldedRanges(update.startState) !== cm.foldedRanges(update.state)) {
@@ -474,12 +515,14 @@ export function mountCodeEditor(textarea, holder, folding, tokenise) {
     theme,
     marks,
     cm.codeFolding({
-      preparePlaceholder: (state, range) =>
-        sectionsOf(state.doc).find((section) => section.headerEnd === range.from)?.lineCount ?? 0,
-      placeholderDOM: (_view, onclick, lineCount) => {
+      preparePlaceholder: (state, range) => {
+        const section = sectionsOf(state.doc).find((item) => item.headerEnd === range.from);
+        return section ? foldCountLabel(section) : "···";
+      },
+      placeholderDOM: (_view, onclick, label) => {
         const dots = document.createElement("span");
         dots.className = "cm-foldPlaceholder";
-        dots.textContent = foldCountLabel(lineCount);
+        dots.textContent = label;
         dots.title = "Unfold";
         dots.onclick = onclick;
         return dots;

@@ -19,7 +19,10 @@ import {
   formatStatus,
   isLoraListed,
   listTargets,
-  loraToggleState,
+  disableLoraTag,
+  enableLoraTag,
+  loraScopeLabels,
+  targetOffLoraTags,
   modelLabel,
   removeLoraTag,
   removeTriggerLine,
@@ -48,7 +51,8 @@ const SETTING_MODEL = "WarpPipe.PromptWriter.Model";
 const SETTING_SYSTEM_PROMPT = "WarpPipe.PromptWriter.SystemPrompt";
 const SETTING_TEMPERATURE = "WarpPipe.PromptWriter.Temperature";
 const SETTING_TITLE_MODEL = "WarpPipe.PromptWriter.TitleModel";
-const SETTING_SEND_LORAS = "WarpPipe.PromptWriter.SendLoras";
+const SETTING_LORA_SCOPE = "WarpPipe.PromptWriter.LoraScope";
+const LORA_SCOPES = ["off", "list", "all"];
 const DEFAULT_TITLE_MODEL = "gemma-4-26b-a4b-it-chimeraxheretic";
 
 const DEFAULT_BASE_URL = "https://nano-gpt.com/api/v1";
@@ -324,6 +328,14 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 .wpw-chip.is-base, .wpw-chip.is-on { border-color: var(--wpw-warp); color: var(--wpw-warp); }
 .wpw-chip.is-off { opacity: 0.7; }
 .wpw-chip-btn { cursor: pointer; }
+.wpw-seg {
+  display: inline-flex; align-items: center; height: 26px; overflow: hidden;
+  border: 1px solid var(--wpw-rule); border-radius: 13px; font-size: 12px;
+}
+.wpw-seg-label { padding: 0 8px; opacity: 0.75; white-space: nowrap; }
+.wpw-seg-btn { height: 100%; padding: 0 9px; background: none; border: 0; cursor: pointer; white-space: nowrap; }
+.wpw-seg-btn:hover { background: var(--wpw-raised-hover); }
+.wpw-seg-btn.is-on { background: var(--wpw-warp); color: #fff; }
 .wpw-chip-btn:hover { border-color: var(--wpw-warp); color: var(--wpw-warp); }
 .wpw-chip-x { background: none; border: 0; padding: 0 1px; cursor: pointer; font-size: 14px; line-height: 1; opacity: 0.7; }
 .wpw-chip-x:hover { opacity: 1; color: var(--wpw-red); }
@@ -637,15 +649,19 @@ function setNote(chatId, text, isError = false) {
 
 // --- What the LLM is told about LoRAs -----------------------------------------
 
-function sendsLoras() {
-  return getSetting(SETTING_SEND_LORAS, true) !== false;
+function loraScope() {
+  const scope = getSetting(SETTING_LORA_SCOPE, "all");
+  return LORA_SCOPES.includes(scope) ? scope : "all";
 }
 
 /** The lists a write for this node would send; null when there is nothing to send. */
-async function loraListsFor(node) {
+async function loraListsFor(node, scope) {
   try {
     const [entries, base] = await Promise.all([loraLibrary(), connectedBase(node)]);
-    return buildLoraLists(entries, base, targetLoraTags(node));
+    return buildLoraLists(entries, base, targetLoraTags(node), {
+      scope,
+      listed: targetOffLoraTags(node),
+    });
   } catch (error) {
     console.warn("[WarpPipe] LoRA library", error);
     return null;
@@ -656,8 +672,8 @@ async function loraListsFor(node) {
 async function attachLoras(spec) {
   if (spec.loraRefs) return;
   spec.loraRefs = new Map();
-  if (!spec.sendLoras) return;
-  const lists = await loraListsFor(spec.loraNode);
+  if (spec.loraScope === "off") return;
+  const lists = await loraListsFor(spec.loraNode, spec.loraScope);
   if (!lists) return;
   spec.payload.loras = { available: lists.available, active: lists.active };
   spec.loraRefs = lists.refs;
@@ -705,7 +721,7 @@ function startWrite(chat) {
     model,
     systemPrompt,
     originNode: view.promptNode,
-    sendLoras: sendsLoras(),
+    loraScope: loraScope(),
     loraNode: view.targetNode,
     payload: {
       base_url: baseUrl(),
@@ -1173,13 +1189,17 @@ function sendButton(version) {
   return use;
 }
 
-function targetLoraWidget() {
-  return targetNow()?.node?.widgets?.find((w) => w.name === LORAS_WIDGET) ?? null;
+/** The LoRA boxes of the target that count: the list, and list 2 while it is on. */
+function targetLoraWidgets() {
+  const widgets = targetNow()?.node?.widgets ?? [];
+  const named = (name) => widgets.find((w) => w.name === name);
+  const list = [named(LORAS_WIDGET)];
+  if (named("loras_2_on")?.value === true) list.push(named("loras_2"));
+  return list.filter(Boolean);
 }
 
 function suggestionChip(chat, version, suggestion) {
-  const list = targetLoraWidget();
-  const added = !!list && isLoraListed(list.value, suggestion.tag);
+  const added = targetLoraWidgets().some((w) => isLoraListed(w.value, suggestion.tag));
   const where = targetNow()?.label ?? "the chosen node";
   const title = suggestion.title || suggestion.name || suggestion.tag;
   const words = suggestion.triggers.join(", ");
@@ -1428,32 +1448,43 @@ function renderChips() {
     ...images,
     ...uploading,
     baseChip(chat, draft),
-    view.loraToggle
+    view.loraScope
   );
-  renderLoraToggle();
+  renderLoraScope();
 }
 
-function drawLoraToggle(lists) {
-  const on = sendsLoras();
-  const state = loraToggleState(on, lists);
-  view.loraToggle.textContent = state.text;
-  view.loraToggle.classList.toggle("is-on", state.accent);
-  view.loraToggle.title = on
-    ? "The LLM is told which LoRAs exist for this model and may suggest some. Click to stop."
-    : "The LLM is told nothing about LoRAs. Click to tell it.";
+const LORA_SCOPE_TITLES = {
+  off: "The LLM is told nothing about LoRAs.",
+  list: "The LLM may suggest LoRAs switched off in this node's LoRA list.",
+  all: "The LLM may suggest any of your LoRAs for this model.",
+};
+
+function drawLoraScope(counts) {
+  const labels = loraScopeLabels(counts);
+  const scope = loraScope();
+  for (const [key, control] of view.loraScopeButtons) {
+    control.textContent = key === "off" ? "Off" : labels[key];
+    control.title = LORA_SCOPE_TITLES[key];
+    control.classList.toggle("is-on", key === scope);
+  }
 }
 
-/** Asks anew each time: the count follows the target and what is in its lists. */
-async function renderLoraToggle() {
+/** Asks anew each time: the counts follow the target and what is in its lists. */
+async function renderLoraScope() {
   const run = ++loraRun;
-  const lists = sendsLoras() ? await loraListsFor(view.targetNode) : undefined;
-  if (view && run === loraRun) drawLoraToggle(lists);
+  const [list, all] = await Promise.all([
+    loraListsFor(view.targetNode, "list"),
+    loraListsFor(view.targetNode, "all"),
+  ]);
+  if (view && run === loraRun) {
+    drawLoraScope({ list: list?.available.length ?? 0, all: all?.available.length ?? 0 });
+  }
 }
 
-function toggleLoras() {
-  setSetting(SETTING_SEND_LORAS, !sendsLoras());
-  drawLoraToggle(undefined);
-  renderLoraToggle();
+function chooseLoraScope(scope) {
+  setSetting(SETTING_LORA_SCOPE, scope);
+  drawLoraScope(undefined);
+  renderLoraScope();
 }
 
 function renderSend() {
@@ -1645,21 +1676,35 @@ function toggleSuggestion(chat, version, suggestion) {
   flushEdits();
   refreshTargets();
   const target = targetNow();
-  const widget = targetLoraWidget();
-  if (!widget) {
+  const widgets = targetLoraWidgets();
+  if (!widgets.length) {
     setNote(chat.id, "That node has no LoRA list to add to.", true);
     return;
   }
   const { tag, strength, triggers } = suggestion;
-  const list = String(widget.value ?? "");
-  const listed = isLoraListed(list, tag);
-  const next = listed ? removeLoraTag(list, tag) : appendLoraTag(list, tag, strength);
-  const text = (listed ? removeTriggerLine : addTriggerLine)(version.text, triggers);
-  writeLoraList(target.node, widget, next);
-  if (text !== version.text) {
-    setVersionText(version, text);
-    save();
+  const holder = widgets.find((w) => isLoraListed(w.value, tag));
+  if (holder) {
+    // Text this added goes away again; a line that was already there is only switched off.
+    const value = String(holder.value ?? "");
+    const next =
+      suggestion.addedHow === "appended" ? removeLoraTag(value, tag) : disableLoraTag(value, tag);
+    writeLoraList(target.node, holder, next);
+    delete suggestion.addedHow;
+  } else {
+    const off = widgets
+      .map((w) => ({ w, next: enableLoraTag(w.value, tag) }))
+      .find((item) => item.next !== null);
+    if (off) {
+      writeLoraList(target.node, off.w, off.next);
+      suggestion.addedHow = "enabled";
+    } else {
+      writeLoraList(target.node, widgets[0], appendLoraTag(widgets[0].value, tag, strength));
+      suggestion.addedHow = "appended";
+    }
   }
+  const text = (holder ? removeTriggerLine : addTriggerLine)(version.text, triggers);
+  if (text !== version.text) setVersionText(version, text);
+  save();
   redraw();
   checkpoint();
   renderConvo(false);
@@ -1986,7 +2031,15 @@ function buildView(promptNode) {
 
   const convo = el("div", { class: "wpw-convo" });
   const chips = el("div", { class: "wpw-chips" });
-  const loraToggle = button("", toggleLoras, "wpw-chip wpw-chip-btn");
+  const loraScopeButtons = new Map(
+    LORA_SCOPES.map((scope) => [scope, button("", () => chooseLoraScope(scope), "wpw-seg-btn")])
+  );
+  const loraScopeEl = el(
+    "span",
+    { class: "wpw-seg" },
+    el("span", { class: "wpw-seg-label", text: "Suggest LoRAs" }),
+    ...loraScopeButtons.values()
+  );
   const note = el("div", { class: "wpw-note" });
   const input = el("textarea", {
     class: "wpw-input",
@@ -2108,7 +2161,8 @@ function buildView(promptNode) {
     chats,
     convo,
     chips,
-    loraToggle,
+    loraScope: loraScopeEl,
+    loraScopeButtons,
     note,
     input,
     send,
@@ -2125,7 +2179,7 @@ function buildView(promptNode) {
     confirmDelete: null,
   };
   document.body.appendChild(backdrop);
-  drawLoraToggle(undefined);
+  drawLoraScope(undefined);
   renderModelButton();
   renderPrompts();
   growInput();
@@ -2221,10 +2275,10 @@ app.registerExtension({
       defaultValue: DEFAULT_TEMPERATURE,
     },
     {
-      id: SETTING_SEND_LORAS,
-      name: "Prompt Writer sends LoRAs",
+      id: SETTING_LORA_SCOPE,
+      name: "Prompt Writer LoRA suggestions",
       type: "hidden",
-      defaultValue: true,
+      defaultValue: "all",
     },
   ],
 });

@@ -1,3 +1,5 @@
+import { sectionSummary } from "./fold.js";
+
 // The parts of the prompt's code editor that need no page and no CodeMirror.
 //
 // The textarea stays the truth ComfyUI saves and queues from; the editor is a
@@ -375,6 +377,6 @@ export function sameKeys(a, b) {
 }
 
 /** What stands in for a folded section's text. */
-export function foldCountLabel(lineCount) {
-  return `··· ${lineCount} line${lineCount === 1 ? "" : "s"}`;
+export function foldCountLabel(section) {
+  return `··· ${sectionSummary(section)}`;
 }

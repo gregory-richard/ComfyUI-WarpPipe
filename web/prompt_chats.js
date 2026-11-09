@@ -41,6 +41,9 @@ function normalizeSuggestions(raw) {
       : [],
     strength: item.strength,
     reason: stringOr(item.reason, ""),
+    ...(item.addedHow === "appended" || item.addedHow === "enabled"
+      ? { addedHow: item.addedHow }
+      : {}),
   }));
 }
 

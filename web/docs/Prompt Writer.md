@@ -50,25 +50,26 @@ The box at the bottom grows with your text. Above it:
   - In a new empty chat, **+ Current prompt** starts from the text of the chosen Prompt + LoRAs and then reads `Builds on: current prompt`.
   - Once there is a version, it reads `Builds on v3`. The **×** clears it, so the next **Write** starts without a base.
   - With a base and an empty box, **Write** asks the LLM to optimise that prompt.
-- **LoRAs** — Click to switch between `LoRAs on · 201` and `LoRAs off`; the choice is kept. See LoRA suggestions.
+- **Suggest LoRAs** — **Off**, **List** or **All**; the choice is kept and the numbers say how many LoRAs each offers. See LoRA suggestions.
 
 While a chat writes, **Write** becomes **Stop** with a seconds counter. Text you have not sent stays in its chat until ComfyUI's page is reloaded.
 
 ## LoRA suggestions
 
-With the **LoRAs** chip on, each **Write** tells the LLM about your LoRAs:
+With **Suggest LoRAs** on **List** or **All**, each **Write** tells the LLM about your LoRAs:
 
-- **Available** — The LoRAs in your library made for the model wired into the **For** node, minus the ones already in use. The number on the chip is how many. Only LoRAs whose base model is known to match are listed, up to 1000. If the model is unknown or none fit, the chip reads `LoRAs: none for this model` and nothing is sent.
+- **Available, with All** — The LoRAs in your library made for the model wired into the **For** node, minus the ones already in use. Only LoRAs whose base model is known to match are listed, up to 1000.
+- **Available, with List** — Only the LoRAs switched off with `//` in that node's LoRA list, and in the model 2 list while it is switched on.
 - **Active** — The LoRAs in that node's prompt and LoRA list, and in the model 2 list while it is switched on, leaving out lines switched off with `//`. The LLM uses their trigger words where they fit, and leaves out the trigger words of anything else.
 
-With the chip off, the LLM hears nothing about LoRAs and suggests none.
+With **Off**, the LLM hears nothing about LoRAs and suggests none.
 
 The LLM may answer with up to five LoRAs that would clearly help the image. They appear under the version as **Suggested LoRAs**, each with its preview, a strength and a short reason. **Nothing is added on its own.** Press **+** on a suggestion to:
 
-- add `<lora:name:0.80>` as a new last line of the LoRA list of the **For** node, as one undo step;
+- switch on its commented line if the LoRA is already in the list, keeping the weight written there, or otherwise add `<lora:name:0.80>` as a new last line of the LoRA list of the **For** node, as one undo step;
 - put the LoRA's trigger words, if it has any, as a new first line of that version.
 
-The chip then shows a check. Press it again to take the tag out of the list and remove the trigger line, if that first line is unchanged. The check follows the list: it is off again if you delete or comment out the tag yourself, and it reflects whichever node **For** is on.
+The chip then shows a check. Press it again to undo that: a line that was added goes, a line that was already there is commented out again, and the trigger line is removed if that first line is unchanged. The check follows the list: it is off again if you delete or comment out the tag yourself, and it reflects whichever node **For** is on.
 
 ## Setup
 

@@ -158,6 +158,26 @@ export function targetLoraTags(node) {
   return names.flatMap((name) => activeLoraTags(valueOf(name)));
 }
 
+/** Every <lora:NAME:WEIGHT> that is behind a // on its line, as {name, weight}. */
+export function switchedOffLoraTags(text) {
+  const value = String(text ?? "");
+  const found = [];
+  for (const match of value.matchAll(TAG_RE)) {
+    if (commentedAt(value, match.index)) {
+      found.push({ name: match[1].trim(), weight: parseFloat(match[2]) });
+    }
+  }
+  return found;
+}
+
+/** The tags switched off in a target's LoRA lists. */
+export function targetOffLoraTags(node) {
+  const valueOf = (name) => node?.widgets?.find((widget) => widget.name === name)?.value;
+  const names = ["loras"];
+  if (valueOf("loras_2_on") === true) names.push("loras_2");
+  return names.flatMap((name) => switchedOffLoraTags(valueOf(name)));
+}
+
 /** Every name a tag might use for a file; the first file of a name keeps it. */
 export function loraIndex(entries) {
   const index = new Map();
@@ -182,21 +202,32 @@ const triggersOf = (entry) => (Array.isArray(entry.triggers) ? [...entry.trigger
 
 /**
  * What a write tells the LLM: {available, active, refs}, where refs maps each
- * "L1" to its library entry. Null when the base is unknown or no LoRA fits it.
+ * "L1" to its library entry. Scope "all" offers every LoRA that fits the base and
+ * is null when the base is unknown or none fits; scope "list" offers the LoRAs
+ * switched off in the target's own lists. `listed` is those tags: a LoRA in it
+ * keeps the weight written there.
  */
-export function buildLoraLists(entries, base, tags) {
-  const fitting = entries.filter((entry) => fitsBase(entry, base) === true);
-  if (!fitting.length) return null;
-
+export function buildLoraLists(entries, base, tags, { scope = "all", listed = [] } = {}) {
   const index = loraIndex(entries);
+  const weights = new Map();
+  for (const tag of listed) {
+    const entry = findLora(index, tag.name);
+    if (entry && !weights.has(entry)) weights.set(entry, tag.weight);
+  }
+  const pool =
+    scope === "list"
+      ? [...weights.keys()]
+      : entries.filter((entry) => fitsBase(entry, base) === true);
+  if (scope !== "list" && !pool.length) return null;
+
   const activeEntries = new Set(tags.map((tag) => findLora(index, tag.name)).filter(Boolean));
   const refs = new Map();
-  const available = fitting
+  const available = pool
     .filter((entry) => !activeEntries.has(entry))
     .slice(0, MAX_AVAILABLE)
     .map((entry, i) => {
       const ref = `L${i + 1}`;
-      refs.set(ref, entry);
+      refs.set(ref, weights.has(entry) ? { ...entry, listedWeight: weights.get(entry) } : entry);
       return { ref, title: titleOf(entry), triggers: triggersOf(entry) };
     });
   const active = [...activeEntries].map((entry) => ({
@@ -220,19 +251,17 @@ export function resolveSuggestions(raw, refs) {
         tag: stemOf(entry.id),
         thumbnail: entry.thumbnail ?? null,
         triggers: triggersOf(entry),
-        strength: item.strength,
+        strength: entry.listedWeight ?? item.strength,
         reason: String(item.reason ?? ""),
       },
     ];
   });
 }
 
-/** What the composer's chip says. `lists` is undefined until it is known. */
-export function loraToggleState(on, lists) {
-  if (!on) return { text: "LoRAs off", accent: false };
-  if (lists === undefined) return { text: "LoRAs on · …", accent: true };
-  if (lists === null) return { text: "LoRAs: none for this model", accent: false };
-  return { text: `LoRAs on · ${lists.available.length}`, accent: true };
+/** What the composer's scope buttons say. `counts` is undefined until it is known. */
+export function loraScopeLabels(counts) {
+  if (counts === undefined) return { list: "List · …", all: "All · …" };
+  return { list: `List · ${counts.list ?? 0}`, all: `All · ${counts.all ?? 0}` };
 }
 
 // --- Adding a suggestion to a list ---------------------------------------------
@@ -271,6 +300,32 @@ export function removeLoraTag(text, tag) {
     else if (left.trim()) kept.push(left.trim());
   }
   return kept.join("\n");
+}
+
+/** The text with the first commented line holding this tag switched on, or null. */
+export function enableLoraTag(text, tag) {
+  const lines = String(text ?? "").split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = /^(\s*)\/\/ ?(.*)$/.exec(lines[i]);
+    if (!match) continue;
+    if (activeLoraTags(match[2]).some((found) => namesLora(found.name, tag))) {
+      lines[i] = match[1] + match[2];
+      return lines.join("\n");
+    }
+  }
+  return null;
+}
+
+/** The text with the first line that switches this tag on commented out. */
+export function disableLoraTag(text, tag) {
+  const lines = String(text ?? "").split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    if (activeLoraTags(lines[i]).some((found) => namesLora(found.name, tag))) {
+      lines[i] = lines[i].replace(/^(\s*)/, "$1// ");
+      break;
+    }
+  }
+  return lines.join("\n");
 }
 
 /** The text with the trigger words as a new first line, unless they already are one. */
