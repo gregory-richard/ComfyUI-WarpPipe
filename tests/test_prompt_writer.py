@@ -686,12 +686,11 @@ def test_lora_instructions_states_the_rules():
     assert "write only the marker line" in text
 
 
-def test_lora_instructions_lists_available_after_the_rules():
+def test_lora_instructions_list_available_before_the_output_rule():
     lines = pw.lora_instructions(LORAS).splitlines()
     assert "L1 | Soft Light | triggers: softlight, glow" in lines
     assert "L2 | No Words" in lines
-    assert lines.index("L2 | No Words") == len(lines) - 1
-    assert lines.index("L1 | Soft Light | triggers: softlight, glow") > next(
+    assert lines.index("L2 | No Words") < next(
         i for i, line in enumerate(lines) if "===LORAS===" in line
     )
 
