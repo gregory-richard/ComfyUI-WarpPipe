@@ -483,7 +483,11 @@ def lora_instructions(loras: dict) -> str:
     active = loras.get("active") or []
     if not available and not active:
         return ""
-    blocks = ["LoRAs: a LoRA is an add-on for the image model that teaches it a subject or a style."]
+    blocks = [
+        "LoRAs: a LoRA is an add-on for the image model that teaches it a subject or a style.",
+        # The list comes first: after 200 lines the model forgets an instruction placed before it.
+        "AVAILABLE LoRAs:\n" + ("\n".join(map(_lora_line, available)) if available else "(none)"),
+    ]
     if active:
         blocks.append(
             "ACTIVE LoRAs are loaded for this image. Use their trigger words in the prompt "
@@ -499,9 +503,6 @@ def lora_instructions(loras: dict) -> str:
         "form REF | strength | reason for AVAILABLE LoRAs that would clearly help this image. "
         "The strength is between 0.4 and 1.2 and the reason is at most 6 words. "
         "If none would help, write only the marker line."
-    )
-    blocks.append(
-        "AVAILABLE LoRAs:\n" + ("\n".join(map(_lora_line, available)) if available else "(none)")
     )
     return "\n\n".join(blocks)
 

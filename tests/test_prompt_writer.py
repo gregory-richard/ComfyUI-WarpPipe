@@ -962,3 +962,8 @@ def test_handle_write_empty_loras_add_no_instructions(server, tmp_path):
     assert _chat_body(server)["messages"][0]["content"] == "SYS"
     assert out["text"] == "OUT"
     assert out["suggestions"] == []
+
+
+def test_lora_instructions_end_with_the_output_rule():
+    text = pw.lora_instructions({"available": [{"ref": "L1", "title": "Film", "triggers": []}]})
+    assert text.index("AVAILABLE LoRAs") < text.index(pw.LORAS_MARKER)
