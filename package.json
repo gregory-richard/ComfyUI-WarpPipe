@@ -7,11 +7,17 @@
     "lint": "eslint web",
     "format": "prettier --write \"web/**/*.js\"",
     "format:check": "prettier --check \"web/**/*.js\"",
-    "test": "node --test tests/web/model_base.test.mjs tests/web/size_presets.test.mjs tests/web/warp_route.test.mjs tests/web/compare_widget.test.mjs tests/web/warp_routing.test.mjs tests/web/prompt_writer.test.mjs tests/web/prompt_chats.test.mjs tests/web/text.test.mjs tests/web/fold.test.mjs",
-    "check": "npm run lint && npm run format:check && npm test"
+    "test": "node --test tests/web/model_base.test.mjs tests/web/size_presets.test.mjs tests/web/warp_route.test.mjs tests/web/compare_widget.test.mjs tests/web/warp_routing.test.mjs tests/web/prompt_writer.test.mjs tests/web/prompt_chats.test.mjs tests/web/text.test.mjs tests/web/fold.test.mjs tests/web/codemirror_bundle.test.mjs",
+    "check": "npm run lint && npm run format:check && npm test",
+    "build:editor": "node scripts/build_editor.mjs"
   },
   "devDependencies": {
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/language": "6.13.1",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.15",
     "@eslint/js": "9.39.1",
+    "esbuild": "0.28.2",
     "eslint": "9.39.1",
     "globals": "16.5.0",
     "prettier": "3.6.2"

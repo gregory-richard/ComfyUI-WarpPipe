@@ -42,7 +42,14 @@ warppipe = "."
 # web/*.js is not optional: WEB_DIRECTORY points ComfyUI at ./web, and without
 # it an installed wheel has a frontend directory containing only documentation.
 # The whole prompt UI, the library browser and the save node's labels are there.
-warppipe = ["version.txt", "node_list.json", "web/*.js", "web/docs/*.md"]
+warppipe = [
+    "version.txt",
+    "node_list.json",
+    "web/*.js",
+    "web/docs/*.md",
+    "web/vendor/*.js",
+    "web/vendor/LICENSE-codemirror.txt",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
