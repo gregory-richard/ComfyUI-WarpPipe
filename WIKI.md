@@ -210,7 +210,7 @@ while you are only looking.
 | `Tab` | take the suggestion; on an existing tag, offer that LoRA's trigger words |
 | `↑` `↓` | walk the alternatives while a suggestion is showing |
 | `Ctrl+↑` `Ctrl+↓` | change the weight of the tag the caret is in, in steps of 0.1 |
-| `Ctrl+/` | comment the line out, which switches that LoRA off |
+| `Ctrl+/` | comment the line, or every selected line, out or back in; a commented LoRA is off |
 | `Alt+↑` `Alt+↓` | move the line, which reorders when LoRAs are applied |
 | `Esc` | drop the suggestion |
 

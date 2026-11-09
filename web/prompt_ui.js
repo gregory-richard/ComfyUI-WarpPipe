@@ -8,7 +8,7 @@ import {
   forgetBases,
 } from "./model_base.js";
 import { writeButtonFor } from "./prompt_writer.js";
-import { escapeAttr, escapeHTML, stemOf } from "./text.js";
+import { escapeAttr, escapeHTML, stemOf, toggleCommentLines } from "./text.js";
 import { keepWidgetValuesByName } from "./widget_values.js";
 
 // The prompt box, made legible.
@@ -791,11 +791,15 @@ function editVerbs(textarea, commit) {
     if (ctrl && e.key === "/") {
       e.preventDefault();
       e.stopPropagation();
-      const { start, end } = lineBounds(value, caret);
-      const line = value.slice(start, end);
-      const off = /^(\s*)\/\/ ?/.exec(line);
-      const next = off ? off[1] + line.slice(off[0].length) : line.replace(/^(\s*)/, "$1// ");
-      edit(textarea, start, end, next, Math.max(start, caret + (next.length - line.length)));
+      const selectionEnd = textarea.selectionEnd;
+      const { start, end, text } = toggleCommentLines(value, caret, selectionEnd);
+      if (text === value.slice(start, end)) return;
+      if (caret === selectionEnd) {
+        edit(textarea, start, end, text, Math.max(start, caret + (text.length - (end - start))));
+      } else {
+        edit(textarea, start, end, text);
+        textarea.setSelectionRange(start, start + text.length);
+      }
       commit();
       return;
     }

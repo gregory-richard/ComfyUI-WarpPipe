@@ -212,7 +212,7 @@ With the caret in a tag:
 | | |
 | --- | --- |
 | **Ctrl+↑ / Ctrl+↓** | weight, in steps of 0.1 |
-| **Ctrl+/** | switch it off and on |
+| **Ctrl+/** | switch it off and on; with several lines selected, all of them |
 | **Alt+↑ / Alt+↓** | move the line - LoRAs apply down the list |
 | select the line, delete | remove it |
 
