@@ -325,20 +325,26 @@ warm light from the left
 
 Being a note, a header line never reaches the model.
 
-A box with a header shows its sections while you are not typing in it. Click
-**▾** to fold a section down to its title and a count of its lines, **▸** to open
-it again. Click anywhere else, on the text or on a title, and you are editing:
-the full text comes back with the caret where you clicked and that line where it
-was on screen. Click away and the same sections are folded again. Clicking a
-folded title puts the caret at the end of its `////` line.
+Sections fold while you type, like a code editor. A header gets **▾** in a slim
+margin on the left of the box, as soon as there is something under it. Click it
+to fold the section down to its header and a count of its lines,
+`//// Style ··· 6 lines`, and click **▸** or the count to open it again. The caret
+moving into a folded section opens it. A box with no header has no margin, and
+its text sits where it always did.
 
 **Folding only changes what is shown.** The text in the box stays whole, so a
 folded LoRA still loads and folded text still goes to the model. To stop a line
 having an effect, comment it out with `//`.
 
-What is folded is saved with the node, and Ctrl+Z takes a fold back. A section is
-remembered by its title and which of that title it is, so renaming a header opens
-it.
+What is folded is saved with the node, by each section's title and which of that
+title it is. A fold is one step of the workflow's undo; in a box, `Ctrl+Z` and
+`Ctrl+Y` undo the text instead.
+
+Every box is a code editor, and each thing you do to it - a weight, a moved line,
+a comment, a tag from `/` - is one step of its undo. To have plain text boxes
+instead, turn off **WarpPipe > Prompt boxes > Code editor** in the settings
+(`WarpPipe.CodeEditor`). A plain box only shows its sections while you are not
+typing in it: click the text to edit it whole, click away to see them folded again.
 
 ## Trigger words
 

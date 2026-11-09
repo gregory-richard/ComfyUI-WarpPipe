@@ -215,16 +215,23 @@ while you are only looking.
 | `Esc` | drop the suggestion |
 
 Each of these is an ordinary edit to the text, which is why a tag gets a line to
-itself. It also means the browser's own undo understands all of them.
+itself. It also means `Ctrl+Z` and `Ctrl+Y` understand all of them, each as one
+step.
 
 #### Sections
 
 A line starting with `////` is a section header, and the section runs to the next
-one. A box with headers shows ▾/▸ on them while you are not typing in it; click
-anywhere else in the text to edit, with the full text in the box. Folding only
-changes what is shown, so folded LoRAs still load and folded text still reaches the
-model. To switch something off, select the lines and press `Ctrl+/`. The folded
-sections are saved in the node.
+one. Sections fold while you type: ▾ and ▸ sit in a slim margin beside each header,
+and a folded one reads `//// Style ··· 6 lines`. A box without headers has no margin.
+Folding only changes what is shown, so folded LoRAs still load and folded text still
+reaches the model. To switch something off, select the lines and press `Ctrl+/`. The
+folded sections are saved in the node.
+
+The boxes are a code editor (CodeMirror 6) laid over ComfyUI's own text box, which
+stays in place, hidden, and is still what ComfyUI saves and queues from. The setting
+`WarpPipe.CodeEditor`, under WarpPipe, turns the editor off and takes effect at once.
+Off, or if the editor cannot load, a box is a plain text box that shows its sections
+only while you are not typing in it.
 
 #### Trigger words
 
