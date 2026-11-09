@@ -3,7 +3,6 @@ import {
   BoxFacade,
   TextSync,
   diffText,
-  foldCountLabel,
   foldPlan,
   foldedKeysOf,
   keyBelongsToEditor,
@@ -11,9 +10,39 @@ import {
   sectionAtLine,
   sectionFoldRange,
 } from "./editor_core.js";
-import { parseSections } from "./fold.js";
+import { foldLabelParts, parseSections } from "./fold.js";
 
 const PLACEHOLDER_GAP = 10;
+const UNIT_WIDTH = 5; // "LoRAs" and "lines"
+
+/** Numbers right-aligned and units left-aligned, in columns that fit any font. */
+function fillPlaceholder(element, parts) {
+  const signature = parts ? JSON.stringify(parts) : "";
+  if (element.dataset.parts === signature) return;
+  element.dataset.parts = signature;
+  if (!parts) {
+    element.textContent = "···";
+    return;
+  }
+  const cell = (text, width, align) => {
+    const span = document.createElement("span");
+    span.className = "wpc-fold-cell";
+    span.style.width = `${width}ch`;
+    span.style.textAlign = align;
+    span.textContent = String(text);
+    return span;
+  };
+  const children = [
+    "··· ",
+    cell(parts.count, parts.countWidth, "right"),
+    " ",
+    cell(parts.unit, UNIT_WIDTH, "left"),
+  ];
+  if (parts.active !== null) {
+    children.push(" · ", cell(parts.active, parts.activeWidth, "right"), " active");
+  }
+  element.replaceChildren(...children);
+}
 
 // A prompt box as a code editor, so //// sections fold while you type.
 //
@@ -154,6 +183,7 @@ function sharedParts() {
       cursor: "pointer",
     },
     ".cm-foldPlaceholder:hover": { color: "#4ec8e8" },
+    ".wpc-fold-cell": { display: "inline-block", fontVariantNumeric: "tabular-nums" },
   });
 
   // The keys of a textarea and no more. CodeMirror's default set also takes
@@ -384,7 +414,7 @@ export function mountCodeEditor(textarea, holder, folding, tokenise) {
           const margin = parseFloat(getComputedStyle(element).marginLeft) || 0;
           return {
             element,
-            label: section ? foldCountLabel(section) : null,
+            parts: section ? foldLabelParts(section, sections) : null,
             left: element.offsetLeft - margin,
           };
         });
@@ -392,8 +422,8 @@ export function mountCodeEditor(textarea, holder, folding, tokenise) {
       write: (items) => {
         if (!items.length) return;
         const column = Math.max(...items.map((item) => item.left));
-        for (const { element, label, left } of items) {
-          if (label && element.textContent !== label) element.textContent = label;
+        for (const { element, parts, left } of items) {
+          if (parts) fillPlaceholder(element, parts);
           const margin = `${column - left + PLACEHOLDER_GAP}px`;
           if (element.style.marginLeft !== margin) element.style.marginLeft = margin;
         }
@@ -516,13 +546,14 @@ export function mountCodeEditor(textarea, holder, folding, tokenise) {
     marks,
     cm.codeFolding({
       preparePlaceholder: (state, range) => {
-        const section = sectionsOf(state.doc).find((item) => item.headerEnd === range.from);
-        return section ? foldCountLabel(section) : "···";
+        const sections = sectionsOf(state.doc);
+        const section = sections.find((item) => item.headerEnd === range.from);
+        return section ? foldLabelParts(section, sections) : null;
       },
-      placeholderDOM: (_view, onclick, label) => {
+      placeholderDOM: (_view, onclick, parts) => {
         const dots = document.createElement("span");
         dots.className = "cm-foldPlaceholder";
-        dots.textContent = label;
+        fillPlaceholder(dots, parts);
         dots.title = "Unfold";
         dots.onclick = onclick;
         return dots;

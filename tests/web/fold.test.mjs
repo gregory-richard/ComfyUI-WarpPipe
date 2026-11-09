@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   countLoras,
+  foldLabelParts,
   foldMarkup,
   parseSections,
   pruneFolded,
@@ -226,4 +227,52 @@ test("sectionSummary counts LoRAs when a section holds any, otherwise lines", ()
   assert.equal(sectionSummary(parseSections(one).sections[0]), "1 LoRA · 0 active");
   assert.equal(sectionSummary(parseSections("//// S\none\ntwo").sections[0]), "2 lines");
   assert.equal(sectionSummary(parseSections("//// S\none").sections[0]), "1 line");
+});
+
+function lorasText(total, active) {
+  const lines = [];
+  for (let i = 0; i < total; i += 1) lines.push(`${i < active ? "" : "// "}<lora:x${i}:1.00>`);
+  return lines.join("\n");
+}
+
+test("foldLabelParts: columns are as wide as the largest numbers in the box", () => {
+  const text = [
+    `//// A\n${lorasText(120, 12)}`,
+    `//// B\n${lorasText(3, 1)}`,
+    `//// C\n${lorasText(1, 0)}`,
+    "//// D\none\ntwo",
+  ].join("\n");
+  const { sections } = parseSections(text);
+  assert.deepEqual(foldLabelParts(sections[0], sections), {
+    count: 120,
+    unit: "LoRAs",
+    active: 12,
+    countWidth: 3,
+    activeWidth: 2,
+  });
+  assert.deepEqual(foldLabelParts(sections[2], sections), {
+    count: 1,
+    unit: "LoRA",
+    active: 0,
+    countWidth: 3,
+    activeWidth: 2,
+  });
+  assert.deepEqual(foldLabelParts(sections[3], sections), {
+    count: 2,
+    unit: "lines",
+    active: null,
+    countWidth: 3,
+    activeWidth: 2,
+  });
+});
+
+test("foldLabelParts: a box without LoRAs still has an active column width", () => {
+  const { sections } = parseSections("//// A\none");
+  assert.deepEqual(foldLabelParts(sections[0], sections), {
+    count: 1,
+    unit: "line",
+    active: null,
+    countWidth: 1,
+    activeWidth: 1,
+  });
 });

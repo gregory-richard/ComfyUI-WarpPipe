@@ -5,7 +5,6 @@ import {
   BoxFacade,
   TextSync,
   diffText,
-  foldCountLabel,
   foldPlan,
   foldedKeysOf,
   keyBelongsToEditor,
@@ -517,12 +516,4 @@ test("fold: comparing keys ignores order", () => {
   assert.equal(sameKeys(["a#0"], ["a#0", "b#0"]), false);
   assert.equal(sameKeys(["a#0"], ["b#0"]), false);
   assert.equal(sameKeys([], []), true);
-});
-
-test("fold: the placeholder counts lines", () => {
-  assert.equal(foldCountLabel({ lineCount: 6, loraCount: 0, activeLoras: 0 }), "··· 6 lines");
-  assert.equal(
-    foldCountLabel({ lineCount: 3, loraCount: 3, activeLoras: 2 }),
-    "··· 3 LoRAs · 2 active"
-  );
 });

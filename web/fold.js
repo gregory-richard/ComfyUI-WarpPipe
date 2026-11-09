@@ -33,6 +33,28 @@ export function sectionSummary({ lineCount, loraCount, activeLoras }) {
 }
 
 /**
+ * A folded section's label in columns. countWidth and activeWidth are the widest
+ * numbers of any section in the box, so counts of one, two or three digits line
+ * up, and folding another section cannot move them.
+ */
+export function foldLabelParts(section, sections) {
+  const shown = (item) => (item.loraCount > 0 ? item.loraCount : item.lineCount);
+  const digits = (value) => String(value).length;
+  const hasLoras = section.loraCount > 0;
+  const count = shown(section);
+  return {
+    count,
+    unit: `${hasLoras ? "LoRA" : "line"}${count === 1 ? "" : "s"}`,
+    active: hasLoras ? section.activeLoras : null,
+    countWidth: Math.max(...sections.map((item) => digits(shown(item)))),
+    activeWidth: Math.max(
+      1,
+      ...sections.filter((item) => item.loraCount > 0).map((item) => digits(item.activeLoras))
+    ),
+  };
+}
+
+/**
  * The sections of a text, with exact character offsets.
  *
  * Each section's header line is headerStart to headerEnd, without its newline.
