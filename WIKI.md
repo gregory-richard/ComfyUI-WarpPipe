@@ -673,12 +673,14 @@ browser (`web/prompt_writer.js`), never appears in the prompt ComfyUI receives,
 and writing a prompt never queues an image. Every call goes through the
 `/warppipe/llm` routes, so the browser never sees a key.
 
-**Header:** the chat title (click to rename), **For** (the Prompt + LoRAs this chat
-writes for, kept per chat), the model with a text filter, shown
-as `name · $in/$out · 👁` (prices per million tokens, 👁 for vision), the system
-prompt, ⚙ and close. Under ⚙: base URL, temperature, the API key field with
-**Save key** (the field is cleared after sending and only reports whether a key
-is set), and **Refresh lists** (the backend caches a model list for an hour).
+**Layout:** the rail holds **Prompt Writer** with the settings cog, **New chat** and the
+chats; the open chat has its title (click to rename), **For** (the Prompt + LoRAs this
+chat writes for, kept per chat) and close at the top, then the versions in a reading
+column of at most 780 px and the input. The cog opens the settings: the model list with
+a text filter (name, price per million tokens, an eye for vision), the system prompt
+with a read-only preview, temperature, title model, server, the API key field with
+**Save** (cleared after sending; it only reports whether a key is set) and **Refresh
+lists** (the backend caches a model list for an hour).
 
 **Settings** (`WarpPipe.PromptWriter.*`):
 

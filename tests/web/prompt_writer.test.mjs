@@ -9,11 +9,12 @@ const {
   appendLoraTag,
   buildLoraLists,
   findLora,
-  formatStatus,
+  modelPrice,
+  statusParts,
   isLoraListed,
   listTargets,
   loraIndex,
-  loraScopeLabels,
+  loraScopeCounts,
   enableLoraTag,
   disableLoraTag,
   switchedOffLoraTags,
@@ -42,16 +43,22 @@ test("modelLabel", () => {
   assert.equal(modelLabel({ name: "Q", prompt_price: 0, completion_price: 0 }), "Q · $0.00/$0.00");
 });
 
-test("formatStatus", () => {
-  assert.equal(
-    formatStatus({
+test("statusParts: cost, time and tokens, leaving out what the reply does not say", () => {
+  assert.deepEqual(
+    statusParts({
       cost: 0.003,
       seconds: 8.2,
       usage: { prompt_tokens: 1812, completion_tokens: 640 },
     }),
-    "0.3 ¢ · 8 s · 1,812 → 640 tokens"
+    ["0.3 ¢", "8 s", "1,812 → 640 tokens"]
   );
-  assert.equal(formatStatus({ cost: null, seconds: 12.6, usage: {} }), "13 s");
+  assert.deepEqual(statusParts({ cost: null, seconds: 12.6, usage: {} }), ["13 s"]);
+});
+
+test("modelPrice: input and output per million tokens, or nothing", () => {
+  assert.equal(modelPrice({ prompt_price: 0.3, completion_price: 1.2 }), "$0.30/$1.20");
+  assert.equal(modelPrice({ prompt_price: null, completion_price: null }), "");
+  assert.equal(modelPrice({ prompt_price: 2 }), "$2.00/?");
 });
 
 // --- listTargets --------------------------------------------------------------
@@ -446,13 +453,10 @@ test("resolveSuggestions without an answer or a map is empty", () => {
 
 // --- the composer's chip -------------------------------------------------------
 
-test("loraScopeLabels", () => {
-  assert.deepEqual(loraScopeLabels({ list: 18, all: 193 }), {
-    list: "List · 18",
-    all: "All · 193",
-  });
-  assert.deepEqual(loraScopeLabels(undefined), { list: "List · …", all: "All · …" });
-  assert.deepEqual(loraScopeLabels({ list: 0, all: null }), { list: "List · 0", all: "All · 0" });
+test("loraScopeCounts: how many LoRAs each choice offers, … until it is known", () => {
+  assert.deepEqual(loraScopeCounts({ list: 18, all: 193 }), { list: "18", all: "193" });
+  assert.deepEqual(loraScopeCounts(undefined), { list: "…", all: "…" });
+  assert.deepEqual(loraScopeCounts({ list: 0, all: null }), { list: "0", all: "0" });
 });
 
 // --- adding and removing a suggestion ------------------------------------------

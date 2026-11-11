@@ -24,18 +24,21 @@ function price(value) {
   return value == null ? "?" : `$${Number(value).toFixed(2)}`;
 }
 
+/** "$in/$out" per million tokens, or "" when the model list does not say. */
+export function modelPrice(m) {
+  if (m?.prompt_price == null && m?.completion_price == null) return "";
+  return `${price(m.prompt_price)}/${price(m.completion_price)}`;
+}
+
 /** "name · $in/$out · 👁", leaving out what the model list does not say. */
 export function modelLabel(m) {
-  const parts = [String(m?.name ?? m?.id ?? "")];
-  if (m?.prompt_price != null || m?.completion_price != null) {
-    parts.push(`${price(m.prompt_price)}/${price(m.completion_price)}`);
-  }
+  const parts = [String(m?.name ?? m?.id ?? ""), modelPrice(m)].filter(Boolean);
   if (m?.vision) parts.push("👁");
   return parts.join(" · ");
 }
 
-/** "0.3 ¢ · 8 s · 1,812 → 640 tokens", leaving out what the reply does not say. */
-export function formatStatus(r) {
+/** ["0.3 ¢", "8 s", "1,812 → 640 tokens"], leaving out what the reply does not say. */
+export function statusParts(r) {
   const parts = [];
   if (r?.cost != null) parts.push(`${Number((r.cost * 100).toFixed(2))} ¢`);
   if (r?.seconds != null) parts.push(`${Math.round(r.seconds)} s`);
@@ -44,7 +47,7 @@ export function formatStatus(r) {
     const fmt = (n) => Number(n).toLocaleString("en-US");
     parts.push(`${fmt(usage.prompt_tokens)} → ${fmt(usage.completion_tokens)} tokens`);
   }
-  return parts.join(" · ");
+  return parts;
 }
 
 // --- Listing the targets -------------------------------------------------------
@@ -280,9 +283,9 @@ export function resolveSuggestions(raw, refs) {
 }
 
 /** What the composer's scope buttons say. `counts` is undefined until it is known. */
-export function loraScopeLabels(counts) {
-  if (counts === undefined) return { list: "List · …", all: "All · …" };
-  return { list: `List · ${counts.list ?? 0}`, all: `All · ${counts.all ?? 0}` };
+export function loraScopeCounts(counts) {
+  if (counts === undefined) return { list: "…", all: "…" };
+  return { list: String(counts.list ?? 0), all: String(counts.all ?? 0) };
 }
 
 // --- Adding a suggestion to a list ---------------------------------------------

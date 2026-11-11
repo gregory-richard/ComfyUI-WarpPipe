@@ -16,18 +16,19 @@ import {
   addTriggerLine,
   appendLoraTag,
   buildLoraLists,
-  formatStatus,
   isLoraListed,
   listTargets,
   disableLoraTag,
   enableLoraTag,
-  loraScopeLabels,
+  loraScopeCounts,
   targetOffLoraTags,
   modelLabel,
+  modelPrice,
   removeLoraTag,
   removeTriggerLine,
   resolveSuggestions,
   resolveTarget,
+  statusParts,
   targetLoraTags,
 } from "./prompt_writer_core.js";
 import {
@@ -120,224 +121,254 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
   --wpw-panel: var(--secondary-background, var(--comfy-input-bg, #262729));
   --wpw-ink: var(--base-foreground, var(--input-text, #fff));
   --wpw-rule: var(--border-default, var(--border-color, #494a50));
+  --wpw-line: color-mix(in srgb, var(--wpw-rule) 55%, transparent);
+  --wpw-muted: color-mix(in srgb, var(--wpw-ink) 58%, transparent);
 
-  width: min(1280px, 94vw); height: 88vh;
-  display: grid; grid-template-columns: 250px minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
-  grid-template-areas: "head head" "rail main";
+  position: relative; width: min(1280px, 94vw); height: 88vh;
+  display: grid; grid-template-columns: 248px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "rail main";
   background: var(--wpw-ground); color: var(--wpw-ink); color-scheme: dark;
-  border: 1px solid var(--wpw-rule); border-radius: 6px; outline: none;
+  border: 1px solid var(--wpw-rule); border-radius: 10px; outline: none;
   overflow: hidden; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
   font: 400 14px/1.45 var(--font-inter, Inter, Arial, sans-serif);
 }
 .wpw-modal button, .wpw-modal input, .wpw-modal select, .wpw-modal textarea { font: inherit; color: inherit; }
 .wpw-modal :focus-visible { outline: 2px solid var(--wpw-warp); outline-offset: 1px; }
-
-.wpw-head {
-  grid-area: head; position: relative; display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px; border-bottom: 1px solid var(--wpw-rule);
-}
-.wpw-title, .wpw-title-input { flex: 1 1 200px; min-width: 0; font-size: 14px; font-weight: 500; }
-.wpw-title {
-  background: none; border: 1px solid transparent; border-radius: 6px; padding: 4px 6px;
-  cursor: text; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.wpw-title:hover { border-color: var(--wpw-rule); }
-.wpw-title-input { background: var(--wpw-panel); border: 1px solid var(--wpw-warp); border-radius: 6px; padding: 4px 6px; }
-.wpw-field {
-  height: 32px; box-sizing: border-box; background: var(--wpw-panel);
-  border: 1px solid var(--wpw-rule); border-radius: 6px; padding: 0 8px;
-}
-.wpw-for { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
-.wpw-modal .wpw-target {
-  height: 32px; box-sizing: border-box; min-width: 120px; max-width: 240px; padding: 0 8px; cursor: pointer;
-  font-weight: 500; background: color-mix(in srgb, var(--wpw-warp) 30%, var(--wpw-ground));
-  border: 1px solid var(--wpw-warp); border-radius: 6px;
-}
-.wpw-modal .wpw-target:hover { background: color-mix(in srgb, var(--wpw-warp) 45%, var(--wpw-ground)); }
-.wpw-modal .wpw-target:disabled { opacity: 0.6; cursor: default; }
-.wpw-target option { background: var(--wpw-ground); color: var(--wpw-ink); }
-.wpw-combo {
-  flex: 1 1 320px; min-width: 0; cursor: pointer; text-align: left;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.wpw-combo.is-error { color: var(--wpw-red); }
-.wpw-combo:hover, .wpw-prompts:hover { border-color: var(--wpw-warp); }
-.wpw-prompts { flex: 0 1 220px; min-width: 0; cursor: pointer; }
-.wpw-icon {
-  flex: none; width: 32px; height: 32px; background: var(--wpw-raised); cursor: pointer; font-size: 14px;
-  border: 0; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
-}
 .wpw-modal .pi { font-size: inherit; line-height: 1; }
-.wpw-btn .pi { margin-right: 6px; font-size: 12px; }
-.wpw-icon:hover { background: var(--wpw-raised-hover); }
+.wpw-spacer { flex: 1; }
 
-.wpw-pop {
-  position: absolute; top: calc(100% - 4px); z-index: 5; box-sizing: border-box;
-  background: var(--wpw-ground); border: 1px solid var(--wpw-rule); border-radius: 5px;
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.5); padding: 8px;
+.wpw-icon {
+  flex: none; width: 30px; height: 30px; padding: 0; background: none; cursor: pointer; font-size: 14px;
+  border: 0; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; color: var(--wpw-muted);
 }
-.wpw-models { width: 520px; max-width: 80vw; display: flex; flex-direction: column; gap: 6px; }
-.wpw-filter { width: 100%; }
-.wpw-options { max-height: 52vh; overflow-y: auto; }
-.wpw-option {
-  display: block; width: 100%; padding: 4px 8px; background: none; border: 0; border-radius: 3px;
-  text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.wpw-option:hover { background: color-mix(in srgb, var(--wpw-warp) 14%, transparent); }
-.wpw-option.is-current { color: var(--wpw-warp); }
-.wpw-none { padding: 8px; opacity: 0.65; }
-
-.wpw-peek { right: 14px; width: 720px; max-width: 80vw; display: flex; flex-direction: column; gap: 6px; }
-.wpw-peek-name { font-size: 12px; opacity: 0.75; }
-.wpw-peek-text {
-  max-height: 68vh; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere;
-  font-size: 13px; line-height: 1.5; user-select: text;
-}
-.wpw-gear { right: 14px; width: 320px; display: flex; flex-direction: column; gap: 8px; }
-.wpw-gear label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
-.wpw-gear .wpw-field { width: 100%; }
-.wpw-key-row { display: flex; gap: 6px; }
-.wpw-key-row .wpw-field { flex: 1; min-width: 0; }
-.wpw-key-state { font-size: 12px; opacity: 0.75; }
-.wpw-key-state.is-set { color: var(--wpw-green); opacity: 1; }
-
+.wpw-icon:hover { background: var(--wpw-raised-hover); color: var(--wpw-ink); }
 .wpw-btn {
-  height: 32px; padding: 0 12px; background: var(--wpw-raised); cursor: pointer; white-space: nowrap;
-  border: 0; border-radius: 6px;
+  height: 30px; padding: 0 12px; background: var(--wpw-raised); cursor: pointer; white-space: nowrap;
+  border: 0; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
 }
+.wpw-btn .pi { font-size: 12px; }
 .wpw-btn:hover { background: var(--wpw-raised-hover); }
 .wpw-btn:disabled { opacity: 0.45; cursor: default; }
 .wpw-primary { background: var(--wpw-warp); color: #fff !important; }
 .wpw-primary:hover { background: var(--wpw-warp-hover); }
+.wpw-field {
+  height: 30px; box-sizing: border-box; background: var(--wpw-ground);
+  border: 1px solid var(--wpw-rule); border-radius: 6px; padding: 0 8px;
+}
+.wpw-danger { color: var(--wpw-red); }
 
+/* The rail: the app, its settings, and the chats. */
 .wpw-rail {
   grid-area: rail; display: flex; flex-direction: column; min-height: 0;
-  border-right: 1px solid var(--wpw-rule); background: var(--wpw-panel);
+  border-right: 1px solid var(--wpw-line); background: var(--wpw-panel);
 }
-.wpw-new { margin: 10px; flex: none; }
-.wpw-chats { flex: 1; min-height: 0; overflow-y: auto; padding: 0 6px 8px; }
-.wpw-chat { position: relative; border-radius: 6px; }
-.wpw-chat:hover { background: rgba(255, 255, 255, 0.05); }
-.wpw-chat.is-open { box-shadow: inset 2px 0 0 var(--wpw-warp); background: color-mix(in srgb, var(--wpw-warp) 9%, transparent); }
+.wpw-rail-head { display: flex; align-items: center; gap: 6px; padding: 12px 10px 6px 16px; }
+.wpw-brand { flex: 1; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+.wpw-brand .pi { color: var(--wpw-warp); }
+.wpw-new { margin: 6px 10px 10px; flex: none; background: none; border: 1px solid var(--wpw-line); }
+.wpw-new:hover { background: var(--wpw-raised-hover); }
+.wpw-chats { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 10px; }
+.wpw-chat { position: relative; border-radius: 7px; }
+.wpw-chat + .wpw-chat { margin-top: 1px; }
+.wpw-chat:hover { background: rgba(255, 255, 255, 0.04); }
+.wpw-chat.is-open { background: color-mix(in srgb, var(--wpw-warp) 16%, transparent); }
 .wpw-chat-open {
-  display: block; width: 100%; padding: 6px 28px 6px 10px; background: none; border: 0;
+  display: block; width: 100%; padding: 8px 30px 8px 10px; background: none; border: 0;
   text-align: left; cursor: pointer;
 }
-.wpw-chat-title { display: flex; align-items: baseline; gap: 6px; font-weight: 500; }
+.wpw-chat-title { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; }
 .wpw-chat-title span:first-child { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wpw-check { color: var(--wpw-green); }
-.wpw-chat-sub { font-size: 11px; opacity: 0.68; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wpw-chat-sub.is-writing { color: var(--wpw-yellow); opacity: 1; }
-.wpw-chat-sub.is-failed { color: var(--wpw-red); opacity: 1; }
-.wpw-chat-sub.is-question { color: var(--wpw-yellow); opacity: 1; }
-.wpw-chat-more {
-  position: absolute; top: 6px; right: 5px; width: 22px; height: 22px; padding: 0; cursor: pointer;
-  background: none; border: 0; border-radius: 4px; font-size: 16px; line-height: 20px; opacity: 0.6;
+.wpw-check { flex: none; color: var(--wpw-green); font-size: 11px; }
+.wpw-chat-sub {
+  display: flex; gap: 10px; margin-top: 1px; font-size: 11.5px; color: var(--wpw-muted);
+  white-space: nowrap; overflow: hidden;
 }
-.wpw-chat-more:hover, .wpw-chat-more:focus-visible { opacity: 1; background: var(--wpw-raised-hover); }
-.wpw-chat-menu { position: fixed; top: auto; width: 130px; padding: 4px; display: flex; flex-direction: column; }
+.wpw-chat-sub.is-writing, .wpw-chat-sub.is-question { color: var(--wpw-yellow); }
+.wpw-chat-sub.is-failed { color: var(--wpw-red); }
+.wpw-chat-more {
+  position: absolute; top: 7px; right: 4px; width: 22px; height: 22px; padding: 0; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: 0; border-radius: 5px; font-size: 12px; color: var(--wpw-muted); opacity: 0;
+}
+.wpw-chat:hover .wpw-chat-more, .wpw-chat.is-open .wpw-chat-more, .wpw-chat-more:focus-visible { opacity: 1; }
+.wpw-chat-more:hover { background: var(--wpw-raised-hover); color: var(--wpw-ink); }
+.wpw-rename-input {
+  width: 100%; height: 30px; box-sizing: border-box; padding: 0 8px;
+  background: var(--wpw-ground); border: 1px solid var(--wpw-warp); border-radius: 6px;
+}
+.wpw-confirm { padding: 8px 10px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.wpw-confirm span { flex: 1 1 100%; font-size: 12px; }
+
+/* Pop-overs: the settings and the chat menu. */
+.wpw-pop {
+  position: absolute; z-index: 6; box-sizing: border-box;
+  background: var(--wpw-ground); border: 1px solid var(--wpw-rule); border-radius: 9px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5); padding: 6px;
+}
+.wpw-chat-menu { position: fixed; width: 130px; display: flex; flex-direction: column; }
 .wpw-menu-item {
-  height: 30px; padding: 0 8px; background: none; border: 0; border-radius: 4px;
+  height: 30px; padding: 0 8px; background: none; border: 0; border-radius: 5px;
   text-align: left; cursor: pointer;
 }
 .wpw-menu-item:hover { background: var(--wpw-raised-hover); }
 .wpw-menu-item.is-danger { color: var(--wpw-red); }
-.wpw-rename-input {
-  width: 100%; height: 30px; box-sizing: border-box; padding: 0 6px;
-  background: var(--wpw-raised); border: 1px solid var(--wpw-warp); border-radius: 6px;
+.wpw-settings {
+  top: 48px; left: 12px; width: 420px; max-width: calc(100% - 24px); max-height: calc(100% - 60px);
+  overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px;
 }
-.wpw-confirm { padding: 6px 10px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.wpw-confirm span { flex: 1 1 100%; font-size: 12px; }
-.wpw-danger { border-color: var(--wpw-red); color: var(--wpw-red); }
+.wpw-settings-title { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+.wpw-set { display: grid; grid-template-columns: 104px minmax(0, 1fr); align-items: center; gap: 10px; font-size: 13px; }
+.wpw-set-name { color: var(--wpw-muted); font-size: 12px; }
+.wpw-set-control { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.wpw-set-control > .wpw-field { flex: 1; min-width: 0; }
+.wpw-set-group { margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--wpw-line); }
+.wpw-combo {
+  display: flex; align-items: center; gap: 8px; cursor: pointer; text-align: left; white-space: nowrap; overflow: hidden;
+}
+.wpw-combo.is-error { color: var(--wpw-red); }
+.wpw-combo:hover, .wpw-prompts:hover { border-color: var(--wpw-warp); }
+.wpw-combo .pi-chevron-down { font-size: 10px; color: var(--wpw-muted); }
+.wpw-prompts { cursor: pointer; }
+.wpw-prompts option { background: var(--wpw-ground); color: var(--wpw-ink); }
+.wpw-models { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--wpw-line); border-radius: 8px; }
+.wpw-filter { width: 100%; }
+.wpw-options { max-height: 38vh; overflow-y: auto; }
+.wpw-option {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 5px 8px; background: none; border: 0;
+  border-radius: 5px; text-align: left; cursor: pointer;
+}
+.wpw-option:hover { background: color-mix(in srgb, var(--wpw-warp) 14%, transparent); }
+.wpw-option.is-current { color: var(--wpw-warp); }
+.wpw-option-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wpw-option-price { flex: none; font-size: 11.5px; color: var(--wpw-muted); font-variant-numeric: tabular-nums; }
+.wpw-option .pi-eye { flex: none; font-size: 11px; color: var(--wpw-muted); }
+.wpw-none { padding: 8px; color: var(--wpw-muted); }
+.wpw-peek-text {
+  max-height: 34vh; overflow-y: auto; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 12.5px; line-height: 1.55; user-select: text; background: var(--wpw-panel); border-radius: 8px;
+}
+.wpw-key-state { font-size: 12px; color: var(--wpw-muted); }
+.wpw-key-state.is-set { color: var(--wpw-green); }
 
 .wpw-spin {
-  display: inline-block; width: 9px; height: 9px; margin-right: 5px; vertical-align: -1px;
+  display: inline-block; flex: none; width: 9px; height: 9px; margin-right: 6px; vertical-align: -1px;
   border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
   animation: wpw-turn 0.8s linear infinite;
 }
 @keyframes wpw-turn { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .wpw-spin { animation-duration: 2.4s; } }
 
+/* The chat: its title and node on top, then a reading column of cards and the input. */
 .wpw-main { grid-area: main; display: flex; flex-direction: column; min-height: 0; }
-.wpw-convo { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
-.wpw-hint { margin: auto; max-width: 420px; text-align: center; opacity: 0.65; }
-.wpw-hint.is-error { color: var(--wpw-red); opacity: 1; }
-/* One step: what you asked for, the questions on the way, then what came of it. */
-.wpw-ask {
-  position: relative; margin-top: 6px; padding: 6px 34px 6px 9px; border-radius: 6px;
-  background: color-mix(in srgb, var(--wpw-warp) 10%, transparent);
+.wpw-chat-head {
+  display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 24px;
+  border-bottom: 1px solid var(--wpw-line);
 }
-.wpw-said { display: flex; gap: 8px; align-items: baseline; }
-.wpw-said + .wpw-said { margin-top: 4px; }
-.wpw-who { flex: none; width: 30px; font-size: 11px; font-weight: 500; opacity: 0.6; }
+.wpw-title, .wpw-title-input { flex: 0 1 auto; min-width: 0; max-width: 60%; font-size: 16px; font-weight: 600; }
+.wpw-title {
+  background: none; border: 1px solid transparent; border-radius: 6px; padding: 3px 8px; margin-left: -9px;
+  cursor: text; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wpw-title:hover { border-color: var(--wpw-line); }
+.wpw-title-input { flex: 1 1 auto; background: var(--wpw-panel); border: 1px solid var(--wpw-warp); border-radius: 6px; padding: 3px 8px; }
+.wpw-for { flex: none; display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--wpw-muted); }
+.wpw-modal .wpw-target {
+  height: 30px; box-sizing: border-box; min-width: 120px; max-width: 240px; padding: 0 8px; cursor: pointer;
+  font-size: 13px; font-weight: 500; color: var(--wpw-ink); background: var(--wpw-panel);
+  border: 1px solid color-mix(in srgb, var(--wpw-warp) 65%, transparent); border-radius: 6px;
+}
+.wpw-modal .wpw-target:hover { border-color: var(--wpw-warp); }
+.wpw-modal .wpw-target:disabled { opacity: 0.6; cursor: default; }
+.wpw-target option { background: var(--wpw-ground); color: var(--wpw-ink); }
+
+.wpw-convo { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 24px 28px; display: flex; flex-direction: column; gap: 14px; }
+.wpw-convo > * { width: 100%; max-width: 780px; margin-inline: auto; box-sizing: border-box; flex: none; }
+.wpw-convo > .wpw-hint { margin: auto; max-width: 420px; text-align: center; color: var(--wpw-muted); }
+.wpw-hint.is-error { color: var(--wpw-red); }
+
+.wpw-card { background: var(--wpw-panel); border: 1px solid var(--wpw-line); border-radius: 10px; padding: 12px 14px; }
+.wpw-card.is-newest { border-color: color-mix(in srgb, var(--wpw-warp) 45%, var(--wpw-rule)); }
+.wpw-card.is-writing, .wpw-card.is-question { border-color: color-mix(in srgb, var(--wpw-yellow) 55%, transparent); }
+.wpw-card.is-error { border-color: color-mix(in srgb, var(--wpw-red) 60%, transparent); }
+.wpw-card-head { display: flex; align-items: center; gap: 10px; min-height: 24px; }
+.wpw-card-head.is-toggle { cursor: pointer; }
+.wpw-ver { flex: none; font-size: 13px; font-weight: 600; }
+.wpw-from { flex: none; font-size: 12px; color: var(--wpw-muted); }
+.wpw-status {
+  flex: none; display: flex; align-items: center; gap: 12px; max-width: 65%; overflow: hidden;
+  font-size: 12px; color: var(--wpw-muted); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.wpw-card.is-writing .wpw-status, .wpw-card.is-question .wpw-status { color: var(--wpw-yellow); }
+.wpw-card.is-error .wpw-status { color: var(--wpw-red); }
+.wpw-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--wpw-green); margin-right: -4px; }
+.wpw-preview { flex: 1; min-width: 0; color: var(--wpw-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* What was asked: a quiet margin line, so the prompt below it is what stands out. */
+.wpw-ask {
+  position: relative; margin-top: 10px; padding: 2px 34px 2px 12px;
+  border-left: 2px solid color-mix(in srgb, var(--wpw-warp) 55%, transparent);
+}
+.wpw-said { display: flex; gap: 10px; align-items: baseline; }
+.wpw-said + .wpw-said { margin-top: 5px; }
+.wpw-who { flex: none; width: 26px; font-size: 11px; color: var(--wpw-muted); }
 .wpw-said-text { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.wpw-said.is-empty .wpw-said-text { font-style: italic; opacity: 0.8; }
-.wpw-said.is-question .wpw-said-text { color: var(--wpw-yellow); }
+.wpw-said.is-empty .wpw-said-text { font-style: italic; color: var(--wpw-muted); }
+.wpw-said.is-question .wpw-who, .wpw-said.is-question .wpw-said-text { color: var(--wpw-yellow); }
 .wpw-rewind {
-  position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; padding: 0;
+  position: absolute; top: 0; right: 0; width: 26px; height: 26px; padding: 0;
   display: flex; align-items: center; justify-content: center;
-  border: 0; border-radius: 5px; background: transparent; color: inherit;
-  font-size: 15px; line-height: 1; cursor: pointer; opacity: 0; pointer-events: none;
+  border: 0; border-radius: 6px; background: transparent; color: var(--wpw-muted);
+  font-size: 12px; cursor: pointer; opacity: 0; pointer-events: none;
 }
 .wpw-rewind.is-inline { position: static; flex: none; }
 .wpw-ask:hover .wpw-rewind, .wpw-card-head:hover .wpw-rewind, .wpw-rewind:focus-visible { opacity: 1; pointer-events: auto; }
-.wpw-rewind:hover { background: color-mix(in srgb, var(--wpw-warp) 30%, transparent); }
-.wpw-thumbs { display: flex; flex-wrap: wrap; gap: 5px; margin: 5px 0 0 38px; }
+.wpw-rewind:hover { background: var(--wpw-raised-hover); color: var(--wpw-ink); }
+.wpw-thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0 36px; }
 .wpw-thumbs img { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; display: block; }
-.wpw-quote { margin-bottom: 5px; font-size: 12px; }
-.wpw-quote summary { cursor: pointer; opacity: 0.75; }
+.wpw-quote { margin-bottom: 6px; font-size: 12px; }
+.wpw-quote summary { cursor: pointer; color: var(--wpw-muted); }
 .wpw-quote-text {
-  margin-top: 4px; padding: 4px 8px; max-height: 30vh; overflow-y: auto; white-space: pre-wrap;
-  overflow-wrap: anywhere; border-left: 2px solid var(--wpw-rule); opacity: 0.85; user-select: text;
+  margin-top: 4px; padding: 6px 10px; max-height: 30vh; overflow-y: auto; white-space: pre-wrap;
+  overflow-wrap: anywhere; background: var(--wpw-ground); border-radius: 6px; user-select: text;
 }
-.wpw-from { flex: none; font-size: 12px; opacity: 0.6; }
-.wpw-hint-line { margin-top: 6px; font-size: 12px; opacity: 0.75; }
+.wpw-hint-line { margin-top: 8px; font-size: 12px; color: var(--wpw-muted); }
 
-.wpw-card { background: var(--wpw-panel); border: 1px solid var(--wpw-rule); border-radius: 5px; padding: 8px 10px; }
-.wpw-card.is-newest { border-color: rgba(95, 211, 138, 0.55); }
-.wpw-card.is-writing, .wpw-card.is-question { border-color: var(--wpw-yellow); }
-.wpw-card.is-writing .wpw-status, .wpw-card.is-question .wpw-status { color: var(--wpw-yellow); opacity: 1; }
-.wpw-card.is-error { border-color: var(--wpw-red); }
-.wpw-card.is-error .wpw-status { color: var(--wpw-red); opacity: 1; }
-.wpw-card-head { display: flex; align-items: center; gap: 8px; min-height: 26px; }
-.wpw-card-head.is-toggle { cursor: pointer; }
-.wpw-ver { font-weight: 500; flex: none; }
-.wpw-status { flex: none; font-size: 12px; opacity: 0.75; max-width: 60%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wpw-status.is-new { color: var(--wpw-green); opacity: 1; }
-.wpw-preview { flex: 1; min-width: 0; opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wpw-spacer { flex: 1; }
-.wpw-editor {
-  display: block; width: 100%; box-sizing: border-box; margin-top: 6px; padding: 7px 9px; resize: none;
-  background: var(--wpw-ground); border: 1px solid var(--wpw-rule); border-radius: 6px;
+/* The prompt itself, set for reading. */
+.wpw-modal .wpw-editor, .wpw-text { font-size: 13.5px; line-height: 1.6; }
+.wpw-modal .wpw-editor {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 12px; padding: 10px 12px; resize: none;
+  background: var(--wpw-ground); border: 1px solid transparent; border-radius: 8px;
 }
-.wpw-text { margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.wpw-modal .wpw-editor:hover { border-color: var(--wpw-line); }
+.wpw-modal .wpw-editor:focus { border-color: color-mix(in srgb, var(--wpw-warp) 70%, transparent); outline: none; }
+.wpw-text { margin-top: 12px; padding: 0 2px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .wpw-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex: none; }
-.wpw-actions.is-block { margin-top: 7px; }
-.wpw-error-text { margin-top: 6px; color: var(--wpw-red); white-space: pre-wrap; overflow-wrap: anywhere; }
+.wpw-actions.is-block { margin-top: 12px; }
+.wpw-error-text { margin-top: 10px; color: var(--wpw-red); white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.wpw-suggest { margin-top: 8px; }
-.wpw-suggest-label { font-size: 12px; opacity: 0.75; margin-bottom: 4px; }
+.wpw-suggest { margin-top: 12px; }
+.wpw-suggest-label { font-size: 12px; color: var(--wpw-muted); margin-bottom: 6px; }
 .wpw-suggest-row { display: flex; flex-wrap: wrap; gap: 6px; }
 /* A fixed box, and + and the check share one size: pressing moves nothing. */
 .wpw-lora {
-  display: flex; align-items: center; gap: 7px; box-sizing: border-box;
+  display: flex; align-items: center; gap: 8px; box-sizing: border-box;
   width: 290px; max-width: 100%; height: 48px; padding: 4px 6px 4px 4px;
-  background: var(--wpw-ground); border: 1px solid var(--wpw-rule); border-radius: 6px;
+  background: var(--wpw-ground); border: 1px solid var(--wpw-line); border-radius: 8px;
 }
-.wpw-lora.is-added { border-color: var(--wpw-warp); }
+.wpw-lora.is-added { border-color: color-mix(in srgb, var(--wpw-warp) 70%, transparent); }
 .wpw-lora-thumb {
   flex: none; display: block; width: 38px; height: 38px; object-fit: cover;
-  border-radius: 4px; background: var(--wpw-raised);
+  border-radius: 5px; background: var(--wpw-raised);
 }
 .wpw-lora-body { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
 .wpw-lora-top { display: flex; align-items: baseline; gap: 6px; font-size: 12px; font-weight: 500; }
 .wpw-lora-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wpw-lora-strength { flex: none; font-size: 11px; font-weight: 400; opacity: 0.75; font-variant-numeric: tabular-nums; }
-.wpw-lora-reason { font-size: 11px; opacity: 0.62; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wpw-lora-strength { flex: none; font-size: 11px; font-weight: 400; color: var(--wpw-muted); font-variant-numeric: tabular-nums; }
+.wpw-lora-reason { font-size: 11px; color: var(--wpw-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wpw-lora-add {
-  flex: none; width: 26px; height: 26px; padding: 0; cursor: pointer; font-size: 12px;
+  flex: none; width: 26px; height: 26px; padding: 0; cursor: pointer; font-size: 11px;
   display: inline-flex; align-items: center; justify-content: center;
-  background: var(--wpw-raised); border: 0; border-radius: 5px;
+  background: var(--wpw-raised); border: 0; border-radius: 6px;
 }
 .wpw-lora-add:hover { background: var(--wpw-raised-hover); }
 .wpw-lora.is-added .wpw-lora-add { background: var(--wpw-warp); color: #fff; }
@@ -346,60 +377,60 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 /* What is on already takes little room, so what is new stands out. */
 .wpw-lora.is-compact { width: auto; max-width: 260px; height: 30px; padding: 2px 4px 2px 2px; gap: 6px; }
 .wpw-lora.is-compact .wpw-lora-thumb { width: 24px; height: 24px; }
-.wpw-lora.is-compact .wpw-lora-add { width: 22px; height: 22px; font-size: 11px; }
+.wpw-lora.is-compact .wpw-lora-add { width: 22px; height: 22px; font-size: 10px; }
 
-.wpw-composer { flex: none; border-top: 1px solid var(--wpw-rule); padding: 9px 14px 11px; }
-.wpw-composer.is-drag { box-shadow: inset 0 0 0 2px var(--wpw-warp); }
-/* One box: the images to send, the text, and a row of tools with the send button. */
-.wpw-box { border: 1px solid var(--wpw-rule); border-radius: 8px; background: var(--wpw-panel); }
-.wpw-box:focus-within { border-color: var(--wpw-warp); }
-.wpw-attached { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px 0; }
+/* The input: one box with the images, the text, and its tools. */
+.wpw-composer { flex: none; padding: 4px 24px 18px; }
+.wpw-composer > * { max-width: 780px; margin-inline: auto; }
+.wpw-box { border: 1px solid var(--wpw-rule); border-radius: 12px; background: var(--wpw-panel); }
+.wpw-box:focus-within { border-color: color-mix(in srgb, var(--wpw-warp) 75%, transparent); }
+.wpw-composer.is-drag .wpw-box { border-color: var(--wpw-warp); box-shadow: 0 0 0 3px color-mix(in srgb, var(--wpw-warp) 25%, transparent); }
+.wpw-attached { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px 0; }
 .wpw-attached:empty { display: none; }
-.wpw-tools { display: flex; align-items: center; gap: 6px; padding: 2px 6px 6px 6px; }
+.wpw-input {
+  display: block; width: 100%; box-sizing: border-box; padding: 11px 14px 4px; resize: none;
+  line-height: ${INPUT_LINE}px; background: transparent; border: 0;
+}
+.wpw-modal .wpw-input:focus-visible { outline: none; }
+.wpw-tools { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 8px; }
 .wpw-tools-left { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .wpw-tool {
   flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: none;
-  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px; opacity: 0.8;
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px; color: var(--wpw-muted);
 }
-.wpw-tool:hover { background: var(--wpw-raised-hover); opacity: 1; }
+.wpw-tool:hover { background: var(--wpw-raised-hover); color: var(--wpw-ink); }
 .wpw-chip {
-  display: inline-flex; align-items: center; gap: 5px; height: 26px; box-sizing: border-box; padding: 0 7px;
-  background: var(--wpw-panel); border: 1px solid var(--wpw-rule); border-radius: 13px; font-size: 12px;
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; box-sizing: border-box; padding: 0 8px;
+  background: var(--wpw-ground); border: 1px solid var(--wpw-line); border-radius: 13px; font-size: 12px;
 }
-.wpw-chip img { width: 20px; height: 20px; object-fit: cover; border-radius: 3px; display: block; }
-.wpw-chip.is-base, .wpw-chip.is-on { border-color: var(--wpw-warp); color: var(--wpw-warp); }
-.wpw-chip.is-off { opacity: 0.7; }
-.wpw-chip-btn { cursor: pointer; }
-.wpw-start-chip { gap: 5px; padding: 0 3px 0 9px; font-size: 11px; }
+.wpw-chip img { width: 20px; height: 20px; object-fit: cover; border-radius: 4px; display: block; }
+.wpw-chip.is-base { border-color: color-mix(in srgb, var(--wpw-warp) 60%, transparent); color: var(--wpw-warp); }
+.wpw-chip-x { background: none; border: 0; padding: 0 1px; cursor: pointer; font-size: 14px; line-height: 1; color: var(--wpw-muted); }
+.wpw-chip-x:hover { color: var(--wpw-red); }
+.wpw-start-chip { gap: 6px; padding: 0 4px 0 10px; font-size: 11px; }
 .wpw-modal .wpw-start {
   height: 22px; max-width: 280px; padding: 0 2px; border: 0; background: transparent;
-  color: var(--wpw-warp); font-weight: 500; cursor: pointer;
+  color: var(--wpw-warp); font-size: 12px; font-weight: 500; cursor: pointer;
 }
 .wpw-start option { background: var(--wpw-ground); color: var(--wpw-ink); }
 .wpw-seg {
   display: inline-flex; align-items: center; height: 26px; overflow: hidden;
-  border: 1px solid var(--wpw-rule); border-radius: 13px; font-size: 12px;
+  border: 1px solid var(--wpw-line); border-radius: 13px; font-size: 12px;
 }
-.wpw-seg-label { padding: 0 8px; opacity: 0.75; white-space: nowrap; }
+.wpw-seg-label { padding: 0 8px 0 10px; color: var(--wpw-muted); white-space: nowrap; }
 .wpw-seg-btn { height: 100%; padding: 0 9px; background: none; border: 0; cursor: pointer; white-space: nowrap; }
 .wpw-seg-btn:hover { background: var(--wpw-raised-hover); }
 .wpw-seg-btn.is-on { background: var(--wpw-warp); color: #fff; }
-.wpw-chip-btn:hover { border-color: var(--wpw-warp); color: var(--wpw-warp); }
-.wpw-chip-x { background: none; border: 0; padding: 0 1px; cursor: pointer; font-size: 14px; line-height: 1; opacity: 0.7; }
-.wpw-chip-x:hover { opacity: 1; color: var(--wpw-red); }
-.wpw-input {
-  display: block; width: 100%; box-sizing: border-box; padding: 9px 12px 4px; resize: none;
-  line-height: ${INPUT_LINE}px; background: transparent; border: 0;
-}
-.wpw-modal .wpw-input:focus-visible { outline: none; }
+.wpw-seg-count { margin-left: 5px; opacity: 0.6; font-variant-numeric: tabular-nums; }
+.wpw-seg-btn.is-on .wpw-seg-count { opacity: 0.85; }
 /* Round and the same size whatever it does: write, answer or stop. */
 .wpw-send {
   flex: none; width: 32px; height: 32px; padding: 0; border-radius: 50%; font-size: 13px;
   display: inline-flex; align-items: center; justify-content: center;
 }
 .wpw-send.is-stop { background: var(--wpw-yellow); color: #1a1a1a !important; }
-.wpw-note { font-size: 12px; margin-top: 5px; opacity: 0.8; }
-.wpw-note.is-error { color: var(--wpw-red); opacity: 1; }
+.wpw-note { font-size: 12px; margin-top: 6px; padding-left: 4px; color: var(--wpw-muted); }
+.wpw-note.is-error { color: var(--wpw-red); }
 .wpw-note:empty { display: none; }
 `;
 
@@ -1105,7 +1136,8 @@ function renderTitle() {
 function modelButtonState() {
   const id = String(getSetting(SETTING_MODEL, ""));
   const model = findModel(id);
-  if (model) return { text: modelLabel(model), title: model.id };
+  if (model)
+    return { text: model.name || model.id, price: modelPrice(model), title: modelLabel(model) };
   if (!lists.models.length && lists.error) {
     return { text: id || "Model list failed", title: lists.error, isError: true };
   }
@@ -1114,14 +1146,21 @@ function modelButtonState() {
   return { text: "Pick a model" };
 }
 
+/** The settings are a pop-over: while it is closed there is nothing to draw. */
 function renderModelButton() {
+  if (!view?.model) return;
   const state = modelButtonState();
-  view.model.textContent = state.text;
+  view.model.replaceChildren(
+    el("span", { class: "wpw-option-name", text: state.text }),
+    ...(state.price ? [el("span", { class: "wpw-option-price", text: state.price })] : []),
+    icon("pi-chevron-down")
+  );
   view.model.title = state.title ?? "";
   view.model.classList.toggle("is-error", !!state.isError);
 }
 
 function renderPrompts() {
+  if (!view?.prompts) return;
   const current = String(getSetting(SETTING_SYSTEM_PROMPT, ""));
   const names = [...lists.prompts];
   if (current && !names.includes(current)) names.unshift(current);
@@ -1249,8 +1288,12 @@ function railRow(chat) {
     sub = el("div", { class: "wpw-chat-sub is-question", text: "Waiting for your answer" });
   } else {
     const when = timeAgo(chat.updated);
-    const text = `${count} version${count === 1 ? "" : "s"}${when ? ` · ${when}` : ""}`;
-    sub = el("div", { class: "wpw-chat-sub", text });
+    sub = el(
+      "div",
+      { class: "wpw-chat-sub" },
+      el("span", { text: `${count} version${count === 1 ? "" : "s"}` }),
+      when && el("span", { text: when })
+    );
   }
   return el(
     "div",
@@ -1380,12 +1423,11 @@ function labelOfNode(node) {
   return (listTargets(app.rootGraph) ?? []).find((target) => target.node === node)?.label ?? null;
 }
 
-function sendButton(version) {
-  const use = labelledButton(
-    "pi-arrow-right",
+function sendButton(version, primary) {
+  const use = button(
     "Send to prompt",
     () => useVersion(version),
-    "wpw-btn wpw-primary",
+    primary ? "wpw-btn wpw-primary" : "wpw-btn",
     "Write this version into the prompt of the For node"
   );
   use.disabled = !view.targets.length;
@@ -1467,13 +1509,15 @@ function loraRows(chat, version) {
   ];
 }
 
-function statusText(version) {
-  return formatStatus({ cost: version.cost, seconds: version.seconds, usage: version.usage });
-}
-
-function finishedText(version) {
-  const status = statusText(version);
-  return status ? `Finished · ${status}` : "Finished";
+/** A finished version's line: a dot, then what it cost, how long it took and its tokens. */
+function statusEl(version, model) {
+  const parts = statusParts({ cost: version.cost, seconds: version.seconds, usage: version.usage });
+  return el(
+    "span",
+    { class: "wpw-status", title: model ? `Finished with ${model}` : "Finished" },
+    el("span", { class: "wpw-dot" }),
+    ...parts.map((text) => el("span", { text }))
+  );
 }
 
 function versionCard(chat, version, index, busy) {
@@ -1493,16 +1537,11 @@ function versionCard(chat, version, index, busy) {
     return el(
       "div",
       { class: "wpw-card is-newest" },
-      cardHead(
-        chat,
-        label,
-        version.baseId,
-        el("span", { class: "wpw-status is-new", text: finishedText(version), title })
-      ),
+      cardHead(chat, label, version.baseId, statusEl(version, title)),
       stepAsk(chat, version, { onRewind: rewind }),
       editor,
       ...loraRows(chat, version),
-      el("div", { class: "wpw-actions is-block" }, sendButton(version))
+      el("div", { class: "wpw-actions is-block" }, sendButton(version, true))
     );
   }
 
@@ -1523,15 +1562,10 @@ function versionCard(chat, version, index, busy) {
       "wpw-icon",
       "Edit this version next"
     ),
-    sendButton(version)
+    sendButton(version, false)
   );
   const head = open
-    ? cardHead(
-        chat,
-        label,
-        version.baseId,
-        el("span", { class: "wpw-status", text: finishedText(version), title })
-      )
+    ? cardHead(chat, label, version.baseId, statusEl(version, title))
     : el(
         "div",
         { class: "wpw-card-head" },
@@ -1579,7 +1613,7 @@ function renderConvo(stick) {
             "span",
             { class: "wpw-status" },
             el("span", { class: "wpw-spin" }),
-            "Writing · ",
+            "Writing ",
             secondsEl(job.startedAt)
           )
         ),
@@ -1623,7 +1657,7 @@ function renderConvo(stick) {
         }),
         el("div", {
           class: "wpw-hint-line",
-          text: "Answer in the box below, or take your request back with the arrow above.",
+          text: "Answer in the box below. To take your request back instead, use the undo arrow beside it.",
         })
       )
     );
@@ -1724,10 +1758,12 @@ const LORA_SCOPE_TITLES = {
 };
 
 function drawLoraScope(counts) {
-  const labels = loraScopeLabels(counts);
+  const shown = loraScopeCounts(counts);
+  const names = { off: "Off", list: "List", all: "All" };
   const scope = loraScope();
   for (const [key, control] of view.loraScopeButtons) {
-    control.textContent = key === "off" ? "Off" : labels[key];
+    const count = key === "off" ? [] : [el("span", { class: "wpw-seg-count", text: shown[key] })];
+    control.replaceChildren(names[key], ...count);
     control.title = LORA_SCOPE_TITLES[key];
     control.classList.toggle("is-on", key === scope);
   }
@@ -2006,27 +2042,24 @@ function closePopover() {
   if (!view?.popover) return;
   view.popover.root.remove();
   view.popover = null;
+  view.model = view.prompts = null;
 }
 
 function openPopover(anchor, root) {
   closePopover();
   view.popover = { anchor, root };
-  view.head.append(root);
+  view.modal.append(root);
 }
 
 let peekRun = 0;
 
-/** Show the selected system prompt, read-only. */
-async function showPeek() {
-  const name = view.prompts.value;
+/** Show the selected system prompt, read-only, under its field in the settings. */
+async function showPeek(panel) {
+  panel.peek?.remove();
+  const name = view.prompts?.value ?? "";
   const text = el("div", { class: "wpw-peek-text", text: "Loading…" });
-  const root = el(
-    "div",
-    { class: "wpw-pop wpw-peek" },
-    el("div", { class: "wpw-peek-name", text: name }),
-    text
-  );
-  openPopover(view.eye, root);
+  panel.peek = text;
+  panel.promptRow.after(text);
   const run = ++peekRun;
   let out;
   try {
@@ -2038,14 +2071,20 @@ async function showPeek() {
   text.textContent = out?.error ?? out?.text ?? "";
 }
 
-function togglePeek() {
-  if (view.popover?.anchor === view.eye) closePopover();
-  else showPeek();
+function togglePeek(panel) {
+  if (!panel.peek) {
+    showPeek(panel);
+    return;
+  }
+  panel.peek.remove();
+  panel.peek = null;
 }
 
-function toggleModels() {
-  if (view.popover?.anchor === view.model) {
-    closePopover();
+/** The model list opens under the model field: type to filter, Enter takes the first. */
+function toggleModels(panel) {
+  if (panel.models) {
+    panel.models.remove();
+    panel.models = null;
     return;
   }
   const options = el("div", { class: "wpw-options" });
@@ -2059,18 +2098,23 @@ function toggleModels() {
   };
   const choose = (model) => {
     setSetting(SETTING_MODEL, model.id);
-    closePopover();
+    toggleModels(panel);
     renderModelButton();
-    view.model.focus();
+    view.model?.focus();
   };
   const draw = () => {
-    const shown = matches();
-    const rows = shown.map((model) =>
-      button(
-        modelLabel(model),
-        () => choose(model),
-        `wpw-option${model.id === current ? " is-current" : ""}`,
-        model.id
+    const rows = matches().map((model) =>
+      el(
+        "button",
+        {
+          type: "button",
+          class: `wpw-option${model.id === current ? " is-current" : ""}`,
+          title: model.id,
+          onClick: () => choose(model),
+        },
+        el("span", { class: "wpw-option-name", text: model.name || model.id }),
+        el("span", { class: "wpw-option-price", text: modelPrice(model) }),
+        model.vision && icon("pi-eye")
       )
     );
     if (rows.length) options.replaceChildren(...rows);
@@ -2087,9 +2131,8 @@ function toggleModels() {
       if (first) choose(first);
     },
   });
-  const root = el("div", { class: "wpw-pop wpw-models" }, filter, options);
-  root.style.left = `${view.model.offsetLeft}px`;
-  openPopover(view.model, root);
+  panel.models = el("div", { class: "wpw-models" }, filter, options);
+  panel.modelRow.after(panel.models);
   draw();
   filter.focus();
   options.querySelector(".is-current")?.scrollIntoView({ block: "center" });
@@ -2109,12 +2152,37 @@ async function refreshKeyState(state) {
   state.className = `wpw-key-state${out.set ? " is-set" : ""}`;
 }
 
+/** One row of the settings: a name, and what sets it. */
+function settingRow(name, ...controls) {
+  return el(
+    "div",
+    { class: "wpw-set" },
+    el("span", { class: "wpw-set-name", text: name }),
+    el("div", { class: "wpw-set-control" }, ...controls)
+  );
+}
+
+/** Everything that is set once and then left alone: the model, the system prompt, the server. */
 function toggleGear() {
   if (view.popover?.anchor === view.gear) {
     closePopover();
     return;
   }
+  const panel = { models: null, peek: null };
   const state = el("div", { class: "wpw-key-state" });
+  const model = el("button", {
+    type: "button",
+    class: "wpw-field wpw-combo",
+    onClick: () => toggleModels(panel),
+  });
+  const prompts = el("select", {
+    class: "wpw-field wpw-prompts",
+    onChange: () => {
+      setSetting(SETTING_SYSTEM_PROMPT, prompts.value);
+      if (panel.peek) showPeek(panel);
+    },
+  });
+  const eye = iconButton("pi-eye", () => togglePeek(panel), "wpw-icon", "Read this system prompt");
   const url = el("input", {
     class: "wpw-field",
     type: "text",
@@ -2154,7 +2222,7 @@ function toggleGear() {
     class: "wpw-field",
     type: "password",
     autocomplete: "off",
-    placeholder: "API key",
+    placeholder: "Paste a key to save it",
   });
   const saveKey = async () => {
     const typed = key.value;
@@ -2177,20 +2245,40 @@ function toggleGear() {
   key.addEventListener("keydown", (event) => {
     if (event.key === "Enter") saveKey();
   });
+  panel.modelRow = settingRow("Model", model);
+  panel.promptRow = settingRow("System prompt", prompts, eye);
+  const server = el(
+    "div",
+    { class: "wpw-set-group" },
+    settingRow("Server", url),
+    el("div", { style: "height: 10px" }),
+    settingRow("API key", key, button("Save", saveKey)),
+    el("div", { style: "height: 6px" }),
+    settingRow(
+      "",
+      state,
+      el("span", { class: "wpw-spacer" }),
+      button("Refresh lists", () => {
+        refreshKeyState(state);
+        loadLists(true);
+      })
+    )
+  );
   const root = el(
     "div",
-    { class: "wpw-pop wpw-gear" },
-    el("label", {}, "Base URL", url),
-    el("label", {}, "Temperature", temperature),
-    el("label", {}, "Title model", titleModel),
-    el("div", { class: "wpw-key-row" }, key, button("Save key", saveKey)),
-    state,
-    button("Refresh lists", () => {
-      refreshKeyState(state);
-      loadLists(true);
-    })
+    { class: "wpw-pop wpw-settings" },
+    el("div", { class: "wpw-settings-title", text: "Settings" }),
+    panel.modelRow,
+    panel.promptRow,
+    settingRow("Temperature", temperature),
+    settingRow("Title model", titleModel),
+    server
   );
   openPopover(view.gear, root);
+  view.model = model;
+  view.prompts = prompts;
+  renderModelButton();
+  renderPrompts();
   refreshKeyState(state);
 }
 
@@ -2257,26 +2345,18 @@ function buildView(promptNode) {
     title: "The Prompt + LoRAs this chat writes for",
     onChange: chooseTarget,
   });
-  const model = button("", toggleModels, "wpw-field wpw-combo");
-  const prompts = el("select", {
-    class: "wpw-field wpw-prompts",
-    title: "System prompt",
-    onChange: () => {
-      setSetting(SETTING_SYSTEM_PROMPT, prompts.value);
-      if (view.popover?.anchor === view.eye) showPeek();
-    },
-  });
-  const eye = iconButton("pi-eye", togglePeek, "wpw-icon", "Read this system prompt");
-  const gear = iconButton("pi-cog", toggleGear, "wpw-icon", "Server, temperature and API key");
-  const head = el(
+  const gear = iconButton(
+    "pi-cog",
+    toggleGear,
+    "wpw-icon",
+    "Settings: model, system prompt, server"
+  );
+  const chatHead = el(
     "div",
-    { class: "wpw-head" },
+    { class: "wpw-chat-head" },
     title,
+    el("span", { class: "wpw-spacer" }),
     el("label", { class: "wpw-for" }, "For", target),
-    model,
-    prompts,
-    eye,
-    gear,
     iconButton("pi-times", closeView, "wpw-icon", "Close (Esc)")
   );
 
@@ -2284,6 +2364,12 @@ function buildView(promptNode) {
   const rail = el(
     "div",
     { class: "wpw-rail" },
+    el(
+      "div",
+      { class: "wpw-rail-head" },
+      el("span", { class: "wpw-brand" }, icon("pi-sparkles"), "Prompt Writer"),
+      gear
+    ),
     labelledButton("pi-plus", "New chat", () => newChat(), "wpw-btn wpw-new"),
     chats
   );
@@ -2354,7 +2440,7 @@ function buildView(promptNode) {
     ),
     note
   );
-  const main = el("div", { class: "wpw-main" }, convo, composer);
+  const main = el("div", { class: "wpw-main" }, chatHead, convo, composer);
 
   const modal = el(
     "div",
@@ -2365,7 +2451,6 @@ function buildView(promptNode) {
       "aria-label": "Prompt Writer",
       tabIndex: -1,
     },
-    head,
     rail,
     main
   );
@@ -2431,12 +2516,10 @@ function buildView(promptNode) {
   view = {
     backdrop,
     modal,
-    head,
     title,
     target,
-    model,
-    prompts,
-    eye,
+    model: null,
+    prompts: null,
     gear,
     chats,
     convo,

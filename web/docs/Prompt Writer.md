@@ -8,18 +8,24 @@ Every **Prompt + LoRAs** has an **✨ AI** button on the top-right corner of its
 
 Writing goes on in the background. You can close the pop-up (Esc or ×; clicking outside it does nothing), start something in another chat, or go back to the canvas. The **✨ AI** button turns yellow while a chat opened from that node is writing and shows a green dot when one has finished and you have not looked at it yet. A toast says when a prompt is ready.
 
-## Header
+## Layout
+
+The left rail holds **Prompt Writer** with its settings (the cog), **New chat** and your chats. On the right is the open chat: its title and **For** at the top, the versions in a reading column, and the input at the bottom.
 
 - **Title** — Click to rename the chat. A new chat is named after your first request.
 - **For** — The Prompt + LoRAs this chat writes for. **Send to prompt**, **Edit current prompt** and the LoRA suggestions all use it. Each chat remembers its own choice by the node's label (its group title, else its own title). A new chat starts on the node you opened it from, and if a remembered label is no longer in the workflow the chat falls back to that node, else to the first one.
-- **Model** — Type to filter. Each entry shows the price per million input/output tokens and 👁 for models that see images. A model that is no longer listed stays selected and reads "(not listed)".
-- **System prompt** — The `.txt` files in your system prompt folder.
-- **Eye** — Shows the selected system prompt, read-only.
-- **Cog** — The server and the key:
-  - **Base URL** — The OpenAI-compatible server. Default `https://nano-gpt.com/api/v1`. LM Studio, Ollama and llama.cpp work too; plain `http://` is allowed only for `localhost`, `127.0.0.1` and `::1`.
-  - **Temperature** — 0–2, default 0.6.
-  - **API key** and **Save key** — See Setup.
-  - **Refresh lists** — Reloads the model list (otherwise cached for an hour) and the system prompt list.
+
+## Settings
+
+The cog in the rail opens everything that is set once and then left alone:
+
+- **Model** — Click to open the list and type to filter. Each entry shows the price per million input/output tokens and an eye for models that see images. A model that is no longer listed stays selected and reads "(not listed)".
+- **System prompt** — The `.txt` files in your system prompt folder; the eye beside it shows the selected one, read-only.
+- **Temperature** — 0–2, default 0.6.
+- **Title model** — The cheap model that names new chats.
+- **Server** — The OpenAI-compatible server. Default `https://nano-gpt.com/api/v1`. LM Studio, Ollama and llama.cpp work too; plain `http://` is allowed only for `localhost`, `127.0.0.1` and `::1`.
+- **API key** and **Save** — See Setup.
+- **Refresh lists** — Reloads the model list (otherwise cached for an hour) and the system prompt list.
 
 ## Chats
 
@@ -36,7 +42,7 @@ The newest version is open and editable; your edit is saved when you click away.
 - **→ Send to prompt** — Writes the version's text, exactly as it is, into the Prompt + LoRAs chosen under **For**, as one undo step. That node flashes and the pop-up closes. It writes only the prompt and never touches the LoRA lists.
 - **Pencil** — On older versions: the next request edits this version.
 - **Undo arrow** (appears on hover) — Goes back to that request: it moves into the input with its images and what it edited, above anything you had typed there, and it and everything after it leave the chat.
-- **Chat titles** — While the first version is being written, a cheap model names the chat from your message (**Title model** under the gear, about 0.002 ¢ per title). A title you typed always stays; an empty field or a failure keeps the first words of your message.
+- **Chat titles** — While the first version is being written, a cheap model names the chat from your message (**Title model** in the settings, about 0.002 ¢ per title). A title you typed always stays; an empty field or a failure keeps the first words of your message.
 - **⋮ on a chat** — **Rename** or **Delete** it.
 
 A request that fails shows a red card with the message and **Retry**, and does not count as a version.
@@ -80,7 +86,7 @@ The chip then shows a check. Press it again to undo that: a line that was added 
 ## Setup
 
 - **System prompt folder** — Settings → WarpPipe → Prompt Writer. Only `.txt` files directly in that folder are listed.
-- **API key** — Type it once under ⚙ and click **Save key**. The backend stores it in `ComfyUI/user/warppipe_llm_keys.json` for the host of the base URL, it survives restarts, and the browser can never read it back; the field only shows whether a key is set. Alternatively set the environment variable `NANOGPT_API_KEY`. For other servers you can also put `{"host": "key"}` entries in `ComfyUI/user/warppipe_llm_keys.json`. A key is sent only to its own host. Local servers get no key unless the file names them.
+- **API key** — Paste it once in the settings and click **Save**. The backend stores it in `ComfyUI/user/warppipe_llm_keys.json` for the host of the base URL, it survives restarts, and the browser can never read it back; the field only shows whether a key is set. Alternatively set the environment variable `NANOGPT_API_KEY`. For other servers you can also put `{"host": "key"}` entries in `ComfyUI/user/warppipe_llm_keys.json`. A key is sent only to its own host. Local servers get no key unless the file names them.
 
 The key is never stored in a workflow, in image metadata or in the browser. WarpPipe never writes, logs or returns it.
 

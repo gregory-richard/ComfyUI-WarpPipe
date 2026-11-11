@@ -653,7 +653,7 @@ test("normalizeStore keeps a step that waits for an answer, and drops a broken o
 test("startOptions: edit a version, newest first, or the current prompt, or write a new one", () => {
   const chat = createChat(emptyStore(), { id: "c", now: 1 });
   assert.deepEqual(startOptions(chat, "Krea 2"), [
-    { value: CURRENT_PROMPT, label: "Edit current prompt · Krea 2" },
+    { value: CURRENT_PROMPT, label: "Edit current prompt (Krea 2)" },
     { value: NEW_PROMPT, label: "New prompt" },
   ]);
   addVersion(chat, version("v1", 2, { request: "a red bicycle by the lake at dawn please" }));
@@ -662,10 +662,10 @@ test("startOptions: edit a version, newest first, or the current prompt, or writ
   assert.deepEqual(
     startOptions(chat, null).map((o) => o.label),
     [
-      "Edit v3 · newest",
-      "Edit v2 · optimised",
-      "Edit v1 · a red bicycle by the lake",
-      "Edit current prompt · the For node",
+      "Edit v3 (newest)",
+      "Edit v2 (optimised)",
+      "Edit v1 (a red bicycle by the lake)",
+      "Edit current prompt (the For node)",
       "New prompt",
     ]
   );

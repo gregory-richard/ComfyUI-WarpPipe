@@ -261,11 +261,11 @@ export function dropQuestion(chat) {
 export function startOptions(chat, targetLabel) {
   const versions = [...chat.versions].reverse().map((v, i) => ({
     value: v.id,
-    label: `Edit v${v.n} · ${i === 0 ? "newest" : firstWords(v.request) || "optimised"}`,
+    label: `Edit v${v.n} (${i === 0 ? "newest" : firstWords(v.request) || "optimised"})`,
   }));
   return [
     ...versions,
-    { value: CURRENT_PROMPT, label: `Edit current prompt · ${targetLabel || "the For node"}` },
+    { value: CURRENT_PROMPT, label: `Edit current prompt (${targetLabel || "the For node"})` },
     { value: NEW_PROMPT, label: "New prompt" },
   ];
 }
