@@ -9,6 +9,7 @@ import {
   markBefore,
   outputImages,
   resultRoles,
+  SAVE_IMAGE_ID,
   settleBefore,
   sortedNames,
   stateColors,
@@ -34,7 +35,7 @@ const DEFAULT_SIZE = [520, 860];
 const ACTIVATE_LABEL = "activate";
 const ACTIVE_LABEL = "active";
 const GO_TO_LABEL = "go to active group";
-const MARK_LABEL = "Use as before image for Warp Send";
+const MARK_LABEL = "Use as before image";
 const UNMARK_LABEL = "Remove before-image mark";
 const BADGE_TEXT = "before";
 
@@ -368,6 +369,8 @@ const COMPARE_SIZE = [400, 480];
 const COMPARE_WIDGET = "warp_compare";
 // Left side first, right side second: the later image is always on the right.
 const SEND_LABELS = ["first", "final"];
+const SAVE_LABELS = ["before", "final"];
+const CANVAS_PREVIEW = "$$canvas-image-preview";
 
 function addCompare(node, labels) {
   node._warpCompare = addCompareWidget(node, COMPARE_WIDGET, {
@@ -402,21 +405,53 @@ function drawPreviewInto(sendNode, img) {
 
 // --- Live sampling preview and results -------------------------------------------
 
-// prompt id -> {name, roles} of that prompt, taken when it was submitted: the
-// name of the Send that was active, and execution id -> "final" | "before".
-// No node is kept: switching workflow tabs builds new nodes, so the Send that
-// gets a frame or a result is looked up by name in the graph shown now.
+// prompt id -> {name, roles, before} of that prompt, taken when it was
+// submitted: the name of the Send that was active (null without a Select or an
+// active Send), execution id -> "final" | "before", and the before images once
+// they came. No node is kept: switching workflow tabs builds new nodes, so the
+// Send that gets a frame or a result is looked up by name in the graph shown now.
 const trackedPrompts = new Map();
 const MAX_TRACKED = 32;
 let decodeTicket = 0;
+// The prompt running now: a node's onExecuted is not told which prompt it is.
+let runningPrompt = null;
 
-/** The run about to be queued, or null when the workflow has no Select or no active Send. */
+/** The run about to be queued; every run is tracked, for the Save nodes. */
 function currentRun() {
   const root = rootGraph();
-  if (!root || nodesOfType(root, SELECT_ID).length === 0) return null;
-  const active = collectSends(root).find((s) => s.active);
-  if (!active) return null;
-  return { name: active.name, roles: resultRoles(root) };
+  if (!root) return null;
+  const hub = nodesOfType(root, SELECT_ID).length > 0;
+  const active = hub ? collectSends(root).find((s) => s.active) : null;
+  return { name: active?.name ?? null, roles: resultRoles(root), before: [] };
+}
+
+/** What a Save node saved in a run, against the before image of the same run. */
+function showSaved(node) {
+  const saved = node._warpSaved;
+  if (!saved) return;
+  const before = trackedPrompts.get(saved.promptId)?.before ?? [];
+  node._warpCompare?.setPairs(saved.final.length ? before : [], saved.final);
+}
+
+/**
+ * The saved images stay in the run's output, which is what the queue lists;
+ * the node shows them in its compare view instead of ComfyUI's own preview.
+ */
+function hideOwnPreview(node) {
+  const outputs = app.nodeOutputs ?? {};
+  const key = String(node.id);
+  if (outputs[key]?.images) {
+    // eslint-disable-next-line no-unused-vars
+    const { images, ...rest } = outputs[key];
+    app.nodeOutputs = { ...outputs, [key]: rest };
+  }
+  node.images = undefined;
+  node.imgs = undefined;
+  const at = node.widgets?.findIndex((w) => w.name === CANVAS_PREVIEW) ?? -1;
+  if (at >= 0) {
+    node.widgets[at].onRemove?.();
+    node.widgets.splice(at, 1);
+  }
 }
 
 /** The Send of that name in the graph shown now, or null. */
@@ -477,10 +512,19 @@ function takeResult(detail) {
   if (!run) return;
   const role = run.roles.get(String(detail.display_node ?? detail.node));
   if (!role) return;
+  const images = imageRefs(outputImages(detail.output));
+  if (role === "before") {
+    run.before = images;
+    // A Save node that ran before the marked node gets its before now.
+    for (const node of nodesOfType(rootGraph(), SAVE_IMAGE_ID)) {
+      if (node._warpSaved?.promptId === promptId) showSaved(node);
+    }
+  }
+  if (run.name == null) return;
   let entry = results.get(run.name);
   // A new run starts blank: a side it does not produce stays empty.
   if (!entry || entry.promptId !== promptId) entry = { promptId, before: [], final: [] };
-  entry[role] = imageRefs(outputImages(detail.output));
+  entry[role] = images;
   results.set(run.name, entry);
   // No Send of that name here (another tab is shown): it shows when its tab returns.
   const send = sendNamed(run.name);
@@ -509,6 +553,9 @@ function setupPreviewMirror() {
     if (sawMetadata) return;
     const last = [...trackedPrompts.keys()].pop();
     if (last) showFrame(last, detail);
+  });
+  api.addEventListener("execution_start", ({ detail }) => {
+    runningPrompt = detail?.prompt_id ?? null;
   });
   api.addEventListener("executed", ({ detail }) => takeResult(detail));
   for (const type of ["execution_success", "execution_error", "execution_interrupted"]) {
@@ -625,6 +672,21 @@ function setupCompare(nodeType) {
   // Its output is {before: [ref…], after: [ref…]}, one temp image per batch item.
   wrap(proto, "onExecuted", function (output) {
     this._warpCompare?.setPairs(output?.before, output?.after);
+  });
+}
+
+/** Save Image (Civitai) shows what it saved against the marked before image. */
+function setupSave(nodeType) {
+  const proto = nodeType.prototype;
+  wrap(proto, "onNodeCreated", function () {
+    addCompare(this, SAVE_LABELS);
+    this.setSize([Math.max(this.size[0], COMPARE_SIZE[0]), this.computeSize()[1]]);
+  });
+  // Its own output, kept in the store until here, is the final side.
+  wrap(proto, "onExecuted", function (output) {
+    this._warpSaved = { promptId: runningPrompt, final: imageRefs(output?.images) };
+    showSaved(this);
+    hideOwnPreview(this);
   });
 }
 
@@ -753,5 +815,6 @@ app.registerExtension({
   async beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData.name === SEND_ID) setupSend(nodeType);
     else if (nodeData.name === COMPARE_ID) setupCompare(nodeType);
+    else if (nodeData.name === SAVE_IMAGE_ID) setupSave(nodeType);
   },
 });

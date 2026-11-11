@@ -8,6 +8,7 @@ import {
   WIDGET_TYPE,
   counterText,
   imageRefs,
+  pairAt,
   pairCount,
   sideLabels,
   splitAt,
@@ -75,4 +76,13 @@ test("counterText counts from 1", () => {
   assert.equal(counterText(0, 3), "1/3");
   assert.equal(counterText(2, 3), "3/3");
   assert.equal(counterText(0, 0), "0/0");
+});
+
+test("pairAt: a pair with only one side is shown whole", () => {
+  const a = [{ filename: "a1" }];
+  const b = [{ filename: "b1" }, { filename: "b2" }];
+  assert.deepEqual(pairAt(a, b, 0), { left: a[0], right: b[0], single: false });
+  assert.deepEqual(pairAt(a, b, 1), { left: null, right: b[1], single: true });
+  assert.deepEqual(pairAt([], b, 0), { left: null, right: b[0], single: true });
+  assert.deepEqual(pairAt([], [], 0), { left: null, right: null, single: false });
 });

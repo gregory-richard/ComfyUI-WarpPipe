@@ -622,7 +622,7 @@ The results arrive without links. **final** is the images Save Image (Civitai)
 shows in that run; with several Save Image (Civitai) nodes the last one to run
 is the final, and a Save Image (Civitai) with its preview turned off gives no
 final. **before** is the images of the one node marked through its right-click
-entry **Use as before image for Warp Send** (stored in `properties.warpBefore`;
+entry **Use as before image** (stored in `properties.warpBefore`;
 only one node per workflow carries it, it shows a `before` badge, and **Remove
 before-image mark** clears it). The mark goes on an output node such as Preview
 Image; the entry is not offered on other nodes, nor on Warp Send or Warp Select.
@@ -747,7 +747,7 @@ rgthree's Image Comparer in WarpPipe workflows.
 | `after` | `IMAGE` | optional. The later image, shown on the right, labelled "after" |
 
 **No outputs.** Both batches are saved as temp previews. The split follows the
-mouse; ◀ i/n ▶ steps through pairs (before 1/after 1, before 2/after 2). A missing side is blank.
+mouse; ◀ i/n ▶ steps through pairs (before 1/after 1, before 2/after 2). A pair with only one side shows that image whole.
 Warp Send uses the same compare view, with its sides labelled "first" (left) and "final" (right). It is a DOM widget, so it renders in the
 classic canvas and in Nodes 2.0.
 

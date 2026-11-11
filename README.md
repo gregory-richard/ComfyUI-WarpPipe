@@ -92,7 +92,7 @@ an index, or the active one has no warp input.
 
 No links are needed for results. The active Send shows the images Save Image
 (Civitai) shows in that run as the final, and the images of the node you mark
-with right-click **Use as before image for Warp Send** as the before (one node
+with right-click **Use as before image** as the before (one node
 per workflow; **Remove before-image mark** undoes it). Warp Compare is the same
 slider as a node of its own. All of it works in the classic canvas and in
 Nodes 2.0. The live preview needs ComfyUI started with `--preview-method auto`.

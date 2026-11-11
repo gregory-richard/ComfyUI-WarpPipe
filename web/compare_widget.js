@@ -46,9 +46,16 @@ export function sideLabels(labels) {
   return [pick(0), pick(1)];
 }
 
-/** How many pairs there are: a side that is shorter is blank for the rest. */
+/** How many pairs there are: a side that is shorter has nothing for the rest. */
 export function pairCount(a, b) {
   return Math.max(a?.length ?? 0, b?.length ?? 0);
+}
+
+/** One pair's images. With only one side there is nothing to compare: it is shown whole. */
+export function pairAt(a, b, index) {
+  const left = a?.[index] ?? null;
+  const right = b?.[index] ?? null;
+  return { left, right, single: !left !== !right };
 }
 
 /** The pair after stepping by `step`, wrapping around; 0 when there is none. */
@@ -230,7 +237,7 @@ export function addCompareWidget(node, name, options = {}) {
   bar.append(prev, counter, next);
   root.append(stage, bar);
 
-  const state = { a: [], b: [], index: 0, split: 0.5, live: false };
+  const state = { a: [], b: [], index: 0, split: 0.5, live: false, single: false };
   // src -> true once it failed (the temp files are gone after a ComfyUI restart).
   const failed = new Set();
 
@@ -239,6 +246,10 @@ export function addCompareWidget(node, name, options = {}) {
   }
 
   function renderSplit() {
+    if (state.single) {
+      imgA.style.clipPath = imgB.style.clipPath = "none";
+      return;
+    }
     const pct = state.split * 100;
     imgA.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
     imgB.style.clipPath = `inset(0 0 0 ${pct}%)`;
@@ -264,10 +275,12 @@ export function addCompareWidget(node, name, options = {}) {
     const showPairs = !state.live && count > 0;
 
     live.style.display = state.live ? "block" : "none";
-    showSide(imgA, labelA, showPairs ? state.a[state.index] : null);
-    showSide(imgB, labelB, showPairs ? state.b[state.index] : null);
+    const pair = pairAt(state.a, state.b, state.index);
+    state.single = showPairs && pair.single;
+    showSide(imgA, labelA, showPairs ? pair.left : null);
+    showSide(imgB, labelB, showPairs ? pair.right : null);
     const any = sideShown(imgA) || sideShown(imgB);
-    line.style.display = showPairs && any ? "block" : "none";
+    line.style.display = showPairs && any && !state.single ? "block" : "none";
     placeholder.style.display = state.live || (showPairs && any) ? "none" : "flex";
     for (const [img, label] of [
       [imgA, labelA],
@@ -330,7 +343,7 @@ export function addCompareWidget(node, name, options = {}) {
   const handle = {
     widget,
     element: root,
-    /** Show these pairs from the first: `a` on the left, `b` on the right; a side that is shorter is blank. */
+    /** Show these pairs from the first: `a` on the left, `b` on the right; a pair with one side shows it whole. */
     setPairs(a, b) {
       state.a = imageRefs(a);
       state.b = imageRefs(b);
