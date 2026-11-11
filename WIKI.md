@@ -731,7 +731,12 @@ card with **Retry**; it is kept with the chat until it is retried, taken back or
 is deleted, and **Retry** uses the current settings.
 
 **Storage:** chats are saved in the ComfyUI user folder as
-`warppipe_prompt_chats.json`, never in a workflow or in images.
+`warppipe_prompt_chats.json`, never in a workflow or in images. Each request is also
+logged to `ComfyUI/user/warppipe_llm_log.jsonl`: a `request` line when it is sent
+and a `result` line with the same `id` when it ends (text, question, error or
+stopped, with usage, cost and seconds). No key and no image data is written; the
+file moves to `.1` at about 20 MB, and a log that cannot be written never stops a
+request.
 
 **Keys** are bound to hosts and used only when `base_url`'s host is the key's
 host, so a workflow pointing at another server never receives your key.

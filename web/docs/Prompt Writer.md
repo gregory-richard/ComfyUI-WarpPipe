@@ -97,3 +97,12 @@ The key is never stored in a workflow, in image metadata or in the browser. Warp
 ## Where chats are stored
 
 Chats are stored in the ComfyUI user folder, in `warppipe_prompt_chats.json` (`ComfyUI/user/default/` on a single-user install). They are never stored in a workflow or in images. The base URL, model, system prompt and temperature are ComfyUI settings.
+
+## Request log
+
+Every request is also written to `warppipe_llm_log.jsonl` in the ComfyUI user folder (`ComfyUI/user/` itself), one JSON object per line, on this machine only:
+
+- **When it is sent** — `"event": "request"` with the time, an `id`, the chat, the server's host, model, system prompt name, temperature, your request (`idea`), the prompt it edits (`previous_result`), the image names, the questions and answers so far, and the LoRA choice with how many LoRAs were offered and active. It is written at once, so it is there even if ComfyUI stops before the answer.
+- **When it ends** — `"event": "result"` with the same `id` and the outcome: `text` (with the thinking and the LoRA suggestions), `question`, `error` or `stopped`, plus tokens, cost and seconds.
+
+The log never holds the API key or the images themselves, and a key in an error message is replaced by `***`. When the file passes about 20 MB it is renamed to `warppipe_llm_log.jsonl.1`, replacing an older one, and a new log starts. If the log cannot be written, the request still goes ahead and ComfyUI's console says why. The log holds your requests and prompts in plain text: delete it whenever you like.

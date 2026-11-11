@@ -10,6 +10,7 @@ written, and are scrubbed from any error text.
 """
 
 import base64
+import datetime
 import http.client
 import json
 import logging
@@ -22,6 +23,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
@@ -30,6 +32,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://nano-gpt.com/api/v1"
 SETTING_DIR = "WarpPipe.PromptWriter.SystemPromptDir"
 KEY_FILE_NAME = "warppipe_llm_keys.json"
+# What was asked and what came back, one JSON line each, kept on this machine.
+LOG_FILE_NAME = "warppipe_llm_log.jsonl"
+LOG_MAX_BYTES = 20 * 1024 * 1024
 NANOGPT_ENV = "NANOGPT_API_KEY"
 NANOGPT_HOSTS = frozenset({"nano-gpt.com", "api.nano-gpt.com"})
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
@@ -879,6 +884,34 @@ def _reference_names(raw) -> list:
     return names
 
 
+_LOG_LOCK = threading.Lock()
+
+
+def append_log(path: Optional[Path], entry: dict, rotate: bool = False) -> None:
+    """One line of the request log, written at once. A request's line may move a full
+    log aside to .1 first, so a request and its result stay in one file. A log that
+    cannot be written is only warned about: it never stops a write."""
+    if path is None:
+        return
+    stamp = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    line = json.dumps({"time": stamp, **entry}, ensure_ascii=False)
+    path = Path(path)
+    try:
+        with _LOG_LOCK:
+            if rotate and path.is_file() and path.stat().st_size > LOG_MAX_BYTES:
+                os.replace(path, path.with_name(path.name + ".1"))
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+                handle.flush()
+    except OSError as exc:
+        logger.warning("Prompt Writer: could not write the request log %s: %s", path, exc)
+
+
+def _log_result(path, request_id: str, start: float, **fields) -> None:
+    fields.setdefault("seconds", float(time.monotonic() - start))
+    append_log(path, {"event": "result", "id": request_id, **fields})
+
+
 def handle_write(
     body: dict,
     *,
@@ -889,8 +922,11 @@ def handle_write(
     opener=_open,
     on_delta=None,
     stopped=None,
+    log_path: Optional[Path] = None,
 ) -> dict:
     key = None
+    request_id = None
+    start = 0.0
     try:
         if not isinstance(body, dict):
             raise PromptWriterError("Invalid request")
@@ -916,15 +952,39 @@ def handle_write(
         # The LoRA rules carry the question rule; without them it stands alone.
         extra = (lora_instructions(loras) if loras else "") or QUESTION_RULE
         system = f"{system.rstrip()}\n\n{extra}"
-        images = [
-            _image_data_url(name, image_path) for name in _reference_names(body.get("references"))
-        ]
+        names = _reference_names(body.get("references"))
+        images = [_image_data_url(name, image_path) for name in names]
         key = _key_or_error(base_url, env, key_file)
         try:
             models = list_models(base_url, api_key=key, opener=opener)
             model = next((m for m in models if m["id"] == model_id), None)
         except PromptWriterError:
             model = None
+        request_id = uuid.uuid4().hex
+        start = time.monotonic()
+        # Names only: never the key, never the images themselves.
+        append_log(
+            log_path,
+            {
+                "event": "request",
+                "id": request_id,
+                "chat": str(body.get("chat_id") or "") or None,
+                "host": _host(base_url),
+                "model": model_id,
+                "system_prompt": str(body.get("system_prompt") or ""),
+                "temperature": temperature,
+                "idea": idea,
+                "previous_result": previous,
+                "images": names,
+                "turns": turns,
+                "loras": {
+                    "scope": str(body.get("lora_scope") or "off"),
+                    "available": len(loras["available"]) if loras else 0,
+                    "active": len(loras["active"]) if loras else 0,
+                },
+            },
+            rotate=True,
+        )
         out = write(
             base_url, model_id, system, temperature, idea, previous, images,
             api_key=key, model=model, opener=opener, turns=turns,
@@ -935,7 +995,9 @@ def handle_write(
             if not question:
                 raise PromptWriterError("The model returned no text")
             kept = ("reasoning", "seconds", "usage", "cost")
-            return {"question": question, **{k: out[k] for k in kept}}
+            asked = {"question": question, **{k: out[k] for k in kept}}
+            _log_result(log_path, request_id, start, outcome="question", **asked)
+            return asked
         out["suggestions"] = []
         if loras is not None:
             refs = {lora["ref"] for lora in loras["available"]}
@@ -944,9 +1006,14 @@ def handle_write(
             )
             if not out["text"].strip():
                 raise PromptWriterError("The model returned no text")
+        _log_result(log_path, request_id, start, outcome="text", **out)
         return out
     except PromptWriterError as exc:
-        return {"error": _scrub(str(exc), key)}
+        message = _scrub(str(exc), key)
+        if request_id:
+            outcome = "stopped" if message == "Stopped" else "error"
+            _log_result(log_path, request_id, start, outcome=outcome, error=message)
+        return {"error": message}
 
 
 # --- aiohttp routes ---------------------------------------------------------
@@ -1002,6 +1069,7 @@ def register(routes, web, *, user_dir: str, settings_loader, image_path) -> None
     import asyncio
 
     key_file = Path(user_dir) / KEY_FILE_NAME
+    log_path = Path(user_dir) / LOG_FILE_NAME
 
     @routes.get("/warppipe/llm/models")
     async def _models(request):
@@ -1082,6 +1150,7 @@ def register(routes, web, *, user_dir: str, settings_loader, image_path) -> None
                     image_path=image_path,
                     on_delta=piece,
                     stopped=stop.is_set,
+                    log_path=log_path,
                 )
             except Exception as exc:
                 # The stream has to end with its done line whatever went wrong.

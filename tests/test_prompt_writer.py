@@ -1226,3 +1226,133 @@ def test_handle_write_passes_the_pieces_on_and_returns_the_reasoning(server, tmp
     assert out["text"] == "OUT"
     assert out["reasoning"] == "why"
     assert pieces == [("why", "", 1), ("", "OUT", 2)]
+
+
+# --- the request log --------------------------------------------------------
+
+
+def _log_lines(path):
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _logged_write(server, tmp_path, reply, *, key="LOCALKEY", stopped=None, extra=None):
+    (tmp_path / "s.txt").write_text("SYS", encoding="utf-8")
+    log = tmp_path / "log.jsonl"
+    server.replies.append((200, {"data": [{"id": "m", "pricing": {"prompt": 1.0, "completion": 2.0}}]}))
+    server.replies.append(reply)
+    body = {
+        "base_url": server.url,
+        "model": "m",
+        "system_prompt": "s.txt",
+        "temperature": 0.4,
+        "idea": "warmer light",
+        "previous_result": "OLD",
+        "references": ["ref.png"],
+        "turns": [{"question": "Q", "answer": "A"}],
+        "chat_id": "chat-1",
+        "lora_scope": "list",
+        "loras": LORAS,
+        **(extra or {}),
+    }
+    img = tmp_path / "ref.png"
+    img.write_bytes(b"\x89PNG-IMAGE-BYTES")
+    out = pw.handle_write(
+        body,
+        env={},
+        key_file=_key_file(tmp_path, key),
+        settings={"WarpPipe.PromptWriter.SystemPromptDir": str(tmp_path)},
+        image_path=lambda name: str(img),
+        stopped=stopped,
+        log_path=log,
+    )
+    return out, log
+
+
+def test_the_log_holds_the_request_and_then_its_result(server, tmp_path):
+    reply = (200, _sse(
+        {"choices": [{"delta": {"reasoning": "why"}}]},
+        {"choices": [{"delta": {"content": "NEW PROMPT\n===LORAS===\nL1 | 0.7 | glow"}}]},
+        {"choices": [], "usage": {"prompt_tokens": 1000, "completion_tokens": 500}},
+    ), SSE)
+    out, log = _logged_write(server, tmp_path, reply)
+    assert out["text"] == "NEW PROMPT"
+    request, result = _log_lines(log)
+    assert request["event"] == "request" and result["event"] == "result"
+    assert request["id"] == result["id"] and len(request["id"]) >= 16
+    assert request["chat"] == "chat-1"
+    assert request["host"] == "127.0.0.1"
+    assert request["model"] == "m"
+    assert request["system_prompt"] == "s.txt"
+    assert request["temperature"] == 0.4
+    assert request["idea"] == "warmer light"
+    assert request["previous_result"] == "OLD"
+    assert request["images"] == ["ref.png"]
+    assert request["turns"] == [{"question": "Q", "answer": "A"}]
+    assert request["loras"] == {"scope": "list", "available": 2, "active": 1}
+    assert "time" in request and "time" in result
+    assert result["outcome"] == "text"
+    assert result["text"] == "NEW PROMPT"
+    assert result["reasoning"] == "why"
+    assert result["suggestions"] == [{"ref": "L1", "strength": 0.7, "reason": "glow"}]
+    assert result["usage"] == {"prompt_tokens": 1000, "completion_tokens": 500}
+    assert result["cost"] == pytest.approx(0.002)
+    assert isinstance(result["seconds"], float)
+
+
+def test_the_log_never_holds_the_key_or_image_data(server, tmp_path):
+    reply = (401, {"error": {"message": "Key LOCALKEY is not valid"}})
+    out, log = _logged_write(server, tmp_path, reply)
+    text = log.read_text(encoding="utf-8")
+    assert "LOCALKEY" not in text
+    assert "PNG-IMAGE-BYTES" not in text and "base64" not in text
+    result = _log_lines(log)[-1]
+    assert result["outcome"] == "error"
+    assert result["error"] == "Key *** is not valid"
+
+
+def test_the_log_records_a_question(server, tmp_path):
+    out, log = _logged_write(server, tmp_path, (200, {"choices": [{"message": {"content": "===QUESTION===\nWhich lake?"}}]}))
+    assert out["question"] == "Which lake?"
+    result = _log_lines(log)[-1]
+    assert result["outcome"] == "question"
+    assert result["question"] == "Which lake?"
+
+
+def test_the_log_records_a_stop(server, tmp_path):
+    reply = (200, _sse({"choices": [{"delta": {"content": "A"}}]}), SSE)
+    out, log = _logged_write(server, tmp_path, reply, stopped=lambda: True)
+    assert out == {"error": "Stopped"}
+    result = _log_lines(log)[-1]
+    assert result["outcome"] == "stopped"
+    assert isinstance(result["seconds"], float)
+
+
+def test_a_request_that_never_left_is_not_logged(tmp_path):
+    log = tmp_path / "log.jsonl"
+    out = pw.handle_write({**WRITE_BASE, "model": ""}, **_write_kwargs(tmp_path), log_path=log)
+    assert "error" in out
+    assert not log.exists()
+
+
+def test_the_log_moves_aside_when_it_grows_too_big(server, tmp_path, monkeypatch):
+    monkeypatch.setattr(pw, "LOG_MAX_BYTES", 10)
+    log = tmp_path / "log.jsonl"
+    log.write_text("x" * 50 + "\n", encoding="utf-8")
+    (tmp_path / "log.jsonl.1").write_text("older\n", encoding="utf-8")
+    _logged_write(server, tmp_path, (200, {"choices": [{"message": {"content": "P"}}]}))
+    assert (tmp_path / "log.jsonl.1").read_text(encoding="utf-8").startswith("x" * 50)
+    events = [entry["event"] for entry in _log_lines(log)]
+    assert events in (["request", "result"], ["result"])
+
+
+def test_a_log_that_cannot_be_written_never_breaks_a_write(server, tmp_path, caplog):
+    (tmp_path / "s.txt").write_text("SYS", encoding="utf-8")
+    server.replies.append((200, {"data": []}))
+    server.replies.append((200, {"choices": [{"message": {"content": "OUT"}}]}))
+    out = pw.handle_write(
+        {**WRITE_BASE, "base_url": server.url, "idea": "i"},
+        **_write_kwargs(tmp_path, opener=pw.urllib.request.urlopen),
+        log_path=tmp_path,  # a folder: it cannot be opened as a file
+    )
+    assert out["text"] == "OUT"
+    assert "request log" in caplog.text

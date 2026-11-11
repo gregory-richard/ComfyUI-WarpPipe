@@ -919,6 +919,9 @@ function startWrite(chat) {
       previous_result: step.baseText,
       references: images,
       turns: step.turns,
+      // For the request log on the server.
+      chat_id: chat.id,
+      lora_scope: loraScope(),
     },
   };
 
@@ -1162,6 +1165,8 @@ function retrySpec(chat, failure) {
       previous_result: baseText,
       references: failure.images,
       turns: failure.turns,
+      chat_id: chat.id,
+      lora_scope: loraScope(),
     },
   });
 }
