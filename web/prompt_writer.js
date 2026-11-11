@@ -49,7 +49,6 @@ import {
   openQuestion,
   recordFailure,
   renameChat,
-  rewindChat,
   setAutoTitle,
   sortedChats,
   startLabel,
@@ -89,8 +88,9 @@ const INPUT_MAX_LINES = 10;
 const PLACEHOLDER_WRITE = "Describe the prompt, or the change you want. Ctrl+Enter sends.";
 const PLACEHOLDER_ANSWER = "Answer the question. Ctrl+Enter sends.";
 const ATTACH_TITLE = "Add images (or drop or paste them here)";
-const REWIND_TITLE =
-  "Go back to this request: it moves into the input, and it and everything after it leave the chat";
+const REWIND_TITLE = "Take this request back into the input";
+const AGAIN_TITLE =
+  "Write this request again: it goes into the input with its images and what it edited. Nothing is deleted.";
 
 const STYLE = `
 .wpw-open {
@@ -1112,16 +1112,14 @@ function focusComposer() {
   view.input.setSelectionRange(view.input.value.length, view.input.value.length);
 }
 
-/** The message goes back into the input; it and everything after it leave the chat. */
-function rewindTo(chat, version) {
-  if (jobs.has(chat.id)) return;
+/**
+ * A request written again: into the input with its images and what it edited.
+ * Nothing leaves the chat; what is sent becomes the next version.
+ */
+function writeAgain(chat, version) {
+  if (jobs.has(chat.id) || chat.pending) return;
   flushEdits();
-  const rewound = rewindChat(chat, version.id, Date.now());
-  if (!rewound) return;
-  dropQuestion(chat);
-  clearFailure(chat);
-  fillDraft(chat, rewound);
-  save();
+  fillDraft(chat, version);
   focusComposer();
 }
 
@@ -1434,7 +1432,7 @@ function railRow(chat) {
  * What a step asked for: where it started, the request and its images, and the
  * questions on the way. `question` is one still waiting for its answer.
  */
-function stepAsk(chat, step, { onRewind = null, question = null } = {}) {
+function stepAsk(chat, step, { onRewind = null, question = null, again = false } = {}) {
   const said = (who, text, extra = "") =>
     el(
       "div",
@@ -1467,7 +1465,13 @@ function stepAsk(chat, step, { onRewind = null, question = null } = {}) {
       said("You", turn.answer),
     ]),
     question && said("AI", question, " is-question"),
-    onRewind && iconButton("pi-undo", onRewind, "wpw-rewind", REWIND_TITLE)
+    onRewind &&
+      iconButton(
+        again ? "pi-replay" : "pi-undo",
+        onRewind,
+        "wpw-rewind",
+        again ? AGAIN_TITLE : REWIND_TITLE
+      )
   );
 }
 
@@ -1710,7 +1714,8 @@ function versionCard(chat, version, index, busy) {
   const label = `v${version.n}`;
   const newest = index === chat.versions.length - 1;
   const title = version.model ? `${version.model} · ${version.systemPrompt ?? ""}` : undefined;
-  const rewind = busy ? null : () => rewindTo(chat, version);
+  // An answer to a question is typed in the same box, so a request cannot go there meanwhile.
+  const again = busy || chat.pending ? null : () => writeAgain(chat, version);
   if (newest) {
     const editor = el("textarea", {
       class: "wpw-editor",
@@ -1724,7 +1729,7 @@ function versionCard(chat, version, index, busy) {
       "div",
       { class: "wpw-card is-newest" },
       cardHead(chat, label, version.baseId, statusEl(version, title)),
-      stepAsk(chat, version, { onRewind: rewind }),
+      stepAsk(chat, version, { onRewind: again, again: true }),
       version.reasoning && thinkingBlock(version.reasoning, false).block,
       editor,
       ...loraRows(chat, version),
@@ -1742,7 +1747,7 @@ function versionCard(chat, version, index, busy) {
   const actions = el(
     "div",
     { class: `wpw-actions${open ? " is-block" : ""}`, onClick: stop },
-    !open && rewind && iconButton("pi-undo", rewind, "wpw-rewind is-inline", REWIND_TITLE),
+    !open && again && iconButton("pi-replay", again, "wpw-rewind is-inline", AGAIN_TITLE),
     iconButton(
       "pi-pencil",
       () => continueFrom(chat, version),
@@ -1767,7 +1772,7 @@ function versionCard(chat, version, index, busy) {
     "div",
     { class: "wpw-card" },
     head,
-    open && stepAsk(chat, version, { onRewind: rewind }),
+    open && stepAsk(chat, version, { onRewind: again, again: true }),
     open && version.reasoning && thinkingBlock(version.reasoning, false).block,
     open && el("div", { class: "wpw-text", text: version.text }),
     ...(open ? loraRows(chat, version) : []),

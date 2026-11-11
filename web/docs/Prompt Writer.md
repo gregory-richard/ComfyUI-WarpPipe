@@ -41,7 +41,7 @@ The newest version is open and editable; your edit is saved when you click away.
 
 - **→ Send to prompt** — Writes the version's text, exactly as it is, into the Prompt + LoRAs chosen under **For**, as one undo step. That node flashes and the pop-up closes. It writes only the prompt and never touches the LoRA lists.
 - **Pencil** — On older versions: the next request edits this version.
-- **Undo arrow** (appears on hover) — Goes back to that request: it moves into the input with its images and what it edited, above anything you had typed there, and it and everything after it leave the chat.
+- **Again arrow** (appears on hover) — Puts that request back into the input with its images and what it edited, above anything you had typed there. Nothing is deleted: what you send becomes the next version. It is not there while the AI waits for an answer, since the answer goes in the same box.
 - **Chat titles** — While the first version is being written, a cheap model names the chat from your message (**Title model** in the settings, about 0.002 ¢ per title). A title you typed always stays; an empty field or a failure keeps the first words of your message.
 - **⋮ on a chat** — **Rename** or **Delete** it.
 

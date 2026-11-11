@@ -239,19 +239,6 @@ export function baseText(chat, baseId) {
 }
 
 /**
- * Go back to just before a version: it and everything after it leave the chat.
- * Returns the version that was rewound to, so its request can be sent again, or
- * null when the chat has no such version.
- */
-export function rewindChat(chat, versionId, now) {
-  const index = chat.versions.findIndex((v) => v.id === versionId);
-  if (index < 0) return null;
-  const [version] = chat.versions.splice(index);
-  chat.updated = now;
-  return version;
-}
-
-/**
  * The AI asked instead of writing: the step waits in the chat for an answer.
  * `step` is {request, images, baseId, basePrompt, turns}, the turns being the
  * questions already answered on the way.

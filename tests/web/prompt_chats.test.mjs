@@ -22,7 +22,6 @@ import {
   mergedDraft,
   normalizeStore,
   renameChat,
-  rewindChat,
   setAutoTitle,
   sortedChats,
   titleFrom,
@@ -553,42 +552,6 @@ test("normalizeStore does not share objects with its input", () => {
   out.chats[0].title = "changed";
   assert.deepEqual(raw.chats[0].versions[0].images, ["a"]);
   assert.equal(raw.chats[0].title, undefined);
-});
-
-test("rewindChat removes the version and everything after it", () => {
-  const store = emptyStore();
-  const chat = createChat(store, { id: "c", now: 1 });
-  for (const n of [1, 2, 3]) {
-    addVersion(chat, { id: `v${n}`, now: n, request: `r${n}`, images: [], text: `t${n}` });
-  }
-  const removed = rewindChat(chat, "v2", 9);
-  assert.equal(removed.request, "r2");
-  assert.deepEqual(
-    chat.versions.map((v) => v.id),
-    ["v1"]
-  );
-  assert.equal(chat.updated, 9);
-  assert.equal(baseText(chat, null), "t1");
-});
-
-test("rewindChat on the first version empties the chat and the next one retitles it", () => {
-  const store = emptyStore();
-  const chat = createChat(store, { id: "c", now: 1 });
-  addVersion(chat, { id: "v1", now: 1, request: "first idea", images: [], text: "t" });
-  rewindChat(chat, "v1", 2);
-  assert.equal(chat.versions.length, 0);
-  const next = addVersion(chat, { id: "v2", now: 3, request: "other idea", images: [], text: "x" });
-  assert.equal(next.n, 1);
-  assert.equal(chat.title, "other idea");
-});
-
-test("rewindChat ignores an unknown version", () => {
-  const store = emptyStore();
-  const chat = createChat(store, { id: "c", now: 1 });
-  addVersion(chat, { id: "v1", now: 1, request: "r", images: [], text: "t" });
-  assert.equal(rewindChat(chat, "nope", 2), null);
-  assert.equal(chat.versions.length, 1);
-  assert.equal(chat.updated, 1);
 });
 
 test("setAutoTitle replaces an automatic title but never one the user typed", () => {
