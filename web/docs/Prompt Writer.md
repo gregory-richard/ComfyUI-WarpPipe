@@ -4,17 +4,18 @@ Have an LLM write and rewrite an image prompt in a chat, and put the version you
 
 ## Overview
 
-Every **Prompt + LoRAs** has an **✨ AI** button on the top-right corner of its text box. It opens the Prompt Writer, a pop-up with your chats on the left and the conversation on the right. Say what you want and press **Write** (or Ctrl+Enter). Each answer is a new version in the chat. Press **Send to prompt** on a version to write it into a Prompt + LoRAs. Writing a prompt never queues an image, and the Prompt Writer takes no part in a run.
+Every **Prompt + LoRAs** has an **✨ AI** button on the top-right corner of its text box. It opens the Prompt Writer, a pop-up with your chats on the left and the conversation on the right. Say what you want and press the round **↑** in the input (or Ctrl+Enter). Each answer is a new version in the chat. Press **Send to prompt** on a version to write it into a Prompt + LoRAs. Writing a prompt never queues an image, and the Prompt Writer takes no part in a run.
 
 Writing goes on in the background. You can close the pop-up (Esc or ×; clicking outside it does nothing), start something in another chat, or go back to the canvas. The **✨ AI** button turns yellow while a chat opened from that node is writing and shows a green dot when one has finished and you have not looked at it yet. A toast says when a prompt is ready.
 
 ## Header
 
 - **Title** — Click to rename the chat. A new chat is named after your first request.
-- **For** — The Prompt + LoRAs this chat writes for. **Send to prompt**, **Start from: Current prompt** and the LoRA suggestions all use it. Each chat remembers its own choice by the node's label (its group title, else its own title). A new chat starts on the node you opened it from, and if a remembered label is no longer in the workflow the chat falls back to that node, else to the first one.
+- **For** — The Prompt + LoRAs this chat writes for. **Send to prompt**, **Edit current prompt** and the LoRA suggestions all use it. Each chat remembers its own choice by the node's label (its group title, else its own title). A new chat starts on the node you opened it from, and if a remembered label is no longer in the workflow the chat falls back to that node, else to the first one.
 - **Model** — Type to filter. Each entry shows the price per million input/output tokens and 👁 for models that see images. A model that is no longer listed stays selected and reads "(not listed)".
 - **System prompt** — The `.txt` files in your system prompt folder.
-- **⚙** — The server and the key:
+- **Eye** — Shows the selected system prompt, read-only.
+- **Cog** — The server and the key:
   - **Base URL** — The OpenAI-compatible server. Default `https://nano-gpt.com/api/v1`. LM Studio, Ollama and llama.cpp work too; plain `http://` is allowed only for `localhost`, `127.0.0.1` and `::1`.
   - **Temperature** — 0–2, default 0.6.
   - **API key** and **Save key** — See Setup.
@@ -28,40 +29,38 @@ The **✨ AI** button of a node opens the most recent chat for that node, or a n
 
 ## Versions
 
-Each **Write** is one card: its version number, where it started (`from v2`, `from the current prompt` or `new prompt`), what it cost and how long it took (e.g. `Finished · 0.3 ¢ · 8 s · 1,812 → 640 tokens`), then what you asked for with its images and any questions the AI asked on the way, and then the prompt it wrote. The LLM sees only the starting point, your request and those questions and answers, never the rest of the chat, which is why it is not shown as a conversation.
+Each **Write** is one card: its version number, what it changed (`edit of v2`, `edit of the current prompt` or `new prompt`), what it cost and how long it took (e.g. `Finished · 0.3 ¢ · 8 s · 1,812 → 640 tokens`), then what you asked for with its images and any questions the AI asked on the way, and then the prompt it wrote. The LLM sees only what it edits, your request and those questions and answers, never the rest of the chat, which is why it is not shown as a conversation.
 
 The newest version is open and editable; your edit is saved when you click away. Older versions are one line with your request; click to read them.
 
-- **Send to prompt** — Writes the version's text, exactly as it is, into the Prompt + LoRAs chosen under **For**, as one undo step. That node flashes and the pop-up closes. It writes only the prompt and never touches the LoRA lists.
-- **Continue from here** — On older versions: sets **Start from** to this version.
-- **↶** (appears on hover) — Goes back to that request: it moves into the input with its images and starting point, above anything you had typed there, and it and everything after it leave the chat.
+- **→ Send to prompt** — Writes the version's text, exactly as it is, into the Prompt + LoRAs chosen under **For**, as one undo step. That node flashes and the pop-up closes. It writes only the prompt and never touches the LoRA lists.
+- **Pencil** — On older versions: the next request edits this version.
+- **Undo arrow** (appears on hover) — Goes back to that request: it moves into the input with its images and what it edited, above anything you had typed there, and it and everything after it leave the chat.
 - **Chat titles** — While the first version is being written, a cheap model names the chat from your message (**Title model** under the gear, about 0.002 ¢ per title). A title you typed always stays; an empty field or a failure keeps the first words of your message.
 - **⋮ on a chat** — **Rename** or **Delete** it.
-- **👁** — Shows the selected system prompt, read-only.
 
 A request that fails shows a red card with the message and **Retry**, and does not count as a version.
 
 ## Writing a request
 
-The box at the bottom grows with your text. Above it:
+The box at the bottom grows with your text. Images you add show above the text, and a row of tools sits under it:
 
-- **Images** — **Add image**, drag and drop, or Ctrl+V; up to 8 per request, uploaded to `input/`. They are sent only when the model has vision; otherwise they are left out and the Prompt Writer says so.
-- **Start from** — What the next **Write** starts from. It is sent to the LLM with your request, so a change request returns the complete updated prompt.
-  - **A version** — The newest one is chosen until you pick another; **Continue from here** picks one too.
-  - **Current prompt** — The text in the prompt box of the **For** node, read when you press **Write**. The card keeps it under "Started from the current prompt", so you can see what went.
-  - **Nothing** — A new prompt from your request alone.
-  - With a starting point and an empty box, **Write** asks the LLM to optimise it.
-- **Suggest LoRAs** — **Off**, **List** or **All**; the choice is kept and the numbers say how many LoRAs each offers. See LoRA suggestions.
-
-While a chat writes, **Write** becomes **Stop** with a seconds counter. Text you have not sent stays in its chat until ComfyUI's page is reloaded.
+- **Image** — Add images; drag and drop and Ctrl+V work too. Up to 8 per request, uploaded to `input/`. They are sent only when the model has vision; otherwise they are left out and the Prompt Writer says so.
+- **What the next request does** — Sent to the LLM with your request, so a change request returns the complete updated prompt:
+  - **Edit v3 · newest** (or an older version) — The newest is chosen until you pick another; the pencil on an older version picks it too.
+  - **Edit current prompt** — The text in the prompt box of the **For** node, read when you press **↑**. The card keeps it under "The current prompt it edited", so you can see what went.
+  - **New prompt** — A new prompt from your request alone.
+  - Editing with an empty box asks the LLM to optimise the prompt.
+- **LoRAs** — **Off**, **List** or **All**; the choice is kept and the numbers say how many LoRAs each offers. See LoRA suggestions.
+- **↑** — Sends (Ctrl+Enter does too). It is a yellow stop button while the chat writes; the seconds count in the card. Text you have not sent stays in its chat until ComfyUI's page is reloaded.
 
 ## Questions
 
-Your system prompt may tell the LLM to ask instead of writing, for instance when a request contradicts itself. The Prompt Writer tells it to start such a reply with `===QUESTION===`, and shows it as a yellow **Question** card instead of a version, with nothing to send. **Write** becomes **Answer**: type your answer and the LLM gets the same starting point, your request, its question and your answer. It may ask again. Once it writes, the card becomes the next version and keeps the questions and answers. **↶** on the question card takes your request back into the input instead.
+Your system prompt may tell the LLM to ask instead of writing, for instance when a request contradicts itself. The Prompt Writer tells it to start such a reply with `===QUESTION===`, and shows it as a yellow **Question** card instead of a version, with nothing to send. **↑** then answers: type your answer and the LLM gets the same prompt to edit, your request, its question and your answer. It may ask again. Once it writes, the card becomes the next version and keeps the questions and answers. The undo arrow on the question card takes your request back into the input instead.
 
 ## LoRA suggestions
 
-With **Suggest LoRAs** on **List** or **All**, each **Write** tells the LLM about your LoRAs:
+With **LoRAs** on **List** or **All**, each **Write** tells the LLM about your LoRAs:
 
 - **Available, with All** — The LoRAs in your library made for the model wired into the **For** node, minus the ones already in use. Only LoRAs whose base model is known to match are listed, up to 1000.
 - **Available, with List** — Only the LoRAs switched off with `//` in that node's LoRA list, and in the model 2 list while it is switched on.

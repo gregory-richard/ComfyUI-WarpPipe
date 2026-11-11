@@ -257,16 +257,16 @@ export function dropQuestion(chat) {
   return pending;
 }
 
-/** What Start from offers: the versions newest first, the current prompt, nothing. */
+/** What the next Write does: edit a version, newest first, or the current prompt, or write anew. */
 export function startOptions(chat, targetLabel) {
   const versions = [...chat.versions].reverse().map((v, i) => ({
     value: v.id,
-    label: `v${v.n} · ${i === 0 ? "newest" : firstWords(v.request) || "optimised"}`,
+    label: `Edit v${v.n} · ${i === 0 ? "newest" : firstWords(v.request) || "optimised"}`,
   }));
   return [
     ...versions,
-    { value: CURRENT_PROMPT, label: `Current prompt · ${targetLabel || "the For node"}` },
-    { value: NEW_PROMPT, label: "Nothing · new prompt" },
+    { value: CURRENT_PROMPT, label: `Edit current prompt · ${targetLabel || "the For node"}` },
+    { value: NEW_PROMPT, label: "New prompt" },
   ];
 }
 
@@ -279,9 +279,9 @@ export function startValue(chat, base) {
 
 /** How a step says where it started. "seed" is how older chats said current prompt. */
 export function startLabel(chat, baseId) {
-  if (baseId === CURRENT_PROMPT || baseId === "seed") return "from the current prompt";
+  if (baseId === CURRENT_PROMPT || baseId === "seed") return "edit of the current prompt";
   const version = chat.versions.find((v) => v.id === baseId);
-  return version ? `from v${version.n}` : "new prompt";
+  return version ? `edit of v${version.n}` : "new prompt";
 }
 
 /**

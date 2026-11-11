@@ -650,11 +650,11 @@ test("normalizeStore keeps a step that waits for an answer, and drops a broken o
   }
 });
 
-test("startOptions: the versions newest first, then the current prompt and nothing", () => {
+test("startOptions: edit a version, newest first, or the current prompt, or write a new one", () => {
   const chat = createChat(emptyStore(), { id: "c", now: 1 });
   assert.deepEqual(startOptions(chat, "Krea 2"), [
-    { value: CURRENT_PROMPT, label: "Current prompt · Krea 2" },
-    { value: NEW_PROMPT, label: "Nothing · new prompt" },
+    { value: CURRENT_PROMPT, label: "Edit current prompt · Krea 2" },
+    { value: NEW_PROMPT, label: "New prompt" },
   ]);
   addVersion(chat, version("v1", 2, { request: "a red bicycle by the lake at dawn please" }));
   addVersion(chat, version("v2", 3, { request: "" }));
@@ -662,11 +662,11 @@ test("startOptions: the versions newest first, then the current prompt and nothi
   assert.deepEqual(
     startOptions(chat, null).map((o) => o.label),
     [
-      "v3 · newest",
-      "v2 · optimised",
-      "v1 · a red bicycle by the lake",
-      "Current prompt · the For node",
-      "Nothing · new prompt",
+      "Edit v3 · newest",
+      "Edit v2 · optimised",
+      "Edit v1 · a red bicycle by the lake",
+      "Edit current prompt · the For node",
+      "New prompt",
     ]
   );
   assert.deepEqual(
@@ -690,9 +690,9 @@ test("startValue: a draft's choice while it exists, else the newest version, els
 test("startLabel says where a step started", () => {
   const chat = createChat(emptyStore(), { id: "c", now: 1 });
   addVersion(chat, version("v1", 2));
-  assert.equal(startLabel(chat, "v1"), "from v1");
-  assert.equal(startLabel(chat, CURRENT_PROMPT), "from the current prompt");
-  assert.equal(startLabel(chat, "seed"), "from the current prompt");
+  assert.equal(startLabel(chat, "v1"), "edit of v1");
+  assert.equal(startLabel(chat, CURRENT_PROMPT), "edit of the current prompt");
+  assert.equal(startLabel(chat, "seed"), "edit of the current prompt");
   assert.equal(startLabel(chat, null), "new prompt");
   assert.equal(startLabel(chat, "gone"), "new prompt");
 });

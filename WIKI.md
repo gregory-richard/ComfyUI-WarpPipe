@@ -691,20 +691,20 @@ is set), and **Refresh lists** (the backend caches a model list for an hour).
 | `SystemPromptDir` | Settings → WarpPipe → Prompt Writer |
 
 **Chats and versions:** the left rail lists the chats, newest first. Each write
-is one card `v2` with where it started (`from v1`), its status, e.g.
+is one card `v2` with what it changed (`edit of v1`), its status, e.g.
 `Finished · 0.3 ¢ · 8 s · 1,812 → 640 tokens`, the request with its images and any
 questions on the way, and the prompt. The newest version is editable
 (saved on blur); older ones are one line and can be expanded. **Send to prompt** writes
 the text unchanged into the Prompt + LoRAs chosen under **For**, as one undo step,
-flashes the node and closes the pop-up. **Continue from here** makes an older
-version the next starting point.
+flashes the node and closes the pop-up. The pencil on an older version makes it
+the one the next request edits.
 
 **Questions:** the LLM is told to start a reply that asks instead of writing with
-`===QUESTION===`. That reply is a **Question** card, not a version; **Write** becomes
-**Answer**, and the answer goes with the request, its starting point and the earlier
+`===QUESTION===`. That reply is a **Question** card, not a version; the send button then
+answers, and the answer goes with the request, what it edits and the earlier
 questions and answers (`turns` in `POST /warppipe/llm/write`).
 
-**LoRAs:** **Suggest LoRAs** in the composer (setting `LoraScope`) is **Off**, **List**
+**LoRAs:** **LoRAs** in the composer (setting `LoraScope`) is **Off**, **List**
 (the LoRAs switched off in the target's own lists) or **All** (every LoRA that fits the
 target's base model). The ones already active are sent with either. The LLM
 uses the trigger words of active LoRAs and may suggest others (at most two while LoRAs are active, otherwise five), shown as
@@ -712,11 +712,13 @@ chips under the version. Nothing is added by itself: **+** on a chip switches on
 commented line that holds the tag, or appends the tag to the `loras` box, and puts
 its trigger words on the first line of that version; pressing it again undoes both.
 
-**Writing:** the composer takes up to 8 images (**Add image**, drag and drop or
-Ctrl+V, uploaded to `input/`), left out with a notice when the model has no
-vision. **Start from** sets what the next write starts from and is sent as
-`previous_result`: a version (the newest by default), **Current prompt** (the text
-of the **For** node, read when you press **Write**) or **Nothing**. Ctrl+Enter sends; **Write** becomes **Stop** while it runs.
+**Writing:** the input is one box with its tools under the text: an image button
+(up to 8 images, also by drag and drop or Ctrl+V, uploaded to `input/`, left out with a
+notice when the model has no vision), what the next request does, sent as
+`previous_result` (**Edit v3 · newest** or an older version, **Edit current prompt**,
+the text of the **For** node read when you send, or **New prompt**), the LoRA choice and
+a round send button that stays the same size and turns into a yellow stop button while
+it runs. Ctrl+Enter sends.
 Writes are held per chat outside the pop-up, so several run at once and survive
 closing it. The **✨ AI** button on the node is yellow while a chat opened from
 that node writes, and has a green dot when one finished unseen. A failed request

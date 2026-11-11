@@ -77,12 +77,13 @@ const TOAST_MS = 4000;
 
 // The composer's height, in lines of its CSS line-height plus padding and border.
 const INPUT_LINE = 19;
-const INPUT_CHROME = 18;
+const INPUT_CHROME = 13;
 const INPUT_MIN_LINES = 3;
 const INPUT_MAX_LINES = 10;
 
 const PLACEHOLDER_WRITE = "Describe the prompt, or the change you want. Ctrl+Enter sends.";
 const PLACEHOLDER_ANSWER = "Answer the question. Ctrl+Enter sends.";
+const ATTACH_TITLE = "Add images (or drop or paste them here)";
 const REWIND_TITLE =
   "Go back to this request: it moves into the input, and it and everything after it leave the chat";
 
@@ -164,9 +165,11 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 .wpw-combo:hover, .wpw-prompts:hover { border-color: var(--wpw-warp); }
 .wpw-prompts { flex: 0 1 220px; min-width: 0; cursor: pointer; }
 .wpw-icon {
-  flex: none; width: 32px; height: 32px; background: var(--wpw-raised); cursor: pointer; font-size: 15px;
-  border: 0; border-radius: 6px;
+  flex: none; width: 32px; height: 32px; background: var(--wpw-raised); cursor: pointer; font-size: 14px;
+  border: 0; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
 }
+.wpw-modal .pi { font-size: inherit; line-height: 1; }
+.wpw-btn .pi { margin-right: 6px; font-size: 12px; }
 .wpw-icon:hover { background: var(--wpw-raised-hover); }
 
 .wpw-pop {
@@ -332,8 +335,9 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 .wpw-lora-strength { flex: none; font-size: 11px; font-weight: 400; opacity: 0.75; font-variant-numeric: tabular-nums; }
 .wpw-lora-reason { font-size: 11px; opacity: 0.62; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wpw-lora-add {
-  flex: none; width: 26px; height: 26px; padding: 0; cursor: pointer;
-  background: var(--wpw-raised); border: 0; border-radius: 5px; font-size: 15px; line-height: 26px;
+  flex: none; width: 26px; height: 26px; padding: 0; cursor: pointer; font-size: 12px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--wpw-raised); border: 0; border-radius: 5px;
 }
 .wpw-lora-add:hover { background: var(--wpw-raised-hover); }
 .wpw-lora.is-added .wpw-lora-add { background: var(--wpw-warp); color: #fff; }
@@ -342,11 +346,22 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 /* What is on already takes little room, so what is new stands out. */
 .wpw-lora.is-compact { width: auto; max-width: 260px; height: 30px; padding: 2px 4px 2px 2px; gap: 6px; }
 .wpw-lora.is-compact .wpw-lora-thumb { width: 24px; height: 24px; }
-.wpw-lora.is-compact .wpw-lora-add { width: 22px; height: 22px; font-size: 13px; line-height: 22px; }
+.wpw-lora.is-compact .wpw-lora-add { width: 22px; height: 22px; font-size: 11px; }
 
 .wpw-composer { flex: none; border-top: 1px solid var(--wpw-rule); padding: 9px 14px 11px; }
 .wpw-composer.is-drag { box-shadow: inset 0 0 0 2px var(--wpw-warp); }
-.wpw-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 7px; }
+/* One box: the images to send, the text, and a row of tools with the send button. */
+.wpw-box { border: 1px solid var(--wpw-rule); border-radius: 8px; background: var(--wpw-panel); }
+.wpw-box:focus-within { border-color: var(--wpw-warp); }
+.wpw-attached { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px 0; }
+.wpw-attached:empty { display: none; }
+.wpw-tools { display: flex; align-items: center; gap: 6px; padding: 2px 6px 6px 6px; }
+.wpw-tools-left { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wpw-tool {
+  flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: none;
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px; opacity: 0.8;
+}
+.wpw-tool:hover { background: var(--wpw-raised-hover); opacity: 1; }
 .wpw-chip {
   display: inline-flex; align-items: center; gap: 5px; height: 26px; box-sizing: border-box; padding: 0 7px;
   background: var(--wpw-panel); border: 1px solid var(--wpw-rule); border-radius: 13px; font-size: 12px;
@@ -355,7 +370,7 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 .wpw-chip.is-base, .wpw-chip.is-on { border-color: var(--wpw-warp); color: var(--wpw-warp); }
 .wpw-chip.is-off { opacity: 0.7; }
 .wpw-chip-btn { cursor: pointer; }
-.wpw-start-chip { gap: 4px; padding: 0 3px 0 9px; }
+.wpw-start-chip { gap: 5px; padding: 0 3px 0 9px; font-size: 11px; }
 .wpw-modal .wpw-start {
   height: 22px; max-width: 280px; padding: 0 2px; border: 0; background: transparent;
   color: var(--wpw-warp); font-weight: 500; cursor: pointer;
@@ -372,14 +387,17 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 .wpw-chip-btn:hover { border-color: var(--wpw-warp); color: var(--wpw-warp); }
 .wpw-chip-x { background: none; border: 0; padding: 0 1px; cursor: pointer; font-size: 14px; line-height: 1; opacity: 0.7; }
 .wpw-chip-x:hover { opacity: 1; color: var(--wpw-red); }
-.wpw-compose-row { display: flex; align-items: flex-end; gap: 8px; }
 .wpw-input {
-  flex: 1; min-width: 0; box-sizing: border-box; padding: 8px 10px; resize: none;
-  line-height: ${INPUT_LINE}px; background: var(--wpw-panel);
-  border: 1px solid var(--wpw-rule); border-radius: 5px;
+  display: block; width: 100%; box-sizing: border-box; padding: 9px 12px 4px; resize: none;
+  line-height: ${INPUT_LINE}px; background: transparent; border: 0;
 }
-.wpw-send { height: 36px; min-width: 92px; }
-.wpw-send.is-stop { background: var(--wpw-yellow); border-color: var(--wpw-yellow); }
+.wpw-modal .wpw-input:focus-visible { outline: none; }
+/* Round and the same size whatever it does: write, answer or stop. */
+.wpw-send {
+  flex: none; width: 32px; height: 32px; padding: 0; border-radius: 50%; font-size: 13px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.wpw-send.is-stop { background: var(--wpw-yellow); color: #1a1a1a !important; }
 .wpw-note { font-size: 12px; margin-top: 5px; opacity: 0.8; }
 .wpw-note.is-error { color: var(--wpw-red); opacity: 1; }
 .wpw-note:empty { display: none; }
@@ -432,6 +450,25 @@ function el(tag, props = {}, ...children) {
 
 function button(text, onClick, className = "wpw-btn", title) {
   return el("button", { type: "button", class: className, text, title, onClick });
+}
+
+/** One of ComfyUI's own PrimeIcons. */
+function icon(name) {
+  return el("i", { class: `pi ${name}`, "aria-hidden": "true" });
+}
+
+/** A button that is only an icon; the title says what it does. */
+function iconButton(name, onClick, className, title) {
+  return el(
+    "button",
+    { type: "button", class: className, title, "aria-label": title, onClick },
+    icon(name)
+  );
+}
+
+/** A button with an icon before its words. */
+function labelledButton(name, text, onClick, className = "wpw-btn", title) {
+  return el("button", { type: "button", class: className, title, onClick }, icon(name), text);
 }
 
 function uid() {
@@ -1226,16 +1263,24 @@ function railRow(chat) {
         { class: "wpw-chat-title" },
         el("span", { text: chat.title, title: chat.title }),
         unseen.has(chat.id) &&
-          el("span", {
-            class: "wpw-check",
-            text: chat.pending ? "?" : "✓",
-            title: chat.pending ? "The AI has a question" : "Finished",
-          })
+          el(
+            "span",
+            {
+              class: "wpw-check",
+              title: chat.pending ? "The AI has a question" : "Finished",
+            },
+            icon(chat.pending ? "pi-question-circle" : "pi-check")
+          )
       ),
       sub
     ),
     (() => {
-      const more = button("⋮", () => openChatMenu(chat, more), "wpw-chat-more", "More");
+      const more = iconButton(
+        "pi-ellipsis-v",
+        () => openChatMenu(chat, more),
+        "wpw-chat-more",
+        "More"
+      );
       return more;
     })()
   );
@@ -1263,7 +1308,7 @@ function stepAsk(chat, step, { onRewind = null, question = null } = {}) {
       el(
         "details",
         { class: "wpw-quote" },
-        el("summary", { text: "Started from the current prompt" }),
+        el("summary", { text: "The current prompt it edited" }),
         el("div", { class: "wpw-quote-text", text: quote })
       ),
     said("You", step.request || "Optimise the prompt", step.request ? "" : " is-empty"),
@@ -1278,7 +1323,7 @@ function stepAsk(chat, step, { onRewind = null, question = null } = {}) {
       said("You", turn.answer),
     ]),
     question && said("AI", question, " is-question"),
-    onRewind && button("↶", onRewind, "wpw-rewind", REWIND_TITLE)
+    onRewind && iconButton("pi-undo", onRewind, "wpw-rewind", REWIND_TITLE)
   );
 }
 
@@ -1336,7 +1381,13 @@ function labelOfNode(node) {
 }
 
 function sendButton(version) {
-  const use = button("Send to prompt", () => useVersion(version), "wpw-btn wpw-primary");
+  const use = labelledButton(
+    "pi-arrow-right",
+    "Send to prompt",
+    () => useVersion(version),
+    "wpw-btn wpw-primary",
+    "Write this version into the prompt of the For node"
+  );
   use.disabled = !view.targets.length;
   return use;
 }
@@ -1365,8 +1416,8 @@ function loraChip(chat, version, item, compact) {
   const title = item.title || item.name || item.tag;
   const words = item.triggers.join(", ");
   const verb = compact ? (on ? "Switch off in" : "Switch on in") : on ? "Remove from" : "Add to";
-  const toggle = button(
-    on ? "✓" : "+",
+  const toggle = iconButton(
+    on ? "pi-check" : "pi-plus",
     () => toggleSuggestion(chat, version, item, { keepText: compact }),
     "wpw-lora-add",
     inText ? "Written in the prompt text" : `${verb} the LoRA list of ${where}`
@@ -1465,8 +1516,13 @@ function versionCard(chat, version, index, busy) {
   const actions = el(
     "div",
     { class: `wpw-actions${open ? " is-block" : ""}`, onClick: stop },
-    !open && rewind && button("↶", rewind, "wpw-rewind is-inline", REWIND_TITLE),
-    button("Continue from here", () => continueFrom(chat, version)),
+    !open && rewind && iconButton("pi-undo", rewind, "wpw-rewind is-inline", REWIND_TITLE),
+    iconButton(
+      "pi-pencil",
+      () => continueFrom(chat, version),
+      "wpw-icon",
+      "Edit this version next"
+    ),
     sendButton(version)
   );
   const head = open
@@ -1546,7 +1602,7 @@ function renderConvo(stick) {
         el(
           "div",
           { class: "wpw-actions is-block" },
-          button("Retry", () => launch(chat, failure.spec))
+          labelledButton("pi-refresh", "Retry", () => launch(chat, failure.spec))
         )
       )
     );
@@ -1567,7 +1623,7 @@ function renderConvo(stick) {
         }),
         el("div", {
           class: "wpw-hint-line",
-          text: "Answer in the box below, or ↶ to take your request back.",
+          text: "Answer in the box below, or take your request back with the arrow above.",
         })
       )
     );
@@ -1576,7 +1632,7 @@ function renderConvo(stick) {
     items.push(
       el("div", {
         class: "wpw-hint",
-        text: "Describe the prompt you want. To change the prompt that is in the node, set Start from to Current prompt.",
+        text: "Describe the prompt you want. To change the prompt that is in the node, choose Edit current prompt below.",
       })
     );
   }
@@ -1615,17 +1671,21 @@ function renderStart(chat, draft) {
     );
   }
   view.start.value = startValue(chat, draft.base);
+  view.startIcon.className = `pi ${view.start.value === NEW_PROMPT ? "pi-sparkles" : "pi-pencil"}`;
 }
 
 function chooseStart() {
   const chat = currentChat();
-  if (chat) draftOf(chat.id).base = view.start.value;
+  if (!chat) return;
+  draftOf(chat.id).base = view.start.value;
+  renderStart(chat, draftOf(chat.id));
 }
 
 function renderChips() {
   const chat = currentChat();
   if (!chat) {
-    view.chips.replaceChildren();
+    view.attached.replaceChildren();
+    view.toolsLeft.replaceChildren();
     return;
   }
   const draft = draftOf(chat.id);
@@ -1646,14 +1706,14 @@ function renderChips() {
       );
   const uploading = draft.uploading > 0 ? [chip("", ["Uploading…"])] : [];
   renderStart(chat, draft);
-  const parts = [
-    !answering && button("Add image", pickImages, "wpw-chip wpw-chip-btn"),
-    ...images,
-    ...uploading,
-    answering ? chip("is-base", ["Answering the question"]) : view.startChip,
+  view.attached.replaceChildren(...images, ...uploading);
+  const answeringChip = chip("is-base", [icon("pi-question-circle"), "Answering the question"]);
+  const tools = [
+    !answering && view.attach,
+    answering ? answeringChip : view.startChip,
     view.loraScope,
   ];
-  view.chips.replaceChildren(...parts.filter(Boolean));
+  view.toolsLeft.replaceChildren(...tools.filter(Boolean));
   renderLoraScope();
 }
 
@@ -1695,8 +1755,10 @@ function renderSend() {
   const job = jobs.get(view.chatId);
   const answering = !!currentChat()?.pending;
   view.send.classList.toggle("is-stop", !!job);
-  if (job) view.send.replaceChildren("Stop · ", secondsEl(job.startedAt));
-  else view.send.replaceChildren(answering ? "Answer" : "Write");
+  view.sendIcon.className = `pi ${job ? "pi-stop" : "pi-arrow-up"}`;
+  const label = job ? "Stop" : `${answering ? "Answer" : "Write"} (Ctrl+Enter)`;
+  view.send.title = label;
+  view.send.setAttribute("aria-label", label);
   view.input.placeholder = answering ? PLACEHOLDER_ANSWER : PLACEHOLDER_WRITE;
 }
 
@@ -2204,8 +2266,8 @@ function buildView(promptNode) {
       if (view.popover?.anchor === view.eye) showPeek();
     },
   });
-  const eye = button("👁", togglePeek, "wpw-icon", "Read this system prompt");
-  const gear = button("⚙", toggleGear, "wpw-icon", "Server, temperature and API key");
+  const eye = iconButton("pi-eye", togglePeek, "wpw-icon", "Read this system prompt");
+  const gear = iconButton("pi-cog", toggleGear, "wpw-icon", "Server, temperature and API key");
   const head = el(
     "div",
     { class: "wpw-head" },
@@ -2215,32 +2277,35 @@ function buildView(promptNode) {
     prompts,
     eye,
     gear,
-    button("×", closeView, "wpw-icon", "Close (Esc)")
+    iconButton("pi-times", closeView, "wpw-icon", "Close (Esc)")
   );
 
   const chats = el("div", { class: "wpw-chats" });
   const rail = el(
     "div",
     { class: "wpw-rail" },
-    button("New chat", () => newChat(), "wpw-btn wpw-new"),
+    labelledButton("pi-plus", "New chat", () => newChat(), "wpw-btn wpw-new"),
     chats
   );
 
   const convo = el("div", { class: "wpw-convo" });
-  const chips = el("div", { class: "wpw-chips" });
+  const attached = el("div", { class: "wpw-attached" });
+  const toolsLeft = el("div", { class: "wpw-tools-left" });
+  const attach = iconButton("pi-image", pickImages, "wpw-tool", ATTACH_TITLE);
   const start = el("select", {
     class: "wpw-start",
-    title: "What the next Write starts from",
+    title: "What the next Write does: edit a version or the current prompt, or write a new prompt",
     onChange: () => chooseStart(),
   });
-  const startChip = el("label", { class: "wpw-chip is-base wpw-start-chip" }, "Start from", start);
+  const startIcon = icon("pi-pencil");
+  const startChip = el("label", { class: "wpw-chip is-base wpw-start-chip" }, startIcon, start);
   const loraScopeButtons = new Map(
     LORA_SCOPES.map((scope) => [scope, button("", () => chooseLoraScope(scope), "wpw-seg-btn")])
   );
   const loraScopeEl = el(
     "span",
     { class: "wpw-seg" },
-    el("span", { class: "wpw-seg-label", text: "Suggest LoRAs" }),
+    el("span", { class: "wpw-seg-label", text: "LoRAs" }),
     ...loraScopeButtons.values()
   );
   const note = el("div", { class: "wpw-note" });
@@ -2259,22 +2324,34 @@ function buildView(promptNode) {
       if (chat) startWrite(chat);
     },
   });
-  const send = button(
-    "Write",
-    () => {
-      const chat = currentChat();
-      if (!chat) return;
-      const job = jobs.get(chat.id);
-      if (job) job.controller.abort();
-      else startWrite(chat);
+  const sendIcon = icon("pi-arrow-up");
+  const send = el(
+    "button",
+    {
+      type: "button",
+      class: "wpw-btn wpw-primary wpw-send",
+      title: "Write (Ctrl+Enter)",
+      "aria-label": "Write (Ctrl+Enter)",
+      onClick: () => {
+        const chat = currentChat();
+        if (!chat) return;
+        const job = jobs.get(chat.id);
+        if (job) job.controller.abort();
+        else startWrite(chat);
+      },
     },
-    "wpw-btn wpw-primary wpw-send"
+    sendIcon
   );
   const composer = el(
     "div",
     { class: "wpw-composer" },
-    chips,
-    el("div", { class: "wpw-compose-row" }, input, send),
+    el(
+      "div",
+      { class: "wpw-box" },
+      attached,
+      input,
+      el("div", { class: "wpw-tools" }, toolsLeft, send)
+    ),
     note
   );
   const main = el("div", { class: "wpw-main" }, convo, composer);
@@ -2363,14 +2440,18 @@ function buildView(promptNode) {
     gear,
     chats,
     convo,
-    chips,
+    attached,
+    toolsLeft,
+    attach,
     loraScope: loraScopeEl,
     start,
+    startIcon,
     startChip,
     loraScopeButtons,
     note,
     input,
     send,
+    sendIcon,
     onWindowKey,
     onWindowPaste,
     promptNode,
