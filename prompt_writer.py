@@ -17,6 +17,7 @@ import math
 import mimetypes
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -152,7 +153,35 @@ def _error_message(code: int, raw: bytes) -> str:
     return f"HTTP {code}: {text[:300] or 'no response body'}"
 
 
+def _broke_off(host: str, exc: Exception, api_key: Optional[str], timeout: float) -> "PromptWriterError":
+    """A connection that failed while the answer was being read."""
+    if isinstance(exc, TimeoutError):
+        return PromptWriterError(f"{host} did not answer within {timeout} s")
+    return PromptWriterError(
+        _scrub(f"The connection to {host} broke off ({type(exc).__name__})", api_key)
+    )
+
+
+def _json_body(raw: bytes, host: str):
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except ValueError:
+        raise PromptWriterError(f"{host} returned a response that is not JSON") from None
+
+
 def _request(url, *, api_key, body=None, timeout, opener):
+    resp = _send(url, api_key=api_key, body=body, timeout=timeout, opener=opener)
+    host = _host(url)
+    try:
+        with resp:
+            raw = resp.read()
+    except (OSError, http.client.HTTPException) as exc:
+        raise _broke_off(host, exc, api_key, timeout) from None
+    return _json_body(raw, host)
+
+
+def _send(url, *, api_key, body=None, timeout, opener):
+    """The open response to a request; whoever reads it closes it."""
     check_url(url)
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
     data = None
@@ -164,8 +193,7 @@ def _request(url, *, api_key, body=None, timeout, opener):
     req = urllib.request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
     host = _host(url)
     try:
-        with opener(req, timeout=timeout) as resp:
-            raw = resp.read()
+        return opener(req, timeout=timeout)
     except urllib.error.HTTPError as exc:
         try:
             raw = exc.read() or b""
@@ -185,10 +213,6 @@ def _request(url, *, api_key, body=None, timeout, opener):
         raise PromptWriterError(
             f"The connection to {host} broke off ({type(exc).__name__})"
         ) from None
-    try:
-        return json.loads(raw.decode("utf-8"))
-    except ValueError:
-        raise PromptWriterError(f"{host} returned a response that is not JSON") from None
 
 
 def _price(value) -> Optional[float]:
@@ -338,6 +362,117 @@ def parse_reply(payload: dict) -> str:
     return text
 
 
+def parse_reasoning(payload: dict) -> str:
+    """What the model thought before answering: a reasoning field, or its <think> blocks."""
+    try:
+        message = payload["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+    if not isinstance(message, dict):
+        return ""
+    for key in ("reasoning", "reasoning_content"):
+        if isinstance(message.get(key), str) and message[key].strip():
+            return message[key].strip()
+    content = message.get("content")
+    if not isinstance(content, str):
+        return ""
+    return "\n".join(m.strip() for m in re.findall(r"(?s)<think>(.*?)(?:</think>|\Z)", content)).strip()
+
+
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+
+
+class _ThinkSplitter:
+    """Splits streamed content into thought and answer at <think> tags, wherever a piece cuts one."""
+
+    def __init__(self):
+        self.inside = False
+        self.held = ""
+
+    def feed(self, piece: str) -> tuple:
+        text = self.held + piece
+        self.held = ""
+        thought, answer = [], []
+        while text:
+            tag = _THINK_CLOSE if self.inside else _THINK_OPEN
+            into = thought if self.inside else answer
+            at = text.find(tag)
+            if at < 0:
+                # The end may be the start of the tag, finished by the next piece.
+                keep = next(
+                    (k for k in range(min(len(tag) - 1, len(text)), 0, -1) if text.endswith(tag[:k])),
+                    0,
+                )
+                into.append(text[: len(text) - keep])
+                self.held = text[len(text) - keep:]
+                break
+            into.append(text[:at])
+            text = text[at + len(tag):]
+            self.inside = not self.inside
+        return "".join(thought), "".join(answer)
+
+    def flush(self) -> tuple:
+        held, self.held = self.held, ""
+        return (held, "") if self.inside else ("", held)
+
+
+def _estimate_tokens(chars: int) -> int:
+    return max(1, round(chars / 4))
+
+
+def _stream_chunks(resp):
+    """The JSON object of each server-sent event, up to [DONE]."""
+    for raw in resp:
+        line = raw.decode("utf-8", "replace").strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            return
+        try:
+            chunk = json.loads(data)
+        except ValueError:
+            continue
+        if isinstance(chunk, dict):
+            yield chunk
+
+
+def _read_stream(resp, on_delta, stopped) -> dict:
+    """A streamed reply, passed on piece by piece, put back together as a whole one."""
+    split = _ThinkSplitter()
+    thought, answer, usage, chars = [], [], {}, 0
+    for chunk in _stream_chunks(resp):
+        if stopped is not None and stopped():
+            raise PromptWriterError("Stopped")
+        if isinstance(chunk.get("usage"), dict):
+            usage = chunk["usage"]
+        choices = chunk.get("choices") if isinstance(chunk.get("choices"), list) else []
+        delta = choices[0].get("delta") if choices and isinstance(choices[0], dict) else None
+        if not isinstance(delta, dict):
+            continue
+        think = next(
+            (delta[key] for key in ("reasoning_content", "reasoning") if isinstance(delta.get(key), str)),
+            "",
+        )
+        content = delta.get("content") if isinstance(delta.get("content"), str) else ""
+        more, text = split.feed(content)
+        think += more
+        if not think and not text:
+            continue
+        thought.append(think)
+        answer.append(text)
+        chars += len(think) + len(text)
+        if on_delta is not None:
+            running = usage.get("completion_tokens")
+            on_delta(think, text, running if isinstance(running, int) else _estimate_tokens(chars))
+    think, text = split.flush()
+    thought.append(think)
+    answer.append(text)
+    message = {"content": "".join(answer), "reasoning": "".join(thought)}
+    return {"choices": [{"message": message}], "usage": usage}
+
+
 def cost_of(payload: dict, model: Optional[dict]) -> Optional[float]:
     """USD: the provider's own figure if it sends one, else usage x listed prices."""
     usage = payload.get("usage") if isinstance(payload, dict) else None
@@ -373,26 +508,44 @@ def write(
     model: Optional[dict],
     opener=_open,
     turns=(),
+    on_delta=None,
+    stopped=None,
 ) -> dict:
+    """Streamed when the server streams: `on_delta(thinking, text, tokens)` hears each piece,
+    and `stopped()` returning true ends the request."""
     body = {
         "model": model_id,
         "temperature": temperature,
-        "stream": False,
+        "stream": True,
+        "stream_options": {"include_usage": True},
         "messages": build_messages(system, idea, previous_result, image_data_urls, turns),
     }
+    url = _endpoint(base_url, "/chat/completions")
+    host = _host(url)
     start = time.monotonic()
-    payload = _request(
-        _endpoint(base_url, "/chat/completions"),
-        api_key=api_key,
-        body=body,
-        timeout=CHAT_TIMEOUT,
-        opener=opener,
-    )
+    resp = _send(url, api_key=api_key, body=body, timeout=CHAT_TIMEOUT, opener=opener)
+    try:
+        with resp:
+            headers = getattr(resp, "headers", None)
+            kind = headers.get("Content-Type", "") if headers is not None else ""
+            # A server that does not stream answers in one piece, which is read the old way.
+            if "text/event-stream" in kind:
+                payload = _read_stream(resp, on_delta, stopped)
+            else:
+                payload = _json_body(resp.read(), host)
+    except (OSError, http.client.HTTPException) as exc:
+        raise _broke_off(host, exc, api_key, CHAT_TIMEOUT) from None
     seconds = float(time.monotonic() - start)
     text = parse_reply(payload)
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
     usage = {k: usage[k] for k in ("prompt_tokens", "completion_tokens") if k in usage}
-    return {"text": text, "seconds": seconds, "usage": usage, "cost": cost_of(payload, model)}
+    return {
+        "text": text,
+        "reasoning": parse_reasoning(payload),
+        "seconds": seconds,
+        "usage": usage,
+        "cost": cost_of(payload, model),
+    }
 
 
 # --- chat titles ------------------------------------------------------------
@@ -734,6 +887,8 @@ def handle_write(
     settings: dict,
     image_path: Callable[[str], Optional[str]],
     opener=_open,
+    on_delta=None,
+    stopped=None,
 ) -> dict:
     key = None
     try:
@@ -773,12 +928,14 @@ def handle_write(
         out = write(
             base_url, model_id, system, temperature, idea, previous, images,
             api_key=key, model=model, opener=opener, turns=turns,
+            on_delta=on_delta, stopped=stopped,
         )
         question = split_question(out["text"])
         if question is not None:
             if not question:
                 raise PromptWriterError("The model returned no text")
-            return {"question": question, **{k: out[k] for k in ("seconds", "usage", "cost")}}
+            kept = ("reasoning", "seconds", "usage", "cost")
+            return {"question": question, **{k: out[k] for k in kept}}
         out["suggestions"] = []
         if loras is not None:
             refs = {lora["ref"] for lora in loras["available"]}
@@ -903,12 +1060,55 @@ def register(routes, web, *, user_dir: str, settings_loader, image_path) -> None
         except Exception:
             return web.json_response({"error": "Invalid request body"})
         settings = await asyncio.to_thread(settings_loader, request)
-        out = await asyncio.to_thread(
-            handle_write,
-            body,
-            env=os.environ,
-            key_file=key_file,
-            settings=settings,
-            image_path=image_path,
+        # One JSON object per line: {"type": "delta", thinking, text, tokens} while the
+        # model answers, then {"type": "done", ...} with what handle_write returns.
+        loop = asyncio.get_running_loop()
+        events = asyncio.Queue()
+        stop = threading.Event()
+
+        def send(event):
+            loop.call_soon_threadsafe(events.put_nowait, event)
+
+        def work():
+            def piece(thinking, text, tokens):
+                send({"type": "delta", "thinking": thinking, "text": text, "tokens": tokens})
+
+            try:
+                out = handle_write(
+                    body,
+                    env=os.environ,
+                    key_file=key_file,
+                    settings=settings,
+                    image_path=image_path,
+                    on_delta=piece,
+                    stopped=stop.is_set,
+                )
+            except Exception as exc:
+                # The stream has to end with its done line whatever went wrong.
+                logger.exception("Prompt Writer: the write failed")
+                out = {"error": f"The write failed ({type(exc).__name__})"}
+            send({"type": "done", **out})
+
+        response = web.StreamResponse(
+            headers={"Content-Type": "application/x-ndjson", "Cache-Control": "no-cache"}
         )
-        return web.json_response(out)
+        await response.prepare(request)
+        asyncio.ensure_future(asyncio.to_thread(work))
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(events.get(), 1.0)
+                except asyncio.TimeoutError:
+                    # Nothing to write while the model thinks in silence: is the browser still there?
+                    if request.transport is None or request.transport.is_closing():
+                        break
+                    continue
+                await response.write((json.dumps(event) + "\n").encode("utf-8"))
+                if event["type"] == "done":
+                    await response.write_eof()
+                    break
+        except ConnectionError:
+            pass  # the browser stopped the write
+        finally:
+            stop.set()
+        return response

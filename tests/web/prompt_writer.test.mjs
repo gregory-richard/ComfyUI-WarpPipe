@@ -23,6 +23,7 @@ const {
   removeTriggerLine,
   resolveSuggestions,
   resolveTarget,
+  splitLines,
   targetLoraTags,
 } = core;
 
@@ -582,4 +583,10 @@ test("enableLoraTag switches the first commented line back on", () => {
 test("disableLoraTag comments the line that holds the tag", () => {
   assert.equal(disableLoraTag("x\n  <lora:a:0.40>\ny", "a"), "x\n  // <lora:a:0.40>\ny");
   assert.equal(disableLoraTag("// <lora:a:0.40>", "a"), "// <lora:a:0.40>");
+});
+
+test("splitLines: whole lines out, the unfinished rest kept", () => {
+  assert.deepEqual(splitLines('{"a":1}\n{"b":2}\n{"c"'), { lines: ['{"a":1}', '{"b":2}'], rest: '{"c"' });
+  assert.deepEqual(splitLines("\n\n"), { lines: [], rest: "" });
+  assert.deepEqual(splitLines("x"), { lines: [], rest: "x" });
 });

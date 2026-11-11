@@ -6,6 +6,8 @@ import {
   CURRENT_PROMPT,
   NEW_PROMPT,
   addVersion,
+  clearFailure,
+  recordFailure,
   dropQuestion,
   openQuestion,
   startLabel,
@@ -65,6 +67,7 @@ test("createChat adds a fresh chat to the store", () => {
     targetLabel: null,
     versions: [],
     pending: null,
+    failure: null,
   });
   assert.equal(store.chats[0], chat);
   assert.equal(createChat(store, { id: "b", now: 6, seedPrompt: "seed" }).seedPrompt, "seed");
@@ -221,6 +224,7 @@ test("addVersion fills every field and numbers from 1", () => {
     activeLoras: [],
     questions: [],
     basePrompt: null,
+    reasoning: "",
   });
   assert.equal(chat.versions[0], v);
   assert.equal(chat.updated, 7);
@@ -503,6 +507,7 @@ test("normalizeStore: repairs the fields it can", () => {
     activeLoras: [],
     questions: [],
     basePrompt: null,
+    reasoning: "",
   });
 });
 
@@ -695,4 +700,73 @@ test("startLabel says where a step started", () => {
   assert.equal(startLabel(chat, "seed"), "edit of the current prompt");
   assert.equal(startLabel(chat, null), "new prompt");
   assert.equal(startLabel(chat, "gone"), "new prompt");
+});
+
+test("a version keeps what the model thought, and an old one has nothing", () => {
+  const chat = createChat(emptyStore(), { id: "c", now: 1 });
+  assert.equal(addVersion(chat, version("v1", 2, { reasoning: "why" })).reasoning, "why");
+  const raw = { version: 1, chats: [{ id: "c", versions: [{ id: "v", text: "t" }] }] };
+  assert.equal(normalizeStore(raw).chats[0].versions[0].reasoning, "");
+  raw.chats[0].versions[0].reasoning = 5;
+  assert.equal(normalizeStore(raw).chats[0].versions[0].reasoning, "");
+});
+
+// --- a failed request survives a reload ---------------------------------------------
+
+const FAILED = {
+  request: "warmer light",
+  images: ["a.png"],
+  baseId: "v1",
+  basePrompt: null,
+  turns: [{ question: "Q", answer: "A" }],
+  answer: "A",
+  originNode: { id: 7 },
+  loraRefs: new Map(),
+  payload: { idea: "warmer light" },
+};
+
+test("recordFailure keeps what a Retry needs, and nothing that only lives in the page", () => {
+  const chat = createChat(emptyStore(), { id: "c", now: 1 });
+  recordFailure(chat, FAILED, "Insufficient balance", 5);
+  assert.deepEqual(chat.failure, {
+    request: "warmer light",
+    images: ["a.png"],
+    baseId: "v1",
+    basePrompt: null,
+    turns: [{ question: "Q", answer: "A" }],
+    answer: "A",
+    message: "Insufficient balance",
+  });
+  assert.equal(chat.updated, 5);
+  FAILED.images.push("b.png");
+  assert.deepEqual(chat.failure.images, ["a.png"]);
+  FAILED.images.pop();
+});
+
+test("clearFailure says whether there was one to clear", () => {
+  const chat = createChat(emptyStore(), { id: "c", now: 1 });
+  assert.equal(clearFailure(chat), false);
+  recordFailure(chat, FAILED, "x", 2);
+  assert.equal(clearFailure(chat), true);
+  assert.equal(chat.failure, null);
+});
+
+test("normalizeStore keeps a saved failure, and drops a broken one", () => {
+  const store = emptyStore();
+  const chat = createChat(store, { id: "c", now: 1 });
+  recordFailure(chat, { request: "r" }, "Timed out", 2);
+  assert.deepEqual(normalizeStore(JSON.parse(JSON.stringify(store))), store);
+  assert.deepEqual(chat.failure, {
+    request: "r",
+    images: [],
+    baseId: null,
+    basePrompt: null,
+    turns: [],
+    answer: null,
+    message: "Timed out",
+  });
+  for (const failure of [null, "x", {}, { request: "r" }, { message: "m" }, { request: 3, message: "m" }]) {
+    const raw = { version: 1, chats: [{ id: "c", versions: [], failure }] };
+    assert.equal(normalizeStore(raw).chats[0].failure, null);
+  }
 });

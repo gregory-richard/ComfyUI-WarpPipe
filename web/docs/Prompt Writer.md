@@ -45,7 +45,7 @@ The newest version is open and editable; your edit is saved when you click away.
 - **Chat titles** — While the first version is being written, a cheap model names the chat from your message (**Title model** in the settings, about 0.002 ¢ per title). A title you typed always stays; an empty field or a failure keeps the first words of your message.
 - **⋮ on a chat** — **Rename** or **Delete** it.
 
-A request that fails shows a red card with the message and **Retry**, and does not count as a version.
+A request that fails shows a red card with the message and **Retry**, and does not count as a version. The card is kept with the chat, so it is still there after a reload. **Retry** sends the request again with the settings as they are now (model, system prompt, temperature, server); the undo arrow takes it back into the input instead.
 
 ## Writing a request
 
@@ -58,7 +58,11 @@ The box at the bottom grows with your text. Images you add show above the text, 
   - **New prompt** — A new prompt from your request alone.
   - Editing with an empty box asks the LLM to optimise the prompt.
 - **LoRAs** — **Off**, **List** or **All**; the choice is kept and the numbers say how many LoRAs each offers. See LoRA suggestions.
-- **↑** — Sends (Ctrl+Enter does too). It is a yellow stop button while the chat writes; the seconds count in the card. Text you have not sent stays in its chat until ComfyUI's page is reloaded.
+- **↑** — Sends (Ctrl+Enter does too). It is a yellow stop button while the chat writes, and **Stop** ends the request at the provider too. Text you have not sent stays in its chat until ComfyUI's page is reloaded.
+
+## While it writes
+
+The card shows what the model is doing (waiting, thinking or writing), the seconds, and an estimate of the tokens it has answered so far; the exact count replaces it when the version is done. Models that send their thinking show it under **Thinking** as it comes, scrolled to the newest line, and the prompt appears as it is written. Once the prompt starts, the thinking folds away, and a finished version keeps it, folded, under its request. Whether a model sends its thinking depends on the model: the `:thinking` variants in NanoGPT's list do.
 
 ## Questions
 

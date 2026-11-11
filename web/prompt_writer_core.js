@@ -282,6 +282,13 @@ export function resolveSuggestions(raw, refs) {
   });
 }
 
+/** Whole lines out of streamed text, and the unfinished rest kept for the next piece. */
+export function splitLines(text) {
+  const parts = text.split("\n");
+  const rest = parts.pop();
+  return { lines: parts.filter((line) => line.trim()), rest };
+}
+
 /** What the composer's scope buttons say. `counts` is undefined until it is known. */
 export function loraScopeCounts(counts) {
   if (counts === undefined) return { list: "…", all: "…" };

@@ -723,8 +723,12 @@ a round send button that stays the same size and turns into a yellow stop button
 it runs. Ctrl+Enter sends.
 Writes are held per chat outside the pop-up, so several run at once and survive
 closing it. The **✨ AI** button on the node is yellow while a chat opened from
-that node writes, and has a green dot when one finished unseen. A failed request
-shows a red card with **Retry** and is not stored.
+that node writes, and has a green dot when one finished unseen. While it writes,
+the card shows waiting, thinking or writing, the seconds and an estimate of the tokens
+so far, the model's thinking as it comes (for models that send it) and the prompt as it
+is written; a finished version keeps the thinking, folded. A failed request shows a red
+card with **Retry**; it is kept with the chat until it is retried, taken back or the chat
+is deleted, and **Retry** uses the current settings.
 
 **Storage:** chats are saved in the ComfyUI user folder as
 `warppipe_prompt_chats.json`, never in a workflow or in images.
@@ -809,11 +813,15 @@ The five `llm` routes serve the 🌀 Prompt Writer pop-up. `models` returns
 `{models: [{id, name, prompt_price, completion_price, vision}]}`,
 `system_prompts` returns `{names: [...]}`, `key_status` returns
 `{set, source, host}`, `key` takes `{base_url, key}`, and `write` takes
-`{base_url, model, system_prompt, temperature, idea, previous_result, references}`
-(`references` is a list of image names in `input/`; an empty `idea` with a
-`previous_result` asks for that prompt to be optimised) and returns
-`{text, seconds, usage, cost}`. Each returns `{error}` instead when something
-fails, and none ever returns a key.
+`{base_url, model, system_prompt, temperature, idea, previous_result, references,
+turns, loras}` (`references` is a list of image names in `input/`; an empty `idea`
+with a `previous_result` asks for that prompt to be optimised). It answers as
+`application/x-ndjson`: `{"type": "delta", thinking, text, tokens}` lines while the
+model writes (`tokens` is an estimate unless the provider counts), then one
+`{"type": "done", ...}` line with `{text, reasoning, seconds, usage, cost, suggestions}`
+or `{question, ...}`. The others answer with plain JSON. Each gives `{error}` instead
+when something fails, and none ever returns a key. Closing the `write` connection
+stops the request at the provider.
 
 ---
 

@@ -72,6 +72,20 @@ function normalizePending(raw) {
   };
 }
 
+/** A request that failed: what a Retry needs, and why it failed. Nothing that lives only in the page. */
+function normalizeFailure(raw) {
+  if (!isObject(raw) || !isId(raw.message) || typeof raw.request !== "string") return null;
+  return {
+    request: raw.request,
+    images: normalizeImages(raw.images),
+    baseId: isId(raw.baseId) ? raw.baseId : null,
+    basePrompt: stringOr(raw.basePrompt, null),
+    turns: normalizeTurns(raw.turns),
+    answer: stringOr(raw.answer, null),
+    message: raw.message,
+  };
+}
+
 function normalizeVersion(raw, n) {
   return {
     id: raw.id,
@@ -90,6 +104,7 @@ function normalizeVersion(raw, n) {
     activeLoras: normalizeSuggestions(raw.activeLoras),
     questions: normalizeTurns(raw.questions),
     basePrompt: stringOr(raw.basePrompt, null),
+    reasoning: stringOr(raw.reasoning, ""),
   };
 }
 
@@ -115,6 +130,7 @@ function normalizeChat(raw) {
     targetLabel: stringOr(raw.targetLabel, null),
     versions: versions.map((v, i) => normalizeVersion(v, i + 1)),
     pending: normalizePending(raw.pending),
+    failure: normalizeFailure(raw.failure),
   };
 }
 
@@ -141,6 +157,7 @@ export function createChat(store, { id, now, seedPrompt = null, targetLabel = nu
     targetLabel,
     versions: [],
     pending: null,
+    failure: null,
   };
   store.chats.push(chat);
   return chat;
@@ -183,6 +200,7 @@ export function addVersion(
     activeLoras = [],
     questions = [],
     basePrompt = null,
+    reasoning = "",
   }
 ) {
   const version = {
@@ -202,6 +220,7 @@ export function addVersion(
     activeLoras: normalizeSuggestions(activeLoras),
     questions: normalizeTurns(questions),
     basePrompt,
+    reasoning: stringOr(reasoning, ""),
   };
   chat.versions.push(version);
   chat.updated = now;
@@ -248,6 +267,28 @@ export function openQuestion(chat, step, question, now) {
   };
   chat.updated = now;
   return chat.pending;
+}
+
+/** Keep a failed request with the chat, so a reload still shows it with its Retry. */
+export function recordFailure(chat, spec, message, now) {
+  chat.failure = normalizeFailure({
+    request: spec.request ?? "",
+    images: spec.images,
+    baseId: spec.baseId,
+    basePrompt: spec.basePrompt,
+    turns: spec.turns,
+    answer: spec.answer,
+    message,
+  });
+  chat.updated = now;
+  return chat.failure;
+}
+
+/** The failed request leaves the chat; says whether there was one. */
+export function clearFailure(chat) {
+  const had = !!chat.failure;
+  chat.failure = null;
+  return had;
 }
 
 /** The waiting step leaves the chat; returned, or null when there was none. */

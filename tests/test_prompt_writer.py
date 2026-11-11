@@ -45,10 +45,11 @@ class _Server:
                 status, body, *extra = outer.replies.popleft() if outer.replies else (200, {})
                 data = body.encode() if isinstance(body, str) else json.dumps(body).encode()
                 self.send_response(status)
+                headers = dict(extra[0]) if extra else {}
                 ctype = "text/plain" if isinstance(body, str) else "application/json"
-                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Type", headers.pop("Content-Type", ctype))
                 self.send_header("Content-Length", str(len(data)))
-                for name, value in (extra[0] if extra else {}).items():
+                for name, value in headers.items():
                     self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(data)
@@ -267,10 +268,12 @@ def test_write_round_trip(server):
     assert req["body"] == {
         "model": "m",
         "temperature": 0.6,
-        "stream": False,
+        "stream": True,
+        "stream_options": {"include_usage": True},
         "messages": [{"role": "system", "content": "S"}, {"role": "user", "content": "idea"}],
     }
     assert result["text"] == "PROMPT"
+    assert result["reasoning"] == ""
     assert result["usage"] == {"prompt_tokens": 10, "completion_tokens": 5}
     assert isinstance(result["seconds"], float)
     assert result["cost"] is None
@@ -346,7 +349,7 @@ def test_handle_write_uses_setting_folder_and_reference(server, tmp_path):
     assert msgs[1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
     assert out["text"] == "OUT"
     assert out["cost"] == pytest.approx(0.003)
-    assert set(out) == {"text", "seconds", "usage", "cost", "suggestions"}
+    assert set(out) == {"text", "reasoning", "seconds", "usage", "cost", "suggestions"}
     assert out["suggestions"] == []
     assert "LOCALKEY" not in json.dumps(out)
 
@@ -1099,7 +1102,7 @@ def test_handle_write_returns_a_question_instead_of_a_version(server, tmp_path):
     content = "===QUESTION===\nIs the sun in the frame?\n===LORAS===\nL1 | 1 | r"
     out = _lora_write(server, tmp_path, content, LORAS)
     assert out["question"] == "Is the sun in the frame?"
-    assert set(out) == {"question", "seconds", "usage", "cost"}
+    assert set(out) == {"question", "reasoning", "seconds", "usage", "cost"}
 
 
 def test_handle_write_an_empty_question_is_the_no_text_error(server, tmp_path):
@@ -1132,3 +1135,94 @@ def test_lora_instructions_say_how_to_ask_before_the_marker_rule():
     assert pw.QUESTION_RULE in text
     assert text.index(pw.QUESTION_RULE) < text.index("After the complete prompt")
     assert pw.QUESTION_MARKER in pw.QUESTION_RULE
+
+
+# --- streamed replies -------------------------------------------------------
+
+SSE = {"Content-Type": "text/event-stream"}
+
+
+def _sse(*chunks):
+    return "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+
+
+def test_write_reads_a_stream_and_passes_on_each_piece(server):
+    server.replies.append(
+        (
+            200,
+            _sse(
+                {"choices": [{"delta": {"reasoning": "Warm "}}]},
+                {"choices": [{"delta": {"reasoning_content": "light."}}]},
+                {"choices": [{"delta": {"content": "A red "}}]},
+                {"choices": [{"delta": {"content": "bicycle."}}]},
+                {"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 7}},
+            ),
+            SSE,
+        )
+    )
+    pieces = []
+    out = pw.write(
+        server.url, "m", "S", 0.6, "i", None, [], api_key="k", model=None,
+        on_delta=lambda *piece: pieces.append(piece),
+    )
+    assert out["text"] == "A red bicycle."
+    assert out["reasoning"] == "Warm light."
+    assert out["usage"] == {"prompt_tokens": 12, "completion_tokens": 7}
+    assert pieces == [("Warm ", "", 1), ("light.", "", 3), ("", "A red ", 4), ("", "bicycle.", 6)]
+
+
+def test_write_takes_the_running_token_count_when_the_stream_gives_one(server):
+    server.replies.append(
+        (200, _sse({"choices": [{"delta": {"content": "A"}}], "usage": {"completion_tokens": 9}}), SSE)
+    )
+    pieces = []
+    pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None, on_delta=lambda *p: pieces.append(p))
+    assert pieces == [("", "A", 9)]
+
+
+def test_write_a_stream_with_think_tags_in_the_content(server):
+    server.replies.append(
+        (200, _sse({"choices": [{"delta": {"content": "<think>hm"}}]}, {"choices": [{"delta": {"content": "</think>P"}}]}), SSE)
+    )
+    out = pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None)
+    assert out["text"] == "P"
+    assert out["reasoning"] == "hm"
+
+
+def test_think_tags_are_split_where_the_pieces_cut_them():
+    split = pw._ThinkSplitter()
+    got = [split.feed(piece) for piece in ["<thi", "nk>plan", " more</th", "ink>\nPROMPT", " end<"]]
+    got.append(split.flush())
+    assert "".join(thought for thought, _ in got) == "plan more"
+    assert "".join(answer for _, answer in got) == "\nPROMPT end<"
+
+
+def test_write_stops_when_told(server):
+    server.replies.append(
+        (200, _sse({"choices": [{"delta": {"content": "A"}}]}, {"choices": [{"delta": {"content": "B"}}]}), SSE)
+    )
+    with pytest.raises(pw.PromptWriterError, match="Stopped"):
+        pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None, stopped=lambda: True)
+
+
+def test_write_keeps_the_reasoning_of_a_whole_reply(server):
+    server.replies.append((200, {"choices": [{"message": {"content": "P", "reasoning_content": "R"}}]}))
+    out = pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None)
+    assert out["text"] == "P"
+    assert out["reasoning"] == "R"
+
+
+def test_handle_write_passes_the_pieces_on_and_returns_the_reasoning(server, tmp_path):
+    server.replies.append((200, {"data": []}))
+    server.replies.append(
+        (200, _sse({"choices": [{"delta": {"reasoning": "why"}}]}, {"choices": [{"delta": {"content": "OUT"}}]}), SSE)
+    )
+    pieces = []
+    out = pw.handle_write(
+        {**WRITE_BASE, "base_url": server.url, "idea": "i"},
+        **_write_kwargs(tmp_path, opener=pw.urllib.request.urlopen),
+        on_delta=lambda *piece: pieces.append(piece),
+    )
+    assert out["text"] == "OUT"
+    assert out["reasoning"] == "why"
+    assert pieces == [("why", "", 1), ("", "OUT", 2)]

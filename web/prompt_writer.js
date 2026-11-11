@@ -28,6 +28,7 @@ import {
   removeTriggerLine,
   resolveSuggestions,
   resolveTarget,
+  splitLines,
   statusParts,
   targetLoraTags,
 } from "./prompt_writer_core.js";
@@ -36,6 +37,7 @@ import {
   CURRENT_PROMPT,
   NEW_PROMPT,
   addVersion,
+  clearFailure,
   createChat,
   deleteChat,
   dropQuestion,
@@ -45,6 +47,7 @@ import {
   mergedDraft,
   normalizeStore,
   openQuestion,
+  recordFailure,
   renameChat,
   rewindChat,
   setAutoTitle,
@@ -75,6 +78,7 @@ const MAX_IMAGES = 8;
 const FLASH_MS = 600;
 const TICK_MS = 1000;
 const TOAST_MS = 4000;
+const LIVE_MS = 100;
 
 // The composer's height, in lines of its CSS line-height plus padding and border.
 const INPUT_LINE = 19;
@@ -332,6 +336,15 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
   overflow-wrap: anywhere; background: var(--wpw-ground); border-radius: 6px; user-select: text;
 }
 .wpw-hint-line { margin-top: 8px; font-size: 12px; color: var(--wpw-muted); }
+/* What the model thought: quiet, scrolled to its newest line while it comes. */
+.wpw-thinking { margin-top: 10px; font-size: 12px; }
+.wpw-thinking summary { cursor: pointer; color: var(--wpw-muted); width: max-content; }
+.wpw-thinking-text {
+  margin-top: 6px; max-height: 180px; overflow-y: auto; padding: 8px 10px; border-radius: 6px;
+  background: var(--wpw-ground); color: var(--wpw-muted); line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
+}
+.wpw-text.is-live { color: color-mix(in srgb, var(--wpw-ink) 80%, transparent); }
 
 /* The prompt itself, set for reading. */
 .wpw-modal .wpw-editor, .wpw-text { font-size: 13.5px; line-height: 1.6; }
@@ -446,8 +459,6 @@ let loraRun = 0;
 
 /** chat id → the running job. */
 const jobs = new Map();
-/** chat id → what failed, kept for its Retry. */
-const failures = new Map();
 /** chat id → the node it was written from, until the chat is opened. */
 const unseen = new Map();
 /** chat id → the unsent composer. */
@@ -564,7 +575,10 @@ function flash(node) {
 }
 
 async function getJson(route, options) {
-  const response = await api.fetchApi(route, options);
+  return readJson(await api.fetchApi(route, options));
+}
+
+async function readJson(response) {
   let body;
   try {
     body = await response.json();
@@ -582,6 +596,46 @@ function postJson(route, payload, signal) {
     body: JSON.stringify(payload),
     signal,
   });
+}
+
+/**
+ * A write, read as it streams: each {"type": "delta"} line goes to `onPiece`, and
+ * the final {"type": "done"} line is what this returns. A server that answers in
+ * one piece, or with an error, is read as plain JSON.
+ */
+async function streamJson(route, payload, signal, onPiece) {
+  const response = await api.fetchApi(route, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!response.body || !(response.headers.get("Content-Type") ?? "").includes("ndjson")) {
+    return readJson(response);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let rest = "";
+  let done = null;
+  const take = (line) => {
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (event?.type === "done") done = event;
+    else if (event?.type === "delta") onPiece(event);
+  };
+  for (;;) {
+    const { value, done: ended } = await reader.read();
+    if (ended) break;
+    const split = splitLines(rest + decoder.decode(value, { stream: true }));
+    rest = split.rest;
+    split.lines.forEach(take);
+  }
+  if (rest.trim()) take(rest);
+  return done ?? { error: "The answer broke off before it was complete." };
 }
 
 function secondsSince(started) {
@@ -881,9 +935,18 @@ function startWrite(chat) {
 
 /** Runs one request; `spec` is everything it needs, so a Retry can repeat it. */
 async function launch(chat, spec) {
-  failures.delete(chat.id);
+  if (clearFailure(chat)) save();
   const controller = new AbortController();
-  const job = { ...spec, chatId: chat.id, controller, startedAt: Date.now(), dropped: false };
+  const job = {
+    ...spec,
+    chatId: chat.id,
+    controller,
+    startedAt: Date.now(),
+    dropped: false,
+    thinking: "",
+    text: "",
+    tokens: 0,
+  };
   jobs.set(chat.id, job);
   syncButton(spec.originNode);
   ticker ??= setInterval(tick, TICK_MS);
@@ -898,7 +961,12 @@ async function launch(chat, spec) {
   let cancelled = false;
   try {
     await attachLoras(spec);
-    out = await postJson("/warppipe/llm/write", spec.payload, controller.signal);
+    out = await streamJson("/warppipe/llm/write", spec.payload, controller.signal, (piece) => {
+      job.thinking += piece.thinking ?? "";
+      job.text += piece.text ?? "";
+      job.tokens = piece.tokens ?? job.tokens;
+      paintLiveSoon();
+    });
     if (out?.error) message = String(out.error);
     else if (!String(out?.question ?? out?.text ?? "").trim()) {
       message = "The model returned no text.";
@@ -914,7 +982,8 @@ async function launch(chat, spec) {
 
   if (cancelled) restoreDraft(chat, spec);
   else if (message) {
-    failures.set(chat.id, { spec, message });
+    recordFailure(chat, spec, message, Date.now());
+    save();
     toast("error", "Prompt failed", chat.title, 6000);
   } else if (out.question) {
     askQuestion(chat, spec, out);
@@ -941,6 +1010,7 @@ function finish(chat, spec, out) {
     activeLoras: spec.activeLoras ?? [],
     questions: spec.turns ?? [],
     basePrompt: spec.basePrompt ?? null,
+    reasoning: String(out.reasoning ?? ""),
   });
   dropQuestion(chat);
   // The first version titles the chat with its first words; a generated title wins.
@@ -1046,7 +1116,7 @@ function rewindTo(chat, version) {
   const rewound = rewindChat(chat, version.id, Date.now());
   if (!rewound) return;
   dropQuestion(chat);
-  failures.delete(chat.id);
+  clearFailure(chat);
   fillDraft(chat, rewound);
   save();
   focusComposer();
@@ -1057,17 +1127,43 @@ function rewindQuestion(chat) {
   if (jobs.has(chat.id)) return;
   const step = dropQuestion(chat);
   if (!step) return;
-  failures.delete(chat.id);
+  clearFailure(chat);
   fillDraft(chat, step);
   save();
   focusComposer();
 }
 
 /** The same for a request that failed, which never became a version. */
-function rewindFailure(chat, failure) {
-  failures.delete(chat.id);
-  fillDraft(chat, failure.spec);
+function rewindFailure(chat) {
+  const failure = chat.failure;
+  clearFailure(chat);
+  if (failure) fillDraft(chat, failure);
+  save();
   focusComposer();
+}
+
+/** A failed request built again from what the chat kept, so a Retry works after a reload too. */
+function retrySpec(chat, failure) {
+  const baseText =
+    failure.basePrompt ?? chat.versions.find((v) => v.id === failure.baseId)?.text ?? "";
+  return withCurrentSettings({
+    request: failure.request,
+    images: failure.images,
+    baseId: failure.baseId,
+    basePrompt: failure.basePrompt,
+    turns: failure.turns,
+    answer: failure.answer,
+    titleAsked: true,
+    originNode: view.promptNode,
+    loraScope: loraScope(),
+    loraNode: view.targetNode,
+    payload: {
+      idea: failure.request,
+      previous_result: baseText,
+      references: failure.images,
+      turns: failure.turns,
+    },
+  });
 }
 
 // --- Images -------------------------------------------------------------------
@@ -1271,7 +1367,7 @@ function railRow(chat) {
     );
   }
   const job = jobs.get(chat.id);
-  const failed = failures.has(chat.id);
+  const failed = !!chat.failure;
   const count = chat.versions.length;
   let sub;
   if (job) {
@@ -1368,6 +1464,91 @@ function stepAsk(chat, step, { onRewind = null, question = null } = {}) {
     question && said("AI", question, " is-question"),
     onRewind && iconButton("pi-undo", onRewind, "wpw-rewind", REWIND_TITLE)
   );
+}
+
+/** What the model is doing, from what has come so far. */
+function phaseOf(job) {
+  if (job.text) return "Writing";
+  if (job.thinking) return "Thinking";
+  return "Waiting for the model";
+}
+
+function tokensText(job) {
+  return job.tokens ? `≈ ${Number(job.tokens).toLocaleString("en-US")} tokens` : "";
+}
+
+/** What the model thought: open while it thinks, closed under a finished version. */
+function thinkingBlock(text, open) {
+  const body = el("div", { class: "wpw-thinking-text", text });
+  const block = el(
+    "details",
+    { class: "wpw-thinking", open },
+    el("summary", { text: "Thinking" }),
+    body
+  );
+  return { block, body };
+}
+
+/** The card of a write in progress, with handles to fill as the pieces come. */
+function liveCard(chat, job, label) {
+  const phase = el("span", { text: phaseOf(job) });
+  const tokens = el("span", { text: tokensText(job) });
+  const status = el(
+    "span",
+    { class: "wpw-status" },
+    el("span", { class: "wpw-spin" }),
+    phase,
+    secondsEl(job.startedAt),
+    tokens
+  );
+  const thinking = thinkingBlock(job.thinking, !job.text);
+  thinking.block.hidden = !job.thinking;
+  const text = el("div", { class: "wpw-text is-live", text: job.text });
+  text.hidden = !job.text;
+  view.live = { chatId: chat.id, phase, tokens, thinking, text, closed: !!job.text };
+  return el(
+    "div",
+    { class: "wpw-card is-writing" },
+    cardHead(chat, label, job.baseId, status),
+    stepAsk(chat, job),
+    thinking.block,
+    text
+  );
+}
+
+let livePaint = null;
+
+/** Pieces come fast; the card catches up a few times a second. */
+function paintLiveSoon() {
+  livePaint ??= setTimeout(() => {
+    livePaint = null;
+    paintLive();
+  }, LIVE_MS);
+}
+
+function paintLive() {
+  const live = view?.live;
+  const job = live ? jobs.get(live.chatId) : null;
+  if (!job || view.chatId !== live.chatId) return;
+  const convo = view.convo;
+  const following = convo.scrollHeight - convo.scrollTop - convo.clientHeight < 60;
+  live.phase.textContent = phaseOf(job);
+  live.tokens.textContent = tokensText(job);
+  if (job.thinking) {
+    live.thinking.block.hidden = false;
+    live.thinking.body.textContent = job.thinking;
+    live.thinking.body.scrollTop = live.thinking.body.scrollHeight;
+  }
+  if (job.text) {
+    // Once the answer starts, the thinking steps aside; it can be opened again.
+    if (!live.closed) {
+      live.thinking.block.open = false;
+      live.closed = true;
+    }
+    live.text.hidden = false;
+    live.text.textContent = job.text;
+  }
+  if (following) convo.scrollTop = convo.scrollHeight;
 }
 
 /** A card's first line: its name, where it started, and how it stands. */
@@ -1539,6 +1720,7 @@ function versionCard(chat, version, index, busy) {
       { class: "wpw-card is-newest" },
       cardHead(chat, label, version.baseId, statusEl(version, title)),
       stepAsk(chat, version, { onRewind: rewind }),
+      version.reasoning && thinkingBlock(version.reasoning, false).block,
       editor,
       ...loraRows(chat, version),
       el("div", { class: "wpw-actions is-block" }, sendButton(version, true))
@@ -1581,6 +1763,7 @@ function versionCard(chat, version, index, busy) {
     { class: "wpw-card" },
     head,
     open && stepAsk(chat, version, { onRewind: rewind }),
+    open && version.reasoning && thinkingBlock(version.reasoning, false).block,
     open && el("div", { class: "wpw-text", text: version.text }),
     ...(open ? loraRows(chat, version) : []),
     open && actions
@@ -1591,52 +1774,30 @@ function renderConvo(stick) {
   flushEdits();
   const chat = currentChat();
   view.editors = [];
+  view.live = null;
   if (!chat) {
     view.convo.replaceChildren();
     return;
   }
   refreshTargets();
   const job = jobs.get(chat.id);
-  const failure = failures.get(chat.id);
+  const failure = chat.failure;
   const items = chat.versions.map((version, index) => versionCard(chat, version, index, !!job));
   const next = `v${chat.versions.length + 1}`;
   if (job) {
-    items.push(
-      el(
-        "div",
-        { class: "wpw-card is-writing" },
-        cardHead(
-          chat,
-          next,
-          job.baseId,
-          el(
-            "span",
-            { class: "wpw-status" },
-            el("span", { class: "wpw-spin" }),
-            "Writing ",
-            secondsEl(job.startedAt)
-          )
-        ),
-        stepAsk(chat, job)
-      )
-    );
+    items.push(liveCard(chat, job, next));
   } else if (failure) {
     items.push(
       el(
         "div",
         { class: "wpw-card is-error" },
-        cardHead(
-          chat,
-          next,
-          failure.spec.baseId,
-          el("span", { class: "wpw-status", text: "Failed" })
-        ),
-        stepAsk(chat, failure.spec, { onRewind: () => rewindFailure(chat, failure) }),
+        cardHead(chat, next, failure.baseId, el("span", { class: "wpw-status", text: "Failed" })),
+        stepAsk(chat, failure, { onRewind: () => rewindFailure(chat) }),
         el("div", { class: "wpw-error-text", text: failure.message }),
         el(
           "div",
           { class: "wpw-actions is-block" },
-          labelledButton("pi-refresh", "Retry", () => launch(chat, failure.spec))
+          labelledButton("pi-refresh", "Retry", () => launch(chat, retrySpec(chat, failure)))
         )
       )
     );
@@ -1675,6 +1836,24 @@ function renderConvo(stick) {
   view.convo.replaceChildren(...items);
   for (const { editor } of view.editors) fitEditor(editor);
   view.convo.scrollTop = stick ? view.convo.scrollHeight : top;
+}
+
+/** A Retry takes what the settings say now: the model may be why it failed. */
+function withCurrentSettings(spec) {
+  const model = String(getSetting(SETTING_MODEL, ""));
+  const systemPrompt = String(getSetting(SETTING_SYSTEM_PROMPT, ""));
+  return {
+    ...spec,
+    model,
+    systemPrompt,
+    payload: {
+      ...spec.payload,
+      base_url: baseUrl(),
+      model,
+      system_prompt: systemPrompt,
+      temperature: clampTemperature(getSetting(SETTING_TEMPERATURE, DEFAULT_TEMPERATURE)),
+    },
+  };
 }
 
 function chip(className, children, onClear, clearTitle) {
@@ -1858,7 +2037,7 @@ function selectChat(id) {
  */
 function reusableChat(label) {
   const empty = sortedChats(store).filter(
-    (chat) => !chat.versions.length && !chat.pending && !jobs.has(chat.id) && !failures.has(chat.id)
+    (chat) => !chat.versions.length && !chat.pending && !jobs.has(chat.id) && !chat.failure
   );
   const untouched = (chat) => {
     const draft = drafts.get(chat.id);
@@ -1885,7 +2064,6 @@ function removeChat(chat) {
     job.controller.abort();
   }
   const node = unseen.get(chat.id);
-  failures.delete(chat.id);
   unseen.delete(chat.id);
   drafts.delete(chat.id);
   syncButton(node);
