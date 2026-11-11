@@ -22,6 +22,7 @@ The cog in the rail opens everything that is set once and then left alone:
 - **Model** — Click to open the list and type to filter. Each entry shows the price per million input/output tokens and an eye for models that see images. A model that is no longer listed stays selected and reads "(not listed)".
 - **System prompt** — The `.txt` files in your system prompt folder; the eye beside it shows the selected one, read-only.
 - **Temperature** — 0–2, default 0.6.
+- **Thinking** — How much the model may think before it writes: **Model default** sends nothing (NanoGPT then thinks at high on models that think), or **Off**, **Minimal**, **Low**, **Medium**, **High**, **Extra high**, **Max**, sent as `reasoning_effort`. More thinking costs more and takes longer. Not every model offers every level, and one a model refuses comes back as an error card.
 - **Title model** — The cheap model that names new chats.
 - **Server** — The OpenAI-compatible server. Default `https://nano-gpt.com/api/v1`. LM Studio, Ollama and llama.cpp work too; plain `http://` is allowed only for `localhost`, `127.0.0.1` and `::1`.
 - **API key** and **Save** — See Setup.
@@ -102,7 +103,7 @@ Chats are stored in the ComfyUI user folder, in `warppipe_prompt_chats.json` (`C
 
 Every request is also written to `warppipe_llm_log.jsonl` in the ComfyUI user folder (`ComfyUI/user/` itself), one JSON object per line, on this machine only:
 
-- **When it is sent** — `"event": "request"` with the time, an `id`, the chat, the server's host, model, system prompt name, temperature, your request (`idea`), the prompt it edits (`previous_result`), the image names, the questions and answers so far, and the LoRA choice with how many LoRAs were offered and active. It is written at once, so it is there even if ComfyUI stops before the answer.
+- **When it is sent** — `"event": "request"` with the time, an `id`, the chat, the server's host, model, system prompt name, temperature, thinking level, your request (`idea`), the prompt it edits (`previous_result`), the image names, the questions and answers so far, and the LoRA choice with how many LoRAs were offered and active. It is written at once, so it is there even if ComfyUI stops before the answer.
 - **When it ends** — `"event": "result"` with the same `id` and the outcome: `text` (with the thinking and the LoRA suggestions), `question`, `error` or `stopped`, plus tokens, cost and seconds.
 
 The log never holds the API key or the images themselves, and a key in an error message is replaced by `***`. When the file passes about 20 MB it is renamed to `warppipe_llm_log.jsonl.1`, replacing an older one, and a new log starts. If the log cannot be written, the request still goes ahead and ComfyUI's console says why. The log holds your requests and prompts in plain text: delete it whenever you like.

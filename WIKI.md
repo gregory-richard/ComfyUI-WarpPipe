@@ -690,6 +690,7 @@ lists** (the backend caches a model list for an hour).
 | `Model` | the model id; a model no longer listed stays selected and reads `(not listed)` |
 | `SystemPrompt` | one of the `.txt` files directly in `SystemPromptDir` |
 | `Temperature` | 0–2, default 0.6 |
+| `ReasoningEffort` | `none` … `max`, sent as `reasoning_effort`; empty (the default) sends nothing |
 | `SystemPromptDir` | Settings → WarpPipe → Prompt Writer |
 
 **Chats and versions:** the left rail lists the chats, newest first. Each write

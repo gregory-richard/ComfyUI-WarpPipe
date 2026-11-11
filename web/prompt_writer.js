@@ -27,6 +27,8 @@ import {
   removeLoraTag,
   removeTriggerLine,
   resolveSuggestions,
+  REASONING_LEVELS,
+  reasoningLevel,
   resolveTarget,
   splitLines,
   statusParts,
@@ -63,6 +65,7 @@ const SETTING_SYSTEM_PROMPT = "WarpPipe.PromptWriter.SystemPrompt";
 const SETTING_TEMPERATURE = "WarpPipe.PromptWriter.Temperature";
 const SETTING_TITLE_MODEL = "WarpPipe.PromptWriter.TitleModel";
 const SETTING_LORA_SCOPE = "WarpPipe.PromptWriter.LoraScope";
+const SETTING_REASONING = "WarpPipe.PromptWriter.ReasoningEffort";
 const LORA_SCOPES = ["off", "list", "all"];
 const DEFAULT_TITLE_MODEL = "gemma-4-26b-a4b-it-chimeraxheretic";
 
@@ -915,6 +918,7 @@ function startWrite(chat) {
       model,
       system_prompt: systemPrompt,
       temperature: clampTemperature(getSetting(SETTING_TEMPERATURE, DEFAULT_TEMPERATURE)),
+      reasoning_effort: reasoningLevel(getSetting(SETTING_REASONING, "")),
       idea: step.request,
       previous_result: step.baseText,
       references: images,
@@ -1862,6 +1866,7 @@ function withCurrentSettings(spec) {
       model,
       system_prompt: systemPrompt,
       temperature: clampTemperature(getSetting(SETTING_TEMPERATURE, DEFAULT_TEMPERATURE)),
+      reasoning_effort: reasoningLevel(getSetting(SETTING_REASONING, "")),
     },
   };
 }
@@ -2399,6 +2404,17 @@ function toggleGear() {
       setSetting(SETTING_TEMPERATURE, value);
     },
   });
+  const thinking = el(
+    "select",
+    {
+      class: "wpw-field wpw-prompts",
+      title:
+        "How much the model may think before it writes. More costs more and takes longer; not every model offers every level.",
+      onChange: () => setSetting(SETTING_REASONING, thinking.value),
+    },
+    ...REASONING_LEVELS.map(([value, label]) => el("option", { value, text: label }))
+  );
+  thinking.value = reasoningLevel(getSetting(SETTING_REASONING, ""));
   const titleModel = el("input", {
     class: "wpw-field",
     type: "text",
@@ -2459,6 +2475,7 @@ function toggleGear() {
     panel.modelRow,
     panel.promptRow,
     settingRow("Temperature", temperature),
+    settingRow("Thinking", thinking),
     settingRow("Title model", titleModel),
     server
   );
@@ -2830,6 +2847,12 @@ app.registerExtension({
       name: "Prompt Writer temperature",
       type: "hidden",
       defaultValue: DEFAULT_TEMPERATURE,
+    },
+    {
+      id: SETTING_REASONING,
+      name: "Prompt Writer thinking level",
+      type: "hidden",
+      defaultValue: "",
     },
     {
       id: SETTING_LORA_SCOPE,

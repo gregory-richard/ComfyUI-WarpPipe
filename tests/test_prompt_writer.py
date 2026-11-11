@@ -1356,3 +1356,27 @@ def test_a_log_that_cannot_be_written_never_breaks_a_write(server, tmp_path, cap
     )
     assert out["text"] == "OUT"
     assert "request log" in caplog.text
+
+
+# --- thinking level -----------------------------------------------------------
+
+
+def test_write_sends_the_thinking_level_only_when_one_is_set(server):
+    server.replies.append((200, {"choices": [{"message": {"content": "P"}}]}))
+    server.replies.append((200, {"choices": [{"message": {"content": "P"}}]}))
+    pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None, reasoning_effort="low")
+    pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None)
+    assert server.requests[0]["body"]["reasoning_effort"] == "low"
+    assert "reasoning_effort" not in server.requests[1]["body"]
+
+
+@pytest.mark.parametrize("raw, sent", [("high", "high"), (" Max ", "max"), ("none", "none"), ("extreme", None), ("", None), (3, None)])
+def test_handle_write_passes_a_known_thinking_level_on(server, tmp_path, raw, sent):
+    server.replies.append((200, {"data": []}))
+    server.replies.append((200, {"choices": [{"message": {"content": "OUT"}}]}))
+    log = tmp_path / "log.jsonl"
+    body = {**WRITE_BASE, "base_url": server.url, "idea": "i", "reasoning_effort": raw}
+    out = pw.handle_write(body, **_write_kwargs(tmp_path, opener=pw.urllib.request.urlopen), log_path=log)
+    assert out["text"] == "OUT"
+    assert _chat_body(server).get("reasoning_effort") == sent
+    assert _log_lines(log)[0]["reasoning_effort"] == sent

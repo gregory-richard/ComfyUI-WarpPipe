@@ -22,6 +22,8 @@ const {
   removeLoraTag,
   removeTriggerLine,
   resolveSuggestions,
+  REASONING_LEVELS,
+  reasoningLevel,
   resolveTarget,
   splitLines,
   targetLoraTags,
@@ -589,4 +591,15 @@ test("splitLines: whole lines out, the unfinished rest kept", () => {
   assert.deepEqual(splitLines('{"a":1}\n{"b":2}\n{"c"'), { lines: ['{"a":1}', '{"b":2}'], rest: '{"c"' });
   assert.deepEqual(splitLines("\n\n"), { lines: [], rest: "" });
   assert.deepEqual(splitLines("x"), { lines: [], rest: "x" });
+});
+
+test("reasoningLevel: a level the server knows, else the model's own default", () => {
+  assert.equal(reasoningLevel("high"), "high");
+  assert.equal(reasoningLevel("xhigh"), "xhigh");
+  assert.equal(reasoningLevel("extreme"), "");
+  assert.equal(reasoningLevel(undefined), "");
+  assert.deepEqual(
+    REASONING_LEVELS.map(([value]) => value),
+    ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
+  );
 });

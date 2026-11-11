@@ -43,6 +43,8 @@ TITLE_TIMEOUT = 30
 MODELS_TIMEOUT = 30
 MODELS_TTL = 3600
 DEFAULT_TEMPERATURE = 0.6
+# How much a model may think first, as NanoGPT names it. Not sent at all means the model's default.
+REASONING_LEVELS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
 MAX_REFERENCES = 8
 IMPROVE_REQUEST = "Improve this prompt. Keep what it describes."
 # Many chat templates refuse a conversation whose first turn is the model's.
@@ -515,6 +517,7 @@ def write(
     turns=(),
     on_delta=None,
     stopped=None,
+    reasoning_effort: Optional[str] = None,
 ) -> dict:
     """Streamed when the server streams: `on_delta(thinking, text, tokens)` hears each piece,
     and `stopped()` returning true ends the request."""
@@ -525,6 +528,8 @@ def write(
         "stream_options": {"include_usage": True},
         "messages": build_messages(system, idea, previous_result, image_data_urls, turns),
     }
+    if reasoning_effort:
+        body["reasoning_effort"] = reasoning_effort
     url = _endpoint(base_url, "/chat/completions")
     host = _host(url)
     start = time.monotonic()
@@ -944,6 +949,9 @@ def handle_write(
         except (TypeError, ValueError):
             temperature = DEFAULT_TEMPERATURE
         temperature = min(2.0, max(0.0, temperature))
+        raw_effort = body.get("reasoning_effort")
+        effort = raw_effort.strip().lower() if isinstance(raw_effort, str) else ""
+        effort = effort if effort in REASONING_LEVELS else None
         system = read_system_prompt(
             (settings or {}).get(SETTING_DIR), str(body.get("system_prompt") or "")
         )
@@ -973,6 +981,7 @@ def handle_write(
                 "model": model_id,
                 "system_prompt": str(body.get("system_prompt") or ""),
                 "temperature": temperature,
+                "reasoning_effort": effort,
                 "idea": idea,
                 "previous_result": previous,
                 "images": names,
@@ -988,7 +997,7 @@ def handle_write(
         out = write(
             base_url, model_id, system, temperature, idea, previous, images,
             api_key=key, model=model, opener=opener, turns=turns,
-            on_delta=on_delta, stopped=stopped,
+            on_delta=on_delta, stopped=stopped, reasoning_effort=effort,
         )
         question = split_question(out["text"])
         if question is not None:

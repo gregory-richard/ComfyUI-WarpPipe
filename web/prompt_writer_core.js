@@ -282,6 +282,26 @@ export function resolveSuggestions(raw, refs) {
   });
 }
 
+/**
+ * How much a model may think before it writes, as NanoGPT names the levels.
+ * "" sends nothing, so the model keeps its own default.
+ */
+export const REASONING_LEVELS = [
+  ["", "Model default"],
+  ["none", "Off"],
+  ["minimal", "Minimal"],
+  ["low", "Low"],
+  ["medium", "Medium"],
+  ["high", "High"],
+  ["xhigh", "Extra high"],
+  ["max", "Max"],
+];
+
+/** A level the server knows, else "" for the model's default. */
+export function reasoningLevel(value) {
+  return REASONING_LEVELS.some(([level]) => level && level === value) ? value : "";
+}
+
 /** Whole lines out of streamed text, and the unfinished rest kept for the next piece. */
 export function splitLines(text) {
   const parts = text.split("\n");
