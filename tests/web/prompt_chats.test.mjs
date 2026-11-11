@@ -3,7 +3,14 @@ import { test } from "node:test";
 
 import {
   CHATS_FILE,
+  CURRENT_PROMPT,
+  NEW_PROMPT,
   addVersion,
+  dropQuestion,
+  openQuestion,
+  startLabel,
+  startOptions,
+  startValue,
   baseText,
   createChat,
   deleteChat,
@@ -57,6 +64,7 @@ test("createChat adds a fresh chat to the store", () => {
     seedPrompt: null,
     targetLabel: null,
     versions: [],
+    pending: null,
   });
   assert.equal(store.chats[0], chat);
   assert.equal(createChat(store, { id: "b", now: 6, seedPrompt: "seed" }).seedPrompt, "seed");
@@ -211,6 +219,8 @@ test("addVersion fills every field and numbers from 1", () => {
     usage: { prompt_tokens: 1, completion_tokens: 2 },
     suggestions: [],
     activeLoras: [],
+    questions: [],
+    basePrompt: null,
   });
   assert.equal(chat.versions[0], v);
   assert.equal(chat.updated, 7);
@@ -491,6 +501,8 @@ test("normalizeStore: repairs the fields it can", () => {
     usage: {},
     suggestions: [],
     activeLoras: [],
+    questions: [],
+    basePrompt: null,
   });
 });
 
@@ -584,4 +596,103 @@ test("setAutoTitle replaces an automatic title but never one the user typed", ()
   renameChat(chat, "Mine");
   assert.equal(setAutoTitle(chat, "Other"), false);
   assert.equal(chat.title, "Mine");
+});
+
+// --- steps, questions and where a step starts -------------------------------------
+
+test("a version keeps the questions on the way and the prompt it started from", () => {
+  const chat = createChat(emptyStore(), { id: "c", now: 1 });
+  const turns = [{ question: "Q", answer: "A" }];
+  const v = addVersion(
+    chat,
+    version("v1", 2, { questions: turns, basePrompt: "THE PROMPT", baseId: CURRENT_PROMPT })
+  );
+  assert.deepEqual(v.questions, [{ question: "Q", answer: "A" }]);
+  assert.equal(v.basePrompt, "THE PROMPT");
+  turns[0].answer = "changed";
+  assert.equal(v.questions[0].answer, "A");
+  const raw = JSON.parse(JSON.stringify({ version: 1, chats: [chat] }));
+  raw.chats[0].versions[0].questions.push({ question: "", answer: "x" }, { question: "Q2" }, "junk");
+  assert.deepEqual(normalizeStore(raw).chats[0].versions[0].questions, [
+    { question: "Q", answer: "A" },
+  ]);
+});
+
+test("openQuestion puts a step on hold, dropQuestion takes it back", () => {
+  const chat = createChat(emptyStore(), { id: "c", now: 1 });
+  const step = { request: "warmer", images: ["a.png"], baseId: "v1", basePrompt: null, turns: [] };
+  const pending = openQuestion(chat, step, "Sun in frame?", 5);
+  assert.deepEqual(pending, {
+    request: "warmer",
+    images: ["a.png"],
+    baseId: "v1",
+    basePrompt: null,
+    turns: [],
+    question: "Sun in frame?",
+  });
+  assert.equal(chat.updated, 5);
+  step.images.push("b.png");
+  assert.deepEqual(chat.pending.images, ["a.png"]);
+  assert.equal(dropQuestion(chat), pending);
+  assert.equal(chat.pending, null);
+  assert.equal(dropQuestion(chat), null);
+});
+
+test("normalizeStore keeps a step that waits for an answer, and drops a broken one", () => {
+  const store = emptyStore();
+  const chat = createChat(store, { id: "c", now: 1 });
+  const turns = [{ question: "Q", answer: "A" }];
+  openQuestion(chat, { request: "r", images: [], baseId: null, basePrompt: "P", turns }, "Q2", 2);
+  assert.deepEqual(normalizeStore(JSON.parse(JSON.stringify(store))), store);
+  for (const pending of [null, "x", {}, { question: "" }, { request: "r" }]) {
+    const raw = { version: 1, chats: [{ id: "c", versions: [], pending }] };
+    assert.equal(normalizeStore(raw).chats[0].pending, null);
+  }
+});
+
+test("startOptions: the versions newest first, then the current prompt and nothing", () => {
+  const chat = createChat(emptyStore(), { id: "c", now: 1 });
+  assert.deepEqual(startOptions(chat, "Krea 2"), [
+    { value: CURRENT_PROMPT, label: "Current prompt · Krea 2" },
+    { value: NEW_PROMPT, label: "Nothing · new prompt" },
+  ]);
+  addVersion(chat, version("v1", 2, { request: "a red bicycle by the lake at dawn please" }));
+  addVersion(chat, version("v2", 3, { request: "" }));
+  addVersion(chat, version("v3", 4));
+  assert.deepEqual(
+    startOptions(chat, null).map((o) => o.label),
+    [
+      "v3 · newest",
+      "v2 · optimised",
+      "v1 · a red bicycle by the lake",
+      "Current prompt · the For node",
+      "Nothing · new prompt",
+    ]
+  );
+  assert.deepEqual(
+    startOptions(chat, null).map((o) => o.value),
+    ["v3", "v2", "v1", CURRENT_PROMPT, NEW_PROMPT]
+  );
+});
+
+test("startValue: a draft's choice while it exists, else the newest version, else nothing", () => {
+  const chat = createChat(emptyStore(), { id: "c", now: 1 });
+  assert.equal(startValue(chat, null), NEW_PROMPT);
+  assert.equal(startValue(chat, CURRENT_PROMPT), CURRENT_PROMPT);
+  addVersion(chat, version("v1", 2));
+  addVersion(chat, version("v2", 3));
+  assert.equal(startValue(chat, null), "v2");
+  assert.equal(startValue(chat, "v1"), "v1");
+  assert.equal(startValue(chat, "gone"), "v2");
+  assert.equal(startValue(chat, NEW_PROMPT), NEW_PROMPT);
+});
+
+test("startLabel says where a step started", () => {
+  const chat = createChat(emptyStore(), { id: "c", now: 1 });
+  addVersion(chat, version("v1", 2));
+  assert.equal(startLabel(chat, "v1"), "from v1");
+  assert.equal(startLabel(chat, CURRENT_PROMPT), "from the current prompt");
+  assert.equal(startLabel(chat, "seed"), "from the current prompt");
+  assert.equal(startLabel(chat, null), "new prompt");
+  assert.equal(startLabel(chat, "gone"), "new prompt");
 });

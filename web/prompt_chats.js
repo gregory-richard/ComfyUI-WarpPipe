@@ -2,6 +2,10 @@
 // versions. Pure data handling, so it can be tested under node.
 
 export const CHATS_FILE = "warppipe_prompt_chats.json";
+/** Start from the text in the prompt box of the For node, read when Write is pressed. */
+export const CURRENT_PROMPT = "prompt";
+/** Start from nothing: a new prompt from the request alone. */
+export const NEW_PROMPT = "none";
 
 const STORE_VERSION = 1;
 const DEFAULT_TITLE = "New chat";
@@ -47,6 +51,27 @@ function normalizeSuggestions(raw) {
   }));
 }
 
+const isTurn = (raw) => isObject(raw) && isId(raw.question) && isId(raw.answer);
+
+/** The questions the AI asked on the way to a version, each with its answer. */
+function normalizeTurns(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(isTurn).map(({ question, answer }) => ({ question, answer }));
+}
+
+/** A step that waits for the answer to a question, or null. */
+function normalizePending(raw) {
+  if (!isObject(raw) || !isId(raw.question) || typeof raw.request !== "string") return null;
+  return {
+    request: raw.request,
+    images: normalizeImages(raw.images),
+    baseId: isId(raw.baseId) ? raw.baseId : null,
+    basePrompt: stringOr(raw.basePrompt, null),
+    turns: normalizeTurns(raw.turns),
+    question: raw.question,
+  };
+}
+
 function normalizeVersion(raw, n) {
   return {
     id: raw.id,
@@ -63,6 +88,8 @@ function normalizeVersion(raw, n) {
     usage: isObject(raw.usage) ? { ...raw.usage } : {},
     suggestions: normalizeSuggestions(raw.suggestions),
     activeLoras: normalizeSuggestions(raw.activeLoras),
+    questions: normalizeTurns(raw.questions),
+    basePrompt: stringOr(raw.basePrompt, null),
   };
 }
 
@@ -87,6 +114,7 @@ function normalizeChat(raw) {
     seedPrompt: stringOr(raw.seedPrompt, null),
     targetLabel: stringOr(raw.targetLabel, null),
     versions: versions.map((v, i) => normalizeVersion(v, i + 1)),
+    pending: normalizePending(raw.pending),
   };
 }
 
@@ -112,24 +140,29 @@ export function createChat(store, { id, now, seedPrompt = null, targetLabel = nu
     seedPrompt,
     targetLabel,
     versions: [],
+    pending: null,
   };
   store.chats.push(chat);
   return chat;
 }
 
-/** The first words of a request, as a chat title. */
-export function titleFrom(request) {
-  const words = String(request ?? "")
+/** The first words of a text, or "" when it has none. */
+function firstWords(text) {
+  const words = String(text ?? "")
     .trim()
     .split(/\s+/)
     .slice(0, TITLE_WORDS)
     .join(" ");
-  if (!words) return DEFAULT_TITLE;
   // The cut may fall in the middle of an emoji's surrogate pair.
   return words
     .slice(0, TITLE_CHARS)
     .replace(/[\uD800-\uDBFF]$/, "")
     .trimEnd();
+}
+
+/** The first words of a request, as a chat title. */
+export function titleFrom(request) {
+  return firstWords(request) || DEFAULT_TITLE;
 }
 
 export function addVersion(
@@ -148,6 +181,8 @@ export function addVersion(
     usage = {},
     suggestions = [],
     activeLoras = [],
+    questions = [],
+    basePrompt = null,
   }
 ) {
   const version = {
@@ -165,6 +200,8 @@ export function addVersion(
     usage: { ...usage },
     suggestions: normalizeSuggestions(suggestions),
     activeLoras: normalizeSuggestions(activeLoras),
+    questions: normalizeTurns(questions),
+    basePrompt,
   };
   chat.versions.push(version);
   chat.updated = now;
@@ -193,6 +230,58 @@ export function rewindChat(chat, versionId, now) {
   const [version] = chat.versions.splice(index);
   chat.updated = now;
   return version;
+}
+
+/**
+ * The AI asked instead of writing: the step waits in the chat for an answer.
+ * `step` is {request, images, baseId, basePrompt, turns}, the turns being the
+ * questions already answered on the way.
+ */
+export function openQuestion(chat, step, question, now) {
+  chat.pending = {
+    request: step.request ?? "",
+    images: [...(step.images ?? [])],
+    baseId: step.baseId ?? null,
+    basePrompt: step.basePrompt ?? null,
+    turns: normalizeTurns(step.turns),
+    question,
+  };
+  chat.updated = now;
+  return chat.pending;
+}
+
+/** The waiting step leaves the chat; returned, or null when there was none. */
+export function dropQuestion(chat) {
+  const pending = chat.pending ?? null;
+  chat.pending = null;
+  return pending;
+}
+
+/** What Start from offers: the versions newest first, the current prompt, nothing. */
+export function startOptions(chat, targetLabel) {
+  const versions = [...chat.versions].reverse().map((v, i) => ({
+    value: v.id,
+    label: `v${v.n} · ${i === 0 ? "newest" : firstWords(v.request) || "optimised"}`,
+  }));
+  return [
+    ...versions,
+    { value: CURRENT_PROMPT, label: `Current prompt · ${targetLabel || "the For node"}` },
+    { value: NEW_PROMPT, label: "Nothing · new prompt" },
+  ];
+}
+
+/** Which of them is chosen: the draft's own choice while it exists, else the newest version. */
+export function startValue(chat, base) {
+  if (base === CURRENT_PROMPT || base === NEW_PROMPT) return base;
+  if (base != null && chat.versions.some((v) => v.id === base)) return base;
+  return chat.versions.at(-1)?.id ?? NEW_PROMPT;
+}
+
+/** How a step says where it started. "seed" is how older chats said current prompt. */
+export function startLabel(chat, baseId) {
+  if (baseId === CURRENT_PROMPT || baseId === "seed") return "from the current prompt";
+  const version = chat.versions.find((v) => v.id === baseId);
+  return version ? `from v${version.n}` : "new prompt";
 }
 
 /**

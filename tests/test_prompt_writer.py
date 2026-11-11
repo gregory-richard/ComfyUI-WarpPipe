@@ -341,7 +341,7 @@ def test_handle_write_uses_setting_folder_and_reference(server, tmp_path):
     chat = [r for r in server.requests if r["path"].endswith("/chat/completions")][0]
     assert chat["headers"]["Authorization"] == "Bearer LOCALKEY"
     msgs = chat["body"]["messages"]
-    assert msgs[0] == {"role": "system", "content": "SYS"}
+    assert msgs[0] == {"role": "system", "content": "SYS\n\n" + pw.QUESTION_RULE}
     assert len(msgs) == 2
     assert msgs[1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
     assert out["text"] == "OUT"
@@ -934,7 +934,7 @@ def _lora_write(server, tmp_path, content, loras):
 
 def test_handle_write_without_loras_behaves_as_before(server, tmp_path):
     out = _lora_write(server, tmp_path, "OUT\n===LORAS===\nL1 | 1 | r", None)
-    assert _chat_body(server)["messages"][0] == {"role": "system", "content": "SYS"}
+    assert _chat_body(server)["messages"][0] == {"role": "system", "content": "SYS\n\n" + pw.QUESTION_RULE}
     assert out["text"] == "OUT\n===LORAS===\nL1 | 1 | r"
     assert out["suggestions"] == []
 
@@ -961,14 +961,14 @@ def test_handle_write_block_only_is_the_no_text_error(server, tmp_path):
 
 def test_handle_write_loras_that_are_not_a_dict_count_as_not_sent(server, tmp_path):
     out = _lora_write(server, tmp_path, "OUT\n===LORAS===", ["L1"])
-    assert _chat_body(server)["messages"][0]["content"] == "SYS"
+    assert _chat_body(server)["messages"][0]["content"] == "SYS\n\n" + pw.QUESTION_RULE
     assert out["text"] == "OUT\n===LORAS==="
     assert out["suggestions"] == []
 
 
 def test_handle_write_empty_loras_add_no_instructions(server, tmp_path):
     out = _lora_write(server, tmp_path, "OUT", {"available": [], "active": []})
-    assert _chat_body(server)["messages"][0]["content"] == "SYS"
+    assert _chat_body(server)["messages"][0]["content"] == "SYS\n\n" + pw.QUESTION_RULE
     assert out["text"] == "OUT"
     assert out["suggestions"] == []
 
@@ -1057,3 +1057,78 @@ def test_a_connection_that_breaks_off_is_an_error_the_user_can_read():
 @pytest.mark.parametrize("body", [["x"], "x", 3, None])
 def test_handle_title_refuses_a_body_that_is_not_an_object(body):
     assert pw.handle_title(body, env={}, key_file=None) == {"error": "Invalid request"}
+
+
+# --- questions --------------------------------------------------------------
+
+
+def test_build_messages_carries_questions_and_answers():
+    turns = [{"question": "Sun in frame?", "answer": "No"}, {"question": "Morning?", "answer": "Yes"}]
+    m = pw.build_messages("S", "warmer light", "OLD", [], turns)
+    roles = ["system", "user", "assistant", "user", "assistant", "user", "assistant", "user"]
+    assert [x["role"] for x in m] == roles
+    assert m[3] == {"role": "user", "content": "warmer light"}
+    assert m[4] == {"role": "assistant", "content": f"{pw.QUESTION_MARKER}\nSun in frame?"}
+    assert m[5] == {"role": "user", "content": "No"}
+    assert m[7] == {"role": "user", "content": "Yes"}
+
+
+def test_build_messages_images_stay_with_the_request():
+    m = pw.build_messages("S", "idea", None, ["data:image/png;base64,AAA"], [{"question": "Q", "answer": "A"}])
+    assert m[1]["content"][0] == {"type": "text", "text": "idea"}
+    assert m[3] == {"role": "user", "content": "A"}
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("===QUESTION===\nIs the sun in the frame?", "Is the sun in the frame?"),
+        ("\n**===QUESTION===**\nWhich lake?\nOr a river?", "Which lake?\nOr a river?"),
+        ("===QUESTION===\nWhich lake?\n===LORAS===\nL1 | 1 | r", "Which lake?"),
+        ("===question===\r\nWhich?\r\n", "Which?"),
+        ("A prompt\n===QUESTION===\nnot at the start", None),
+        ("A prompt", None),
+        ("===QUESTION===", ""),
+    ],
+)
+def test_split_question(text, expected):
+    assert pw.split_question(text) == expected
+
+
+def test_handle_write_returns_a_question_instead_of_a_version(server, tmp_path):
+    content = "===QUESTION===\nIs the sun in the frame?\n===LORAS===\nL1 | 1 | r"
+    out = _lora_write(server, tmp_path, content, LORAS)
+    assert out["question"] == "Is the sun in the frame?"
+    assert set(out) == {"question", "seconds", "usage", "cost"}
+
+
+def test_handle_write_an_empty_question_is_the_no_text_error(server, tmp_path):
+    assert _lora_write(server, tmp_path, "===QUESTION===\n", None) == {"error": "The model returned no text"}
+
+
+def test_handle_write_sends_the_questions_and_answers(server, tmp_path):
+    server.replies.append((200, {"data": []}))
+    server.replies.append((200, {"choices": [{"message": {"content": "OUT"}}]}))
+    body = {**WRITE_BASE, "base_url": server.url, "idea": "i", "turns": [{"question": " Q ", "answer": " A "}]}
+    out = pw.handle_write(body, **_write_kwargs(tmp_path, opener=pw.urllib.request.urlopen))
+    assert out["text"] == "OUT"
+    assert _chat_body(server)["messages"][-2:] == [
+        {"role": "assistant", "content": f"{pw.QUESTION_MARKER}\nQ"},
+        {"role": "user", "content": "A"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "turns",
+    ["x", [1], [{"question": "Q"}], [{"question": "", "answer": "A"}], [{"question": "Q", "answer": "A"}] * 9],
+)
+def test_handle_write_refuses_bad_questions_and_answers(tmp_path, turns):
+    body = {**WRITE_BASE, "idea": "i", "turns": turns}
+    assert "error" in pw.handle_write(body, **_write_kwargs(tmp_path))
+
+
+def test_lora_instructions_say_how_to_ask_before_the_marker_rule():
+    text = pw.lora_instructions(LORAS)
+    assert pw.QUESTION_RULE in text
+    assert text.index(pw.QUESTION_RULE) < text.index("After the complete prompt")
+    assert pw.QUESTION_MARKER in pw.QUESTION_RULE

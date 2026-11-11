@@ -43,6 +43,14 @@ IMPROVE_REQUEST = "Improve this prompt. Keep what it describes."
 BASE_REQUEST = "Write the current version of the prompt."
 # A thought cut off by a token limit never closes, and is still only a thought.
 _THINK = re.compile(r"(?s)<think>.*?(?:</think>|\Z)")
+# A system prompt may tell the model to ask instead of writing. This is how it says so.
+QUESTION_MARKER = "===QUESTION==="
+QUESTION_RULE = (
+    "If you ask the user a question instead of writing the prompt, begin your reply with a "
+    f"line containing exactly {QUESTION_MARKER} and write only the question after it."
+)
+MAX_TURNS = 8
+MAX_TURN_CHARS = 4000
 
 
 def _read_version() -> str:
@@ -287,8 +295,13 @@ def read_system_prompt(folder: Optional[str], name: str) -> str:
 
 
 def build_messages(
-    system: str, idea: str, previous_result: Optional[str], image_data_urls: list
+    system: str,
+    idea: str,
+    previous_result: Optional[str],
+    image_data_urls: list,
+    turns=(),
 ) -> list:
+    """The base as the model's own answer, the request, then each question and its answer."""
     messages = [{"role": "system", "content": system}]
     if previous_result:
         messages.append({"role": "user", "content": BASE_REQUEST})
@@ -300,6 +313,9 @@ def build_messages(
     else:
         content = text
     messages.append({"role": "user", "content": content})
+    for turn in turns:
+        messages.append({"role": "assistant", "content": f"{QUESTION_MARKER}\n{turn['question']}"})
+        messages.append({"role": "user", "content": turn["answer"]})
     return messages
 
 
@@ -356,12 +372,13 @@ def write(
     api_key: Optional[str],
     model: Optional[dict],
     opener=_open,
+    turns=(),
 ) -> dict:
     body = {
         "model": model_id,
         "temperature": temperature,
         "stream": False,
-        "messages": build_messages(system, idea, previous_result, image_data_urls),
+        "messages": build_messages(system, idea, previous_result, image_data_urls, turns),
     }
     start = time.monotonic()
     payload = _request(
@@ -528,6 +545,7 @@ def lora_instructions(loras: dict) -> str:
         "Never use trigger words of LoRAs that are not active, "
         "and never mention LoRAs in the prompt."
     )
+    blocks.append(QUESTION_RULE)
     keep_close = (
         "Keep close to the ACTIVE LoRAs: suggest a LoRA only for something they do not already "
         "cover, and never one that does the same job as an active LoRA or works against it. "
@@ -588,6 +606,37 @@ def split_suggestions(text: str, valid_refs, limit: int = MAX_SUGGESTIONS) -> tu
         if len(found) == limit:
             break
     return "\n".join(lines[:at]).strip(), found
+
+
+def split_question(text: str) -> Optional[str]:
+    """The question, when the reply starts with the marker; None when the reply is a prompt."""
+    lines = text.split("\n")
+    first = next((i for i, line in enumerate(lines) if line.strip()), None)
+    if first is None or lines[first].strip(_MARKER_DECORATION).upper() != QUESTION_MARKER:
+        return None
+    rest = lines[first + 1:]
+    end = next((i for i, line in enumerate(rest) if _is_marker(line)), len(rest))
+    return "\n".join(line.rstrip("\r") for line in rest[:end]).strip()
+
+
+def _turns(raw) -> list:
+    """The questions asked on the way to this write, each with the user's answer."""
+    if raw is None:
+        return []
+    bad = PromptWriterError("Invalid questions and answers")
+    if not isinstance(raw, list) or len(raw) > MAX_TURNS:
+        raise bad
+    turns = []
+    for item in raw:
+        question = item.get("question") if isinstance(item, dict) else None
+        answer = item.get("answer") if isinstance(item, dict) else None
+        if not isinstance(question, str) or not isinstance(answer, str):
+            raise bad
+        question, answer = question.strip(), answer.strip()
+        if not question or not answer:
+            raise bad
+        turns.append({"question": question[:MAX_TURN_CHARS], "answer": answer[:MAX_TURN_CHARS]})
+    return turns
 
 
 # --- request handling (no aiohttp) -----------------------------------------
@@ -708,9 +757,10 @@ def handle_write(
             (settings or {}).get(SETTING_DIR), str(body.get("system_prompt") or "")
         )
         loras = clean_loras(body.get("loras"))
-        extra = lora_instructions(loras) if loras else ""
-        if extra:
-            system = f"{system.rstrip()}\n\n{extra}"
+        turns = _turns(body.get("turns"))
+        # The LoRA rules carry the question rule; without them it stands alone.
+        extra = (lora_instructions(loras) if loras else "") or QUESTION_RULE
+        system = f"{system.rstrip()}\n\n{extra}"
         images = [
             _image_data_url(name, image_path) for name in _reference_names(body.get("references"))
         ]
@@ -722,8 +772,13 @@ def handle_write(
             model = None
         out = write(
             base_url, model_id, system, temperature, idea, previous, images,
-            api_key=key, model=model, opener=opener,
+            api_key=key, model=model, opener=opener, turns=turns,
         )
+        question = split_question(out["text"])
+        if question is not None:
+            if not question:
+                raise PromptWriterError("The model returned no text")
+            return {"question": question, **{k: out[k] for k in ("seconds", "usage", "cost")}}
         out["suggestions"] = []
         if loras is not None:
             refs = {lora["ref"] for lora in loras["available"]}

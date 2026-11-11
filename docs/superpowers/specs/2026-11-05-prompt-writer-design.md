@@ -140,3 +140,9 @@ The hub node meant jumping between it and the group's prompt, and its state and 
 - **Never automatic:** a suggestion reaches the list only through **+** on its chip, which also puts the trigger words on the first line of that version. Pressing it again removes both.
 - **Sections:** `////` lines in the Prompt + LoRAs boxes start foldable sections. A textarea cannot hide lines, so a CodeMirror editor lies over it and the textarea stays the truth; the value never changes. Without the editor a box is a plain text box and does not fold. Folded state lives in `node.properties.warppipeFolded`.
 - **Active LoRAs:** each version stores the LoRAs that were on when it was written and shows them with a check above the suggestions. While LoRAs are active the LLM is told to keep close to them and may suggest at most two.
+
+## Addendum 2026-11-11 (approved in chat): Start from, step cards, questions
+
+- **Start from** replaces the base chip and **+ Current prompt**: a select with the versions (newest by default), **Current prompt** (the For node's text, read at Write and stored on the version as `basePrompt`) and **Nothing**.
+- **Step cards:** the LLM never sees the chat, only the starting point, the request and the questions on the way, so the chat is not drawn as a conversation. Each card holds where it started, the request with its images, the questions and answers, and the prompt.
+- **Questions:** `QUESTION_RULE` follows the master prompt (before the LoRA marker rule). A reply starting with `===QUESTION===` comes back as `{question}`; the chat keeps it as `pending` until it is answered. The answer is sent as `turns` (assistant question, user answer), and the finished version keeps them as `questions`.

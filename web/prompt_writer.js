@@ -32,19 +32,25 @@ import {
 } from "./prompt_writer_core.js";
 import {
   CHATS_FILE,
+  CURRENT_PROMPT,
+  NEW_PROMPT,
   addVersion,
-  baseText,
   createChat,
   deleteChat,
+  dropQuestion,
   emptyStore,
   isStore,
   latestChatFor,
   mergedDraft,
   normalizeStore,
+  openQuestion,
   renameChat,
   rewindChat,
   setAutoTitle,
   sortedChats,
+  startLabel,
+  startOptions,
+  startValue,
 } from "./prompt_chats.js";
 
 const SETTING_DIR = "WarpPipe.PromptWriter.SystemPromptDir";
@@ -75,8 +81,10 @@ const INPUT_CHROME = 18;
 const INPUT_MIN_LINES = 3;
 const INPUT_MAX_LINES = 10;
 
-// A draft's base: null follows the newest version, this one starts without any.
-const NO_BASE = "none";
+const PLACEHOLDER_WRITE = "Describe the prompt, or the change you want. Ctrl+Enter sends.";
+const PLACEHOLDER_ANSWER = "Answer the question. Ctrl+Enter sends.";
+const REWIND_TITLE =
+  "Go back to this request: it moves into the input, and it and everything after it leave the chat";
 
 const STYLE = `
 .wpw-open {
@@ -219,6 +227,7 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 .wpw-chat-sub { font-size: 11px; opacity: 0.68; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wpw-chat-sub.is-writing { color: var(--wpw-yellow); opacity: 1; }
 .wpw-chat-sub.is-failed { color: var(--wpw-red); opacity: 1; }
+.wpw-chat-sub.is-question { color: var(--wpw-yellow); opacity: 1; }
 .wpw-chat-more {
   position: absolute; top: 6px; right: 5px; width: 22px; height: 22px; padding: 0; cursor: pointer;
   background: none; border: 0; border-radius: 4px; font-size: 16px; line-height: 20px; opacity: 0.6;
@@ -250,32 +259,43 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 .wpw-convo { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
 .wpw-hint { margin: auto; max-width: 420px; text-align: center; opacity: 0.65; }
 .wpw-hint.is-error { color: var(--wpw-red); opacity: 1; }
-.wpw-seed {
-  padding: 6px 10px; border: 1px dashed var(--wpw-rule); border-radius: 5px; font-size: 12px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.8;
+/* One step: what you asked for, the questions on the way, then what came of it. */
+.wpw-ask {
+  position: relative; margin-top: 6px; padding: 6px 34px 6px 9px; border-radius: 6px;
+  background: color-mix(in srgb, var(--wpw-warp) 10%, transparent);
 }
-.wpw-request {
-  align-self: flex-end; max-width: 76%; padding: 7px 11px; border-radius: 10px 10px 2px 10px;
-  background: color-mix(in srgb, var(--wpw-warp) 16%, transparent); white-space: pre-wrap; overflow-wrap: anywhere;
-  position: relative;
-}
-.wpw-request.has-rewind { padding-right: 34px; }
+.wpw-said { display: flex; gap: 8px; align-items: baseline; }
+.wpw-said + .wpw-said { margin-top: 4px; }
+.wpw-who { flex: none; width: 30px; font-size: 11px; font-weight: 500; opacity: 0.6; }
+.wpw-said-text { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wpw-said.is-empty .wpw-said-text { font-style: italic; opacity: 0.8; }
+.wpw-said.is-question .wpw-said-text { color: var(--wpw-yellow); }
 .wpw-rewind {
   position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; padding: 0;
   display: flex; align-items: center; justify-content: center;
   border: 0; border-radius: 5px; background: transparent; color: inherit;
   font-size: 15px; line-height: 1; cursor: pointer; opacity: 0; pointer-events: none;
 }
-.wpw-request:hover .wpw-rewind, .wpw-rewind:focus-visible { opacity: 1; pointer-events: auto; }
+.wpw-rewind.is-inline { position: static; flex: none; }
+.wpw-ask:hover .wpw-rewind, .wpw-card-head:hover .wpw-rewind, .wpw-rewind:focus-visible { opacity: 1; pointer-events: auto; }
 .wpw-rewind:hover { background: color-mix(in srgb, var(--wpw-warp) 30%, transparent); }
-.wpw-request.is-empty { font-style: italic; opacity: 0.8; }
-.wpw-thumbs { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; margin-top: 5px; }
+.wpw-thumbs { display: flex; flex-wrap: wrap; gap: 5px; margin: 5px 0 0 38px; }
 .wpw-thumbs img { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; display: block; }
+.wpw-quote { margin-bottom: 5px; font-size: 12px; }
+.wpw-quote summary { cursor: pointer; opacity: 0.75; }
+.wpw-quote-text {
+  margin-top: 4px; padding: 4px 8px; max-height: 30vh; overflow-y: auto; white-space: pre-wrap;
+  overflow-wrap: anywhere; border-left: 2px solid var(--wpw-rule); opacity: 0.85; user-select: text;
+}
+.wpw-from { flex: none; font-size: 12px; opacity: 0.6; }
+.wpw-hint-line { margin-top: 6px; font-size: 12px; opacity: 0.75; }
 
 .wpw-card { background: var(--wpw-panel); border: 1px solid var(--wpw-rule); border-radius: 5px; padding: 8px 10px; }
 .wpw-card.is-newest { border-color: rgba(95, 211, 138, 0.55); }
-.wpw-card.is-writing { border-color: var(--wpw-yellow); color: var(--wpw-yellow); }
-.wpw-card.is-error { border-color: var(--wpw-red); color: var(--wpw-red); }
+.wpw-card.is-writing, .wpw-card.is-question { border-color: var(--wpw-yellow); }
+.wpw-card.is-writing .wpw-status, .wpw-card.is-question .wpw-status { color: var(--wpw-yellow); opacity: 1; }
+.wpw-card.is-error { border-color: var(--wpw-red); }
+.wpw-card.is-error .wpw-status { color: var(--wpw-red); opacity: 1; }
 .wpw-card-head { display: flex; align-items: center; gap: 8px; min-height: 26px; }
 .wpw-card-head.is-toggle { cursor: pointer; }
 .wpw-ver { font-weight: 500; flex: none; }
@@ -290,7 +310,7 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 .wpw-text { margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .wpw-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex: none; }
 .wpw-actions.is-block { margin-top: 7px; }
-.wpw-error-text { margin-top: 3px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wpw-error-text { margin-top: 6px; color: var(--wpw-red); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .wpw-suggest { margin-top: 8px; }
 .wpw-suggest-label { font-size: 12px; opacity: 0.75; margin-bottom: 4px; }
@@ -335,6 +355,12 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 .wpw-chip.is-base, .wpw-chip.is-on { border-color: var(--wpw-warp); color: var(--wpw-warp); }
 .wpw-chip.is-off { opacity: 0.7; }
 .wpw-chip-btn { cursor: pointer; }
+.wpw-start-chip { gap: 4px; padding: 0 3px 0 9px; }
+.wpw-modal .wpw-start {
+  height: 22px; max-width: 280px; padding: 0 2px; border: 0; background: transparent;
+  color: var(--wpw-warp); font-weight: 500; cursor: pointer;
+}
+.wpw-start option { background: var(--wpw-ground); color: var(--wpw-ink); }
 .wpw-seg {
   display: inline-flex; align-items: center; height: 26px; overflow: hidden;
   border: 1px solid var(--wpw-rule); border-radius: 13px; font-size: 12px;
@@ -633,22 +659,47 @@ function currentChat() {
   return store.chats.find((chat) => chat.id === view.chatId) ?? null;
 }
 
-/** What the next write builds on: {id, text, label}, or null for nothing. */
+/** What the next write starts from: {id, text, prompt}, or null for nothing. */
 function chosenBase(chat, draft) {
-  if (draft.base === NO_BASE) return null;
-  const versions = chat.versions;
-  const version = versions.find((v) => v.id === draft.base) ?? versions.at(-1);
-  if (version) {
+  const value = startValue(chat, draft.base);
+  if (value === NEW_PROMPT) return null;
+  if (value === CURRENT_PROMPT) {
+    const widget = targetNow()?.node?.widgets?.find((w) => w.name === TEXT_WIDGET);
+    return { id: CURRENT_PROMPT, text: String(widget?.value ?? ""), prompt: true };
+  }
+  const version = chat.versions.find((v) => v.id === value);
+  return { id: version.id, text: version.text, prompt: false };
+}
+
+/** What a Write sends: a new request, or the answer to the question the AI asked. */
+function nextStep(chat, draft) {
+  const typed = draft.text.trim();
+  const pending = chat.pending;
+  if (pending) {
+    if (!typed) return { error: "Type your answer first." };
     return {
-      id: version.id,
-      text: baseText(chat, version.id),
-      label: `Builds on v${version.n}`,
+      request: pending.request,
+      images: pending.images,
+      baseId: pending.baseId,
+      basePrompt: pending.basePrompt,
+      baseText:
+        pending.basePrompt ?? chat.versions.find((v) => v.id === pending.baseId)?.text ?? "",
+      turns: [...pending.turns, { question: pending.question, answer: typed }],
+      answer: typed,
     };
   }
-  if (chat.seedPrompt) {
-    return { id: "seed", text: baseText(chat, "seed"), label: "Builds on: current prompt" };
-  }
-  return null;
+  const base = chosenBase(chat, draft);
+  if (base?.prompt && !base.text.trim()) return { error: "That Prompt + LoRAs is empty." };
+  if (!typed && !base?.text?.trim()) return { error: "Type what you want first." };
+  return {
+    request: typed,
+    images: [...draft.images],
+    baseId: base?.id ?? null,
+    basePrompt: base?.prompt ? base.text : null,
+    baseText: base?.text ?? "",
+    turns: [],
+    answer: null,
+  };
 }
 
 function setNote(chatId, text, isError = false) {
@@ -698,14 +749,8 @@ function findModel(id) {
 function startWrite(chat) {
   if (jobs.has(chat.id)) return;
   flushEdits();
+  refreshTargets();
   const draft = draftOf(chat.id);
-  const request = draft.text.trim();
-  const base = chosenBase(chat, draft);
-  if (!request && !base?.text?.trim()) {
-    setNote(chat.id, "Type what you want first.", true);
-    view.input.focus();
-    return;
-  }
   const model = String(getSetting(SETTING_MODEL, ""));
   if (!model) {
     setNote(chat.id, "Pick a model first.", true);
@@ -715,19 +760,29 @@ function startWrite(chat) {
     setNote(chat.id, "Wait for the images to finish uploading.", true);
     return;
   }
+  const step = nextStep(chat, draft);
+  if (step.error) {
+    setNote(chat.id, step.error, true);
+    view.input.focus();
+    return;
+  }
 
-  let images = [...draft.images];
+  // An answer goes with the images its request already sent.
+  let images = step.images;
   let note = null;
-  if (images.length && !findModel(model)?.vision) {
+  if (step.answer == null && images.length && !findModel(model)?.vision) {
     note = { text: "Images left out: this model cannot see images.", isError: false };
     images = [];
   }
 
   const systemPrompt = String(getSetting(SETTING_SYSTEM_PROMPT, ""));
   const spec = {
-    request,
+    request: step.request,
     images,
-    baseId: base?.id ?? null,
+    baseId: step.baseId,
+    basePrompt: step.basePrompt,
+    turns: step.turns,
+    answer: step.answer,
     model,
     systemPrompt,
     originNode: view.promptNode,
@@ -738,15 +793,18 @@ function startWrite(chat) {
       model,
       system_prompt: systemPrompt,
       temperature: clampTemperature(getSetting(SETTING_TEMPERATURE, DEFAULT_TEMPERATURE)),
-      idea: request,
-      previous_result: base?.text ?? "",
+      idea: step.request,
+      previous_result: step.baseText,
       references: images,
+      turns: step.turns,
     },
   };
 
   draft.text = "";
-  draft.images = [];
-  draft.base = null;
+  if (step.answer == null) {
+    draft.images = [];
+    draft.base = null;
+  }
   draft.note = note;
   view.input.value = "";
   growInput();
@@ -762,7 +820,7 @@ async function launch(chat, spec) {
   syncButton(spec.originNode);
   ticker ??= setInterval(tick, TICK_MS);
   refresh(chat.id);
-  if (!chat.versions.length && !spec.titleAsked) {
+  if (!chat.versions.length && !spec.titleAsked && spec.answer == null) {
     spec.titleAsked = true;
     nameChat(chat, spec);
   }
@@ -774,7 +832,9 @@ async function launch(chat, spec) {
     await attachLoras(spec);
     out = await postJson("/warppipe/llm/write", spec.payload, controller.signal);
     if (out?.error) message = String(out.error);
-    else if (!String(out?.text ?? "").trim()) message = "The model returned no text.";
+    else if (!String(out?.question ?? out?.text ?? "").trim()) {
+      message = "The model returned no text.";
+    }
   } catch (error) {
     if (error?.name === "AbortError") cancelled = true;
     else message = String(error?.message ?? error);
@@ -788,6 +848,8 @@ async function launch(chat, spec) {
   else if (message) {
     failures.set(chat.id, { spec, message });
     toast("error", "Prompt failed", chat.title, 6000);
+  } else if (out.question) {
+    askQuestion(chat, spec, out);
   } else {
     finish(chat, spec, out);
   }
@@ -809,7 +871,10 @@ function finish(chat, spec, out) {
     usage: out.usage,
     suggestions: resolveSuggestions(out.suggestions, spec.loraRefs),
     activeLoras: spec.activeLoras ?? [],
+    questions: spec.turns ?? [],
+    basePrompt: spec.basePrompt ?? null,
   });
+  dropQuestion(chat);
   // The first version titles the chat with its first words; a generated title wins.
   if (spec.aiTitle) setAutoTitle(chat, spec.aiTitle);
   save();
@@ -818,6 +883,18 @@ function finish(chat, spec, out) {
     syncButton(spec.originNode);
   }
   toast("success", "Prompt ready", chat.title);
+}
+
+/** The AI asked instead of writing: the step waits in the chat for the answer. */
+function askQuestion(chat, spec, out) {
+  openQuestion(chat, spec, String(out.question), Date.now());
+  if (spec.aiTitle) setAutoTitle(chat, spec.aiTitle);
+  save();
+  if (view?.chatId !== chat.id) {
+    unseen.set(chat.id, spec.originNode);
+    syncButton(spec.originNode);
+  }
+  toast("info", "The AI has a question", chat.title);
 }
 
 /** Ask the cheap model for a title while the prompt is written. On failure the first words stay. */
@@ -857,20 +934,23 @@ function restoreDraft(chat, spec) {
   fillDraft(chat, spec);
 }
 
-/** Put a request back into the composer, with its images and what it built on. */
+/** Put a request back into the composer with its images and starting point, or an answer back. */
 function fillDraft(chat, spec) {
   const draft = draftOf(chat.id);
+  const answering = spec.answer != null;
   const merged = mergedDraft(
     draft,
     {
-      text: spec.request ?? "",
-      images: (spec.images ?? []).filter((name) => typeof name === "string"),
+      text: (answering ? spec.answer : spec.request) ?? "",
+      images: answering ? [] : (spec.images ?? []).filter((name) => typeof name === "string"),
     },
     MAX_IMAGES
   );
   draft.text = merged.text;
   draft.images = merged.images;
-  draft.base = spec.baseId === "seed" ? null : (spec.baseId ?? NO_BASE);
+  if (!answering) {
+    draft.base = spec.baseId === "seed" ? CURRENT_PROMPT : (spec.baseId ?? NEW_PROMPT);
+  }
   if (merged.overflow) {
     draft.note = { text: `At most ${MAX_IMAGES} images per request.`, isError: true };
   }
@@ -885,6 +965,7 @@ function focusComposer() {
   renderRail();
   renderConvo(false);
   renderChips();
+  renderSend();
   renderNote();
   view.input.focus();
   view.input.setSelectionRange(view.input.value.length, view.input.value.length);
@@ -896,8 +977,20 @@ function rewindTo(chat, version) {
   flushEdits();
   const rewound = rewindChat(chat, version.id, Date.now());
   if (!rewound) return;
+  dropQuestion(chat);
   failures.delete(chat.id);
   fillDraft(chat, rewound);
+  save();
+  focusComposer();
+}
+
+/** The request of a step that waits for an answer goes back into the input instead. */
+function rewindQuestion(chat) {
+  if (jobs.has(chat.id)) return;
+  const step = dropQuestion(chat);
+  if (!step) return;
+  failures.delete(chat.id);
+  fillDraft(chat, step);
   save();
   focusComposer();
 }
@@ -1115,6 +1208,8 @@ function railRow(chat) {
     );
   } else if (failed) {
     sub = el("div", { class: "wpw-chat-sub is-failed", text: "Failed" });
+  } else if (chat.pending) {
+    sub = el("div", { class: "wpw-chat-sub is-question", text: "Waiting for your answer" });
   } else {
     const when = timeAgo(chat.updated);
     const text = `${count} version${count === 1 ? "" : "s"}${when ? ` · ${when}` : ""}`;
@@ -1130,7 +1225,12 @@ function railRow(chat) {
         "div",
         { class: "wpw-chat-title" },
         el("span", { text: chat.title, title: chat.title }),
-        unseen.has(chat.id) && el("span", { class: "wpw-check", text: "✓", title: "Finished" })
+        unseen.has(chat.id) &&
+          el("span", {
+            class: "wpw-check",
+            text: chat.pending ? "?" : "✓",
+            title: chat.pending ? "The AI has a question" : "Finished",
+          })
       ),
       sub
     ),
@@ -1141,26 +1241,56 @@ function railRow(chat) {
   );
 }
 
-function requestBubble(request, images, onRewind) {
-  const empty = !request;
-  const names = (images ?? []).filter((name) => typeof name === "string");
+/**
+ * What a step asked for: where it started, the request and its images, and the
+ * questions on the way. `question` is one still waiting for its answer.
+ */
+function stepAsk(chat, step, { onRewind = null, question = null } = {}) {
+  const said = (who, text, extra = "") =>
+    el(
+      "div",
+      { class: `wpw-said${extra}` },
+      el("span", { class: "wpw-who", text: who }),
+      el("span", { class: "wpw-said-text", text })
+    );
+  const names = (step.images ?? []).filter((name) => typeof name === "string");
+  const quote = step.basePrompt ?? (step.baseId === "seed" ? chat.seedPrompt : null);
+  const turns = step.turns ?? step.questions ?? [];
   return el(
     "div",
-    { class: `wpw-request${empty ? " is-empty" : ""}${onRewind ? " has-rewind" : ""}` },
-    empty ? "Optimise the prompt" : request,
-    onRewind &&
-      button(
-        "↶",
-        onRewind,
-        "wpw-rewind",
-        "Go back to this message: it moves into the input, and it and everything after it leave the chat"
+    { class: "wpw-ask" },
+    quote &&
+      el(
+        "details",
+        { class: "wpw-quote" },
+        el("summary", { text: "Started from the current prompt" }),
+        el("div", { class: "wpw-quote-text", text: quote })
       ),
+    said("You", step.request || "Optimise the prompt", step.request ? "" : " is-empty"),
     names.length > 0 &&
       el(
         "div",
         { class: "wpw-thumbs" },
         ...names.map((name) => el("img", { src: thumbUrl(name), alt: "", loading: "lazy" }))
-      )
+      ),
+    ...turns.flatMap((turn) => [
+      said("AI", turn.question, " is-question"),
+      said("You", turn.answer),
+    ]),
+    question && said("AI", question, " is-question"),
+    onRewind && button("↶", onRewind, "wpw-rewind", REWIND_TITLE)
+  );
+}
+
+/** A card's first line: its name, where it started, and how it stands. */
+function cardHead(chat, label, baseId, status) {
+  return el(
+    "div",
+    { class: "wpw-card-head" },
+    el("span", { class: "wpw-ver", text: label }),
+    el("span", { class: "wpw-from", text: startLabel(chat, baseId) }),
+    el("span", { class: "wpw-spacer" }),
+    status
   );
 }
 
@@ -1295,10 +1425,11 @@ function finishedText(version) {
   return status ? `Finished · ${status}` : "Finished";
 }
 
-function versionCard(chat, version, index) {
+function versionCard(chat, version, index, busy) {
   const label = `v${version.n}`;
   const newest = index === chat.versions.length - 1;
   const title = version.model ? `${version.model} · ${version.systemPrompt ?? ""}` : undefined;
+  const rewind = busy ? null : () => rewindTo(chat, version);
   if (newest) {
     const editor = el("textarea", {
       class: "wpw-editor",
@@ -1311,12 +1442,13 @@ function versionCard(chat, version, index) {
     return el(
       "div",
       { class: "wpw-card is-newest" },
-      el(
-        "div",
-        { class: "wpw-card-head" },
-        el("span", { class: "wpw-ver", text: label }),
+      cardHead(
+        chat,
+        label,
+        version.baseId,
         el("span", { class: "wpw-status is-new", text: finishedText(version), title })
       ),
+      stepAsk(chat, version, { onRewind: rewind }),
       editor,
       ...loraRows(chat, version),
       el("div", { class: "wpw-actions is-block" }, sendButton(version))
@@ -1333,21 +1465,32 @@ function versionCard(chat, version, index) {
   const actions = el(
     "div",
     { class: `wpw-actions${open ? " is-block" : ""}`, onClick: stop },
+    !open && rewind && button("↶", rewind, "wpw-rewind is-inline", REWIND_TITLE),
     button("Continue from here", () => continueFrom(chat, version)),
     sendButton(version)
   );
+  const head = open
+    ? cardHead(
+        chat,
+        label,
+        version.baseId,
+        el("span", { class: "wpw-status", text: finishedText(version), title })
+      )
+    : el(
+        "div",
+        { class: "wpw-card-head" },
+        el("span", { class: "wpw-ver", text: label }),
+        el("span", { class: "wpw-preview", text: version.request || "Optimise the prompt" }),
+        actions
+      );
+  head.classList.add("is-toggle");
+  head.title = open ? "Collapse" : "Expand";
+  head.addEventListener("click", toggle);
   return el(
     "div",
     { class: "wpw-card" },
-    el(
-      "div",
-      { class: "wpw-card-head is-toggle", onClick: toggle, title: open ? "Collapse" : "Expand" },
-      el("span", { class: "wpw-ver", text: label }),
-      open
-        ? el("span", { class: "wpw-status", text: finishedText(version), title })
-        : el("span", { class: "wpw-preview", text: version.text }),
-      !open && actions
-    ),
+    head,
+    open && stepAsk(chat, version, { onRewind: rewind }),
     open && el("div", { class: "wpw-text", text: version.text }),
     ...(open ? loraRows(chat, version) : []),
     open && actions
@@ -1363,44 +1506,42 @@ function renderConvo(stick) {
     return;
   }
   refreshTargets();
-  const items = [];
-  if (chat.seedPrompt) {
-    items.push(
-      el("div", {
-        class: "wpw-seed",
-        text: `Current prompt: ${chat.seedPrompt}`,
-        title: chat.seedPrompt,
-      })
-    );
-  }
-  chat.versions.forEach((version, index) => {
-    const rewind = jobs.has(chat.id) ? null : () => rewindTo(chat, version);
-    items.push(requestBubble(version.request, version.images, rewind));
-    items.push(versionCard(chat, version, index));
-  });
-
   const job = jobs.get(chat.id);
+  const failure = failures.get(chat.id);
+  const items = chat.versions.map((version, index) => versionCard(chat, version, index, !!job));
+  const next = `v${chat.versions.length + 1}`;
   if (job) {
-    items.push(requestBubble(job.request, job.images));
     items.push(
       el(
         "div",
         { class: "wpw-card is-writing" },
-        el("span", { class: "wpw-spin" }),
-        "Writing · ",
-        secondsEl(job.startedAt)
+        cardHead(
+          chat,
+          next,
+          job.baseId,
+          el(
+            "span",
+            { class: "wpw-status" },
+            el("span", { class: "wpw-spin" }),
+            "Writing · ",
+            secondsEl(job.startedAt)
+          )
+        ),
+        stepAsk(chat, job)
       )
     );
-  }
-  const failure = failures.get(chat.id);
-  if (failure) {
-    items.push(
-      requestBubble(failure.spec.request, failure.spec.images, () => rewindFailure(chat, failure))
-    );
+  } else if (failure) {
     items.push(
       el(
         "div",
         { class: "wpw-card is-error" },
+        cardHead(
+          chat,
+          next,
+          failure.spec.baseId,
+          el("span", { class: "wpw-status", text: "Failed" })
+        ),
+        stepAsk(chat, failure.spec, { onRewind: () => rewindFailure(chat, failure) }),
         el("div", { class: "wpw-error-text", text: failure.message }),
         el(
           "div",
@@ -1409,12 +1550,33 @@ function renderConvo(stick) {
         )
       )
     );
+  } else if (chat.pending) {
+    items.push(
+      el(
+        "div",
+        { class: "wpw-card is-question" },
+        cardHead(
+          chat,
+          "Question",
+          chat.pending.baseId,
+          el("span", { class: "wpw-status", text: "Waiting for your answer" })
+        ),
+        stepAsk(chat, chat.pending, {
+          onRewind: () => rewindQuestion(chat),
+          question: chat.pending.question,
+        }),
+        el("div", {
+          class: "wpw-hint-line",
+          text: "Answer in the box below, or ↶ to take your request back.",
+        })
+      )
+    );
   }
   if (!items.length) {
     items.push(
       el("div", {
         class: "wpw-hint",
-        text: "Describe the prompt you want, or add the current prompt and ask for a change.",
+        text: "Describe the prompt you want. To change the prompt that is in the node, set Start from to Current prompt.",
       })
     );
   }
@@ -1442,29 +1604,22 @@ function chip(className, children, onClear, clearTitle) {
   );
 }
 
-function baseChip(chat, draft) {
-  const base = chosenBase(chat, draft);
-  if (base) {
-    const clear = () => {
-      if (base.id === "seed") {
-        chat.seedPrompt = null;
-        save();
-        renderConvo(false);
-      } else {
-        draft.base = NO_BASE;
-      }
-      renderChips();
-    };
-    return chip("is-base", [base.label], clear, "Start without this");
+/** The options are rebuilt only when they change, so a re-render cannot close an open list. */
+function renderStart(chat, draft) {
+  const options = startOptions(chat, targetNow()?.label);
+  const key = options.map((option) => `${option.value}\t${option.label}`).join("\n");
+  if (view.start.dataset.options !== key) {
+    view.start.dataset.options = key;
+    view.start.replaceChildren(
+      ...options.map((option) => el("option", { value: option.value, text: option.label }))
+    );
   }
-  if (chat.versions.length) {
-    const back = () => {
-      draft.base = null;
-      renderChips();
-    };
-    return chip("is-off", ["Starts fresh"], back, "Build on the newest version again");
-  }
-  return button("+ Current prompt", () => takeCurrentPrompt(chat), "wpw-chip wpw-chip-btn");
+  view.start.value = startValue(chat, draft.base);
+}
+
+function chooseStart() {
+  const chat = currentChat();
+  if (chat) draftOf(chat.id).base = view.start.value;
 }
 
 function renderChips() {
@@ -1474,25 +1629,31 @@ function renderChips() {
     return;
   }
   const draft = draftOf(chat.id);
-  const images = draft.images.map((name) =>
-    chip(
-      "",
-      [el("img", { src: thumbUrl(name), alt: "", title: name })],
-      () => {
-        draft.images = draft.images.filter((other) => other !== name);
-        renderChips();
-      },
-      "Remove this image"
-    )
-  );
+  // An answer goes with the request's own images and starting point.
+  const answering = !!chat.pending;
+  const images = answering
+    ? []
+    : draft.images.map((name) =>
+        chip(
+          "",
+          [el("img", { src: thumbUrl(name), alt: "", title: name })],
+          () => {
+            draft.images = draft.images.filter((other) => other !== name);
+            renderChips();
+          },
+          "Remove this image"
+        )
+      );
   const uploading = draft.uploading > 0 ? [chip("", ["Uploading…"])] : [];
-  view.chips.replaceChildren(
-    button("Add image", pickImages, "wpw-chip wpw-chip-btn"),
+  renderStart(chat, draft);
+  const parts = [
+    !answering && button("Add image", pickImages, "wpw-chip wpw-chip-btn"),
     ...images,
     ...uploading,
-    baseChip(chat, draft),
-    view.loraScope
-  );
+    answering ? chip("is-base", ["Answering the question"]) : view.startChip,
+    view.loraScope,
+  ];
+  view.chips.replaceChildren(...parts.filter(Boolean));
   renderLoraScope();
 }
 
@@ -1532,9 +1693,11 @@ function chooseLoraScope(scope) {
 
 function renderSend() {
   const job = jobs.get(view.chatId);
+  const answering = !!currentChat()?.pending;
   view.send.classList.toggle("is-stop", !!job);
   if (job) view.send.replaceChildren("Stop · ", secondsEl(job.startedAt));
-  else view.send.replaceChildren("Write");
+  else view.send.replaceChildren(answering ? "Answer" : "Write");
+  view.input.placeholder = answering ? PLACEHOLDER_ANSWER : PLACEHOLDER_WRITE;
 }
 
 function renderNote() {
@@ -1597,7 +1760,7 @@ function selectChat(id) {
  */
 function reusableChat(label) {
   const empty = sortedChats(store).filter(
-    (chat) => !chat.versions.length && !jobs.has(chat.id) && !failures.has(chat.id)
+    (chat) => !chat.versions.length && !chat.pending && !jobs.has(chat.id) && !failures.has(chat.id)
   );
   const untouched = (chat) => {
     const draft = drafts.get(chat.id);
@@ -1649,21 +1812,6 @@ function continueFrom(chat, version) {
 
 function targetNow() {
   return view.targets[targetIndex()] ?? null;
-}
-
-function takeCurrentPrompt(chat) {
-  refreshTargets();
-  const widget = targetNow()?.node?.widgets?.find((w) => w.name === TEXT_WIDGET);
-  const text = String(widget?.value ?? "");
-  if (!text.trim()) {
-    setNote(chat.id, "That Prompt + LoRAs is empty.", true);
-    return;
-  }
-  chat.seedPrompt = text;
-  save();
-  renderConvo(false);
-  renderChips();
-  renderRail();
 }
 
 function useVersion(version) {
@@ -2080,6 +2228,12 @@ function buildView(promptNode) {
 
   const convo = el("div", { class: "wpw-convo" });
   const chips = el("div", { class: "wpw-chips" });
+  const start = el("select", {
+    class: "wpw-start",
+    title: "What the next Write starts from",
+    onChange: () => chooseStart(),
+  });
+  const startChip = el("label", { class: "wpw-chip is-base wpw-start-chip" }, "Start from", start);
   const loraScopeButtons = new Map(
     LORA_SCOPES.map((scope) => [scope, button("", () => chooseLoraScope(scope), "wpw-seg-btn")])
   );
@@ -2093,7 +2247,7 @@ function buildView(promptNode) {
   const input = el("textarea", {
     class: "wpw-input",
     rows: INPUT_MIN_LINES,
-    placeholder: "Describe the prompt, or the change you want. Ctrl+Enter sends.",
+    placeholder: PLACEHOLDER_WRITE,
     onInput: () => {
       draftOf(view.chatId).text = input.value;
       growInput();
@@ -2211,6 +2365,8 @@ function buildView(promptNode) {
     convo,
     chips,
     loraScope: loraScopeEl,
+    start,
+    startChip,
     loraScopeButtons,
     note,
     input,

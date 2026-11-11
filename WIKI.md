@@ -690,13 +690,19 @@ is set), and **Refresh lists** (the backend caches a model list for an hour).
 | `Temperature` | 0–2, default 0.6 |
 | `SystemPromptDir` | Settings → WarpPipe → Prompt Writer |
 
-**Chats and versions:** the left rail lists the chats, newest first. A request
-is shown with its images, an answer as a card `v2` with its status, e.g.
-`Finished · 0.3 ¢ · 8 s · 1,812 → 640 tokens`. The newest version is editable
+**Chats and versions:** the left rail lists the chats, newest first. Each write
+is one card `v2` with where it started (`from v1`), its status, e.g.
+`Finished · 0.3 ¢ · 8 s · 1,812 → 640 tokens`, the request with its images and any
+questions on the way, and the prompt. The newest version is editable
 (saved on blur); older ones are one line and can be expanded. **Send to prompt** writes
 the text unchanged into the Prompt + LoRAs chosen under **For**, as one undo step,
 flashes the node and closes the pop-up. **Continue from here** makes an older
-version the next base.
+version the next starting point.
+
+**Questions:** the LLM is told to start a reply that asks instead of writing with
+`===QUESTION===`. That reply is a **Question** card, not a version; **Write** becomes
+**Answer**, and the answer goes with the request, its starting point and the earlier
+questions and answers (`turns` in `POST /warppipe/llm/write`).
 
 **LoRAs:** **Suggest LoRAs** in the composer (setting `LoraScope`) is **Off**, **List**
 (the LoRAs switched off in the target's own lists) or **All** (every LoRA that fits the
@@ -708,9 +714,9 @@ its trigger words on the first line of that version; pressing it again undoes bo
 
 **Writing:** the composer takes up to 8 images (**Add image**, drag and drop or
 Ctrl+V, uploaded to `input/`), left out with a notice when the model has no
-vision. The base chip sets what the next write starts from and is sent as
-`previous_result`: **+ Current prompt** in a new empty chat, then `Builds on v3`,
-which × clears. Ctrl+Enter sends; **Write** becomes **Stop** while it runs.
+vision. **Start from** sets what the next write starts from and is sent as
+`previous_result`: a version (the newest by default), **Current prompt** (the text
+of the **For** node, read when you press **Write**) or **Nothing**. Ctrl+Enter sends; **Write** becomes **Stop** while it runs.
 Writes are held per chat outside the pop-up, so several run at once and survive
 closing it. The **✨ AI** button on the node is yellow while a chat opened from
 that node writes, and has a green dot when one finished unseen. A failed request
