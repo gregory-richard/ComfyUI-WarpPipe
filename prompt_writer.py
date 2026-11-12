@@ -24,8 +24,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Callable, Mapping, Optional
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,12 @@ def key_for(url: str, env: Mapping[str, str], key_file: Optional[Path]) -> Optio
             data = None
         if isinstance(data, dict):
             for name, key in data.items():
-                if isinstance(name, str) and name.strip().lower() == host and isinstance(key, str) and key:
+                if (
+                    isinstance(name, str)
+                    and name.strip().lower() == host
+                    and isinstance(key, str)
+                    and key
+                ):
                     return key
     if host in NANOGPT_HOSTS:
         key = env.get(NANOGPT_ENV)
@@ -160,7 +166,9 @@ def _error_message(code: int, raw: bytes) -> str:
     return f"HTTP {code}: {text[:300] or 'no response body'}"
 
 
-def _broke_off(host: str, exc: Exception, api_key: Optional[str], timeout: float) -> "PromptWriterError":
+def _broke_off(
+    host: str, exc: Exception, api_key: Optional[str], timeout: float
+) -> "PromptWriterError":
     """A connection that failed while the answer was being read."""
     if isinstance(exc, TimeoutError):
         return PromptWriterError(f"{host} did not answer within {timeout} s")
@@ -280,9 +288,7 @@ def list_models(
 
 def _folder(folder: Optional[str]) -> Path:
     if not folder or not str(folder).strip():
-        raise PromptWriterError(
-            f"Set the system prompt folder in Settings ({SETTING_DIR})"
-        )
+        raise PromptWriterError(f"Set the system prompt folder in Settings ({SETTING_DIR})")
     path = Path(str(folder).strip())
     if not path.is_dir():
         raise PromptWriterError(f"System prompt folder not found: {path}")
@@ -354,9 +360,7 @@ def parse_reply(payload: dict) -> str:
     except (KeyError, IndexError, TypeError, AttributeError):
         content = None
     if isinstance(content, list):
-        content = "".join(
-            part.get("text", "") for part in content if isinstance(part, dict)
-        )
+        content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
     if not isinstance(content, str):
         content = ""
     text = _THINK.sub("", content).strip()
@@ -379,7 +383,9 @@ def parse_reasoning(payload: dict) -> str:
     content = message.get("content")
     if not isinstance(content, str):
         return ""
-    return "\n".join(m.strip() for m in re.findall(r"(?s)<think>(.*?)(?:</think>|\Z)", content)).strip()
+    return "\n".join(
+        m.strip() for m in re.findall(r"(?s)<think>(.*?)(?:</think>|\Z)", content)
+    ).strip()
 
 
 _THINK_OPEN = "<think>"
@@ -404,14 +410,18 @@ class _ThinkSplitter:
             if at < 0:
                 # The end may be the start of the tag, finished by the next piece.
                 keep = next(
-                    (k for k in range(min(len(tag) - 1, len(text)), 0, -1) if text.endswith(tag[:k])),
+                    (
+                        k
+                        for k in range(min(len(tag) - 1, len(text)), 0, -1)
+                        if text.endswith(tag[:k])
+                    ),
                     0,
                 )
                 into.append(text[: len(text) - keep])
-                self.held = text[len(text) - keep:]
+                self.held = text[len(text) - keep :]
                 break
             into.append(text[:at])
-            text = text[at + len(tag):]
+            text = text[at + len(tag) :]
             self.inside = not self.inside
         return "".join(thought), "".join(answer)
 
@@ -459,7 +469,11 @@ def _read_stream(resp, on_delta, stopped) -> dict:
         if not isinstance(delta, dict):
             continue
         think = next(
-            (delta[key] for key in ("reasoning_content", "reasoning") if isinstance(delta.get(key), str)),
+            (
+                delta[key]
+                for key in ("reasoning_content", "reasoning")
+                if isinstance(delta.get(key), str)
+            ),
             "",
         )
         content = delta.get("content") if isinstance(delta.get("content"), str) else ""
@@ -651,7 +665,11 @@ def _clean_triggers(raw) -> list:
 
 
 def _clean_lora(raw) -> Optional[dict]:
-    title = _one_line(raw["title"]) if isinstance(raw, dict) and isinstance(raw.get("title"), str) else ""
+    title = (
+        _one_line(raw["title"])
+        if isinstance(raw, dict) and isinstance(raw.get("title"), str)
+        else ""
+    )
     return {"title": title, "triggers": _clean_triggers(raw.get("triggers"))} if title else None
 
 
@@ -753,8 +771,8 @@ def split_suggestions(text: str, valid_refs, limit: int = MAX_SUGGESTIONS) -> tu
         return text, []
     found = []
     seen = set()
-    for line in lines[at + 1:]:
-        ref, strength, reason = (line.split("|", 2) + ["", ""])[:3]
+    for line in lines[at + 1 :]:
+        ref, strength, reason = [*line.split("|", 2), "", ""][:3]
         ref = _bare_ref(ref)
         if ref in seen or ref not in valid_refs:
             continue
@@ -777,7 +795,7 @@ def split_question(text: str) -> Optional[str]:
     first = next((i for i, line in enumerate(lines) if line.strip()), None)
     if first is None or lines[first].strip(_MARKER_DECORATION).upper() != QUESTION_MARKER:
         return None
-    rest = lines[first + 1:]
+    rest = lines[first + 1 :]
     end = next((i for i, line in enumerate(rest) if _is_marker(line)), len(rest))
     return "\n".join(line.rstrip("\r") for line in rest[:end]).strip()
 
@@ -890,6 +908,8 @@ def _reference_names(raw) -> list:
 
 
 _LOG_LOCK = threading.Lock()
+# The writes running in threads, each until it ends.
+_WORKERS: set = set()
 
 
 def append_log(path: Optional[Path], entry: dict, rotate: bool = False) -> None:
@@ -995,9 +1015,20 @@ def handle_write(
             rotate=True,
         )
         out = write(
-            base_url, model_id, system, temperature, idea, previous, images,
-            api_key=key, model=model, opener=opener, turns=turns,
-            on_delta=on_delta, stopped=stopped, reasoning_effort=effort,
+            base_url,
+            model_id,
+            system,
+            temperature,
+            idea,
+            previous,
+            images,
+            api_key=key,
+            model=model,
+            opener=opener,
+            turns=turns,
+            on_delta=on_delta,
+            stopped=stopped,
+            reasoning_effort=effort,
         )
         question = split_question(out["text"])
         if question is not None:
@@ -1054,7 +1085,9 @@ def save_key(key_file: Path, base_url: str, key: str) -> dict:
         data = {}
     if not isinstance(data, dict):
         data = {}
-    data = {k: v for k, v in data.items() if not (isinstance(k, str) and k.strip().lower() in hosts)}
+    data = {
+        k: v for k, v in data.items() if not (isinstance(k, str) and k.strip().lower() in hosts)
+    }
     if key:
         for host in sorted(hosts):
             data[host] = key
@@ -1172,7 +1205,10 @@ def register(routes, web, *, user_dir: str, settings_loader, image_path) -> None
             headers={"Content-Type": "application/x-ndjson", "Cache-Control": "no-cache"}
         )
         await response.prepare(request)
-        asyncio.ensure_future(asyncio.to_thread(work))
+        # Held until it ends, so the task cannot be collected while the write runs.
+        worker = asyncio.ensure_future(asyncio.to_thread(work))
+        _WORKERS.add(worker)
+        worker.add_done_callback(_WORKERS.discard)
         try:
             while True:
                 try:

@@ -139,7 +139,13 @@ def test_map_models_nanogpt_and_plain():
         ]
     }
     assert pw.map_models(nano) == [
-        {"id": "a", "name": "alpha", "prompt_price": None, "completion_price": None, "vision": False},
+        {
+            "id": "a",
+            "name": "alpha",
+            "prompt_price": None,
+            "completion_price": None,
+            "vision": False,
+        },
         {"id": "b", "name": "Beta", "prompt_price": 0.3, "completion_price": 1.2, "vision": True},
     ]
     assert pw.map_models({"data": [{"id": "m1"}]})[0]["name"] == "m1"
@@ -177,7 +183,16 @@ def test_system_prompt_files(tmp_path):
     (tmp_path / "sub" / "inner.txt").write_text("x")
     assert pw.system_prompt_names(str(tmp_path)) == ["v2.6.txt"]
     assert pw.read_system_prompt(str(tmp_path), "v2.6.txt") == "SYS"
-    for bad in ("../x.txt", "a/b.txt", "a\\b.txt", "notes.md", "missing.txt", "", "..", "sub/inner.txt"):
+    for bad in (
+        "../x.txt",
+        "a/b.txt",
+        "a\\b.txt",
+        "notes.md",
+        "missing.txt",
+        "",
+        "..",
+        "sub/inner.txt",
+    ):
         with pytest.raises(pw.PromptWriterError):
             pw.read_system_prompt(str(tmp_path), bad)
     with pytest.raises(pw.PromptWriterError, match="SystemPromptDir"):
@@ -258,9 +273,7 @@ def test_write_round_trip(server):
             },
         )
     )
-    result = pw.write(
-        server.url, "m", "S", 0.6, "idea", None, [], api_key="k", model=None
-    )
+    result = pw.write(server.url, "m", "S", 0.6, "idea", None, [], api_key="k", model=None)
     req = server.requests[0]
     assert req["method"] == "POST"
     assert req["path"] == "/api/v1/chat/completions"
@@ -298,7 +311,7 @@ def test_write_surfaces_provider_errors(server):
 
 
 def test_unreachable_host_is_error():
-    with pytest.raises(pw.PromptWriterError, match="127.0.0.1"):
+    with pytest.raises(pw.PromptWriterError, match=r"127\.0\.0\.1"):
         pw.list_models("http://127.0.0.1:9/v1", api_key=None, refresh=True)
 
 
@@ -341,7 +354,7 @@ def test_handle_write_uses_setting_folder_and_reference(server, tmp_path):
         settings={"WarpPipe.PromptWriter.SystemPromptDir": str(tmp_path)},
         image_path=lambda name: str(img) if name == "ref.png" else None,
     )
-    chat = [r for r in server.requests if r["path"].endswith("/chat/completions")][0]
+    chat = next(r for r in server.requests if r["path"].endswith("/chat/completions"))
     assert chat["headers"]["Authorization"] == "Bearer LOCALKEY"
     msgs = chat["body"]["messages"]
     assert msgs[0] == {"role": "system", "content": "SYS\n\n" + pw.QUESTION_RULE}
@@ -359,9 +372,15 @@ def test_handle_write_model_list_failure_keeps_write(server, tmp_path):
     server.replies.append((500, "no list"))
     server.replies.append((200, {"choices": [{"message": {"content": "OUT"}}]}))
     out = pw.handle_write(
-        {"base_url": server.url, "model": "m", "system_prompt": "s.txt", "idea": "i",
-         "previous_result": "PREV"},
-        env={}, key_file=tmp_path / "none.json",
+        {
+            "base_url": server.url,
+            "model": "m",
+            "system_prompt": "s.txt",
+            "idea": "i",
+            "previous_result": "PREV",
+        },
+        env={},
+        key_file=tmp_path / "none.json",
         settings={"WarpPipe.PromptWriter.SystemPromptDir": str(tmp_path)},
         image_path=lambda name: None,
     )
@@ -374,9 +393,15 @@ def test_handle_write_model_list_failure_keeps_write(server, tmp_path):
 def test_handle_write_unknown_reference_is_error(server, tmp_path):
     (tmp_path / "s.txt").write_text("SYS", encoding="utf-8")
     out = pw.handle_write(
-        {"base_url": server.url, "model": "m", "system_prompt": "s.txt", "idea": "i",
-         "references": ["nope.png"]},
-        env={}, key_file=tmp_path / "none.json",
+        {
+            "base_url": server.url,
+            "model": "m",
+            "system_prompt": "s.txt",
+            "idea": "i",
+            "references": ["nope.png"],
+        },
+        env={},
+        key_file=tmp_path / "none.json",
         settings={"WarpPipe.PromptWriter.SystemPromptDir": str(tmp_path)},
         image_path=lambda name: None,
     )
@@ -391,9 +416,11 @@ def _no_request(*args, **kwargs):
 def _write_kwargs(tmp_path, image_path=lambda name: None, opener=_no_request):
     (tmp_path / "s.txt").write_text("SYS", encoding="utf-8")
     return dict(
-        env={}, key_file=tmp_path / "none.json",
+        env={},
+        key_file=tmp_path / "none.json",
         settings={"WarpPipe.PromptWriter.SystemPromptDir": str(tmp_path)},
-        image_path=image_path, opener=opener,
+        image_path=image_path,
+        opener=opener,
     )
 
 
@@ -408,7 +435,12 @@ def test_handle_write_sends_every_reference_in_order(server, tmp_path):
     server.replies.append((200, {"data": []}))
     server.replies.append((200, {"choices": [{"message": {"content": "OUT"}}]}))
     out = pw.handle_write(
-        {**WRITE_BASE, "base_url": server.url, "idea": "i", "references": ["a.png", "b.jpg", "c.gif"]},
+        {
+            **WRITE_BASE,
+            "base_url": server.url,
+            "idea": "i",
+            "references": ["a.png", "b.jpg", "c.gif"],
+        },
         **_write_kwargs(
             tmp_path,
             image_path=lambda name: str(paths[name]),
@@ -458,7 +490,12 @@ def test_handle_write_allows_eight_references(server, tmp_path):
     server.replies.append((200, {"data": []}))
     server.replies.append((200, {"choices": [{"message": {"content": "OUT"}}]}))
     out = pw.handle_write(
-        {**WRITE_BASE, "base_url": server.url, "idea": "i", "references": [f"{i}.png" for i in range(8)]},
+        {
+            **WRITE_BASE,
+            "base_url": server.url,
+            "idea": "i",
+            "references": [f"{i}.png" for i in range(8)],
+        },
         **_write_kwargs(
             tmp_path, image_path=lambda name: str(img), opener=pw.urllib.request.urlopen
         ),
@@ -469,9 +506,7 @@ def test_handle_write_allows_eight_references(server, tmp_path):
 
 @pytest.mark.parametrize("bad", ["a.png", 5, {"name": "a.png"}, [1], [None], ["a.png", {}]])
 def test_handle_write_refuses_malformed_references(tmp_path, bad):
-    out = pw.handle_write(
-        {**WRITE_BASE, "idea": "i", "references": bad}, **_write_kwargs(tmp_path)
-    )
+    out = pw.handle_write({**WRITE_BASE, "idea": "i", "references": bad}, **_write_kwargs(tmp_path))
     assert "error" in out
 
 
@@ -515,10 +550,17 @@ def test_handle_write_foreign_host_never_gets_key(tmp_path):
         raise OSError("blocked")
 
     out = pw.handle_write(
-        {"base_url": "https://evil.example/v1", "model": "m", "system_prompt": "s.txt", "idea": "i"},
-        env={"NANOGPT_API_KEY": "NANOKEY"}, key_file=tmp_path / "none.json",
+        {
+            "base_url": "https://evil.example/v1",
+            "model": "m",
+            "system_prompt": "s.txt",
+            "idea": "i",
+        },
+        env={"NANOGPT_API_KEY": "NANOKEY"},
+        key_file=tmp_path / "none.json",
         settings={"WarpPipe.PromptWriter.SystemPromptDir": str(tmp_path)},
-        image_path=lambda name: None, opener=opener,
+        image_path=lambda name: None,
+        opener=opener,
     )
     assert "error" in out
     assert seen and all(r.get_header("Authorization") is None for r in seen)
@@ -528,10 +570,17 @@ def test_handle_write_foreign_host_never_gets_key(tmp_path):
 def test_handle_write_nanogpt_without_key_says_how_to_add_one(tmp_path):
     (tmp_path / "s.txt").write_text("SYS", encoding="utf-8")
     out = pw.handle_write(
-        {"base_url": "https://nano-gpt.com/api/v1", "model": "m", "system_prompt": "s.txt", "idea": "i"},
-        env={}, key_file=tmp_path / "none.json",
+        {
+            "base_url": "https://nano-gpt.com/api/v1",
+            "model": "m",
+            "system_prompt": "s.txt",
+            "idea": "i",
+        },
+        env={},
+        key_file=tmp_path / "none.json",
         settings={"WarpPipe.PromptWriter.SystemPromptDir": str(tmp_path)},
-        image_path=lambda name: None, opener=lambda *a, **k: pytest.fail("no request expected"),
+        image_path=lambda name: None,
+        opener=lambda *a, **k: pytest.fail("no request expected"),
     )
     assert "NANOGPT_API_KEY" in out["error"]
     assert "\u2699" in out["error"]
@@ -556,9 +605,15 @@ def test_handle_write_refuses_traversal_and_non_image_reference(tmp_path):
     (tmp_path / "s.txt").write_text("SYS", encoding="utf-8")
     secret = tmp_path / "secret.txt"
     secret.write_text("x")
-    base = {"base_url": "http://127.0.0.1:9/v1", "model": "m", "system_prompt": "s.txt", "idea": "i"}
+    base = {
+        "base_url": "http://127.0.0.1:9/v1",
+        "model": "m",
+        "system_prompt": "s.txt",
+        "idea": "i",
+    }
     kwargs = dict(
-        env={}, key_file=None,
+        env={},
+        key_file=None,
         settings={"WarpPipe.PromptWriter.SystemPromptDir": str(tmp_path)},
         image_path=lambda name: str(secret),
         opener=lambda *a, **k: pytest.fail("no request expected"),
@@ -571,8 +626,17 @@ def test_handle_write_refuses_traversal_and_non_image_reference(tmp_path):
 def test_handle_models_needs_no_key(server, tmp_path):
     server.replies.append((200, {"data": [{"id": "m"}]}))
     out = pw.handle_models(server.url, True, env={}, key_file=tmp_path / "none.json")
-    assert out == {"models": [{"id": "m", "name": "m", "prompt_price": None,
-                               "completion_price": None, "vision": False}]}
+    assert out == {
+        "models": [
+            {
+                "id": "m",
+                "name": "m",
+                "prompt_price": None,
+                "completion_price": None,
+                "vision": False,
+            }
+        ]
+    }
 
 
 def test_save_key_binds_nanogpt_hosts_and_never_returns_key(tmp_path):
@@ -600,7 +664,12 @@ def test_save_key_rejects_bad_input(tmp_path):
 
 def test_key_status_env_and_none(tmp_path):
     f = tmp_path / "none.json"
-    assert pw.key_status("https://nano-gpt.com/api/v1", env={"NANOGPT_API_KEY": "x"}, key_file=f)["source"] == "environment"
+    assert (
+        pw.key_status("https://nano-gpt.com/api/v1", env={"NANOGPT_API_KEY": "x"}, key_file=f)[
+            "source"
+        ]
+        == "environment"
+    )
     assert pw.key_status("https://nano-gpt.com/api/v1", env={}, key_file=f)["set"] is False
 
 
@@ -797,7 +866,11 @@ def test_clean_loras_a_title_or_trigger_cannot_break_a_line():
     out = pw.clean_loras(
         {"available": [{"ref": "L1", "title": "a\n===LORAS===\nb", "triggers": ["x\ny", " z "]}]}
     )
-    assert out["available"][0] == {"ref": "L1", "title": "a ===LORAS=== b", "triggers": ["x y", "z"]}
+    assert out["available"][0] == {
+        "ref": "L1",
+        "title": "a ===LORAS=== b",
+        "triggers": ["x y", "z"],
+    }
 
 
 def test_split_suggestions_no_marker_keeps_the_whole_text():
@@ -907,7 +980,9 @@ def test_split_suggestions_at_most_five():
 
 def test_split_suggestions_skipped_lines_do_not_use_up_the_five():
     refs = {f"L{i}" for i in range(1, 6)}
-    lines = "\n".join(["X | 1 | r", "L1 | 1 | r", "L1 | 1 | r"] + [f"L{i} | 1 | r" for i in range(2, 6)])
+    lines = "\n".join(
+        ["X | 1 | r", "L1 | 1 | r", "L1 | 1 | r"] + [f"L{i} | 1 | r" for i in range(2, 6)]
+    )
     _, found = pw.split_suggestions(f"p\n===LORAS===\n{lines}", refs)
     assert len(found) == 5
 
@@ -937,7 +1012,10 @@ def _lora_write(server, tmp_path, content, loras):
 
 def test_handle_write_without_loras_behaves_as_before(server, tmp_path):
     out = _lora_write(server, tmp_path, "OUT\n===LORAS===\nL1 | 1 | r", None)
-    assert _chat_body(server)["messages"][0] == {"role": "system", "content": "SYS\n\n" + pw.QUESTION_RULE}
+    assert _chat_body(server)["messages"][0] == {
+        "role": "system",
+        "content": "SYS\n\n" + pw.QUESTION_RULE,
+    }
     assert out["text"] == "OUT\n===LORAS===\nL1 | 1 | r"
     assert out["suggestions"] == []
 
@@ -1003,7 +1081,10 @@ def test_split_suggestions_takes_a_limit():
 
 
 def test_handle_write_with_active_loras_returns_at_most_two(server, tmp_path):
-    many = {**LORAS, "available": [{"ref": f"L{i}", "title": f"T{i}", "triggers": []} for i in range(1, 6)]}
+    many = {
+        **LORAS,
+        "available": [{"ref": f"L{i}", "title": f"T{i}", "triggers": []} for i in range(1, 6)],
+    }
     lines = "\n".join(f"L{i} | 1 | r" for i in range(1, 6))
     out = _lora_write(server, tmp_path, f"p\n===LORAS===\n{lines}", many)
     assert [item["ref"] for item in out["suggestions"]] == ["L1", "L2"]
@@ -1042,8 +1123,17 @@ def test_a_redirect_must_meet_the_rules_of_a_base_url(server, tmp_path):
 
 
 def test_every_request_goes_through_the_redirect_rules():
-    for function in (pw.list_models, pw.write, pw.make_title, pw.handle_models, pw.handle_title, pw.handle_write):
-        assert inspect.signature(function).parameters["opener"].default is pw._open, function.__name__
+    for function in (
+        pw.list_models,
+        pw.write,
+        pw.make_title,
+        pw.handle_models,
+        pw.handle_title,
+        pw.handle_write,
+    ):
+        assert inspect.signature(function).parameters["opener"].default is pw._open, (
+            function.__name__
+        )
 
 
 # --- errors -----------------------------------------------------------------
@@ -1053,7 +1143,7 @@ def test_a_connection_that_breaks_off_is_an_error_the_user_can_read():
     def opener(request, timeout):
         raise http.client.IncompleteRead(b"partial")
 
-    with pytest.raises(pw.PromptWriterError, match="nano-gpt.com"):
+    with pytest.raises(pw.PromptWriterError, match=r"nano-gpt\.com"):
         pw._request("https://nano-gpt.com/api/v1/models", api_key="k", timeout=5, opener=opener)
 
 
@@ -1066,7 +1156,10 @@ def test_handle_title_refuses_a_body_that_is_not_an_object(body):
 
 
 def test_build_messages_carries_questions_and_answers():
-    turns = [{"question": "Sun in frame?", "answer": "No"}, {"question": "Morning?", "answer": "Yes"}]
+    turns = [
+        {"question": "Sun in frame?", "answer": "No"},
+        {"question": "Morning?", "answer": "Yes"},
+    ]
     m = pw.build_messages("S", "warmer light", "OLD", [], turns)
     roles = ["system", "user", "assistant", "user", "assistant", "user", "assistant", "user"]
     assert [x["role"] for x in m] == roles
@@ -1077,7 +1170,9 @@ def test_build_messages_carries_questions_and_answers():
 
 
 def test_build_messages_images_stay_with_the_request():
-    m = pw.build_messages("S", "idea", None, ["data:image/png;base64,AAA"], [{"question": "Q", "answer": "A"}])
+    m = pw.build_messages(
+        "S", "idea", None, ["data:image/png;base64,AAA"], [{"question": "Q", "answer": "A"}]
+    )
     assert m[1]["content"][0] == {"type": "text", "text": "idea"}
     assert m[3] == {"role": "user", "content": "A"}
 
@@ -1106,13 +1201,20 @@ def test_handle_write_returns_a_question_instead_of_a_version(server, tmp_path):
 
 
 def test_handle_write_an_empty_question_is_the_no_text_error(server, tmp_path):
-    assert _lora_write(server, tmp_path, "===QUESTION===\n", None) == {"error": "The model returned no text"}
+    assert _lora_write(server, tmp_path, "===QUESTION===\n", None) == {
+        "error": "The model returned no text"
+    }
 
 
 def test_handle_write_sends_the_questions_and_answers(server, tmp_path):
     server.replies.append((200, {"data": []}))
     server.replies.append((200, {"choices": [{"message": {"content": "OUT"}}]}))
-    body = {**WRITE_BASE, "base_url": server.url, "idea": "i", "turns": [{"question": " Q ", "answer": " A "}]}
+    body = {
+        **WRITE_BASE,
+        "base_url": server.url,
+        "idea": "i",
+        "turns": [{"question": " Q ", "answer": " A "}],
+    }
     out = pw.handle_write(body, **_write_kwargs(tmp_path, opener=pw.urllib.request.urlopen))
     assert out["text"] == "OUT"
     assert _chat_body(server)["messages"][-2:] == [
@@ -1123,7 +1225,13 @@ def test_handle_write_sends_the_questions_and_answers(server, tmp_path):
 
 @pytest.mark.parametrize(
     "turns",
-    ["x", [1], [{"question": "Q"}], [{"question": "", "answer": "A"}], [{"question": "Q", "answer": "A"}] * 9],
+    [
+        "x",
+        [1],
+        [{"question": "Q"}],
+        [{"question": "", "answer": "A"}],
+        [{"question": "Q", "answer": "A"}] * 9,
+    ],
 )
 def test_handle_write_refuses_bad_questions_and_answers(tmp_path, turns):
     body = {**WRITE_BASE, "idea": "i", "turns": turns}
@@ -1162,7 +1270,15 @@ def test_write_reads_a_stream_and_passes_on_each_piece(server):
     )
     pieces = []
     out = pw.write(
-        server.url, "m", "S", 0.6, "i", None, [], api_key="k", model=None,
+        server.url,
+        "m",
+        "S",
+        0.6,
+        "i",
+        None,
+        [],
+        api_key="k",
+        model=None,
         on_delta=lambda *piece: pieces.append(piece),
     )
     assert out["text"] == "A red bicycle."
@@ -1173,16 +1289,38 @@ def test_write_reads_a_stream_and_passes_on_each_piece(server):
 
 def test_write_takes_the_running_token_count_when_the_stream_gives_one(server):
     server.replies.append(
-        (200, _sse({"choices": [{"delta": {"content": "A"}}], "usage": {"completion_tokens": 9}}), SSE)
+        (
+            200,
+            _sse({"choices": [{"delta": {"content": "A"}}], "usage": {"completion_tokens": 9}}),
+            SSE,
+        )
     )
     pieces = []
-    pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None, on_delta=lambda *p: pieces.append(p))
+    pw.write(
+        server.url,
+        "m",
+        "S",
+        0.6,
+        "i",
+        None,
+        [],
+        api_key=None,
+        model=None,
+        on_delta=lambda *p: pieces.append(p),
+    )
     assert pieces == [("", "A", 9)]
 
 
 def test_write_a_stream_with_think_tags_in_the_content(server):
     server.replies.append(
-        (200, _sse({"choices": [{"delta": {"content": "<think>hm"}}]}, {"choices": [{"delta": {"content": "</think>P"}}]}), SSE)
+        (
+            200,
+            _sse(
+                {"choices": [{"delta": {"content": "<think>hm"}}]},
+                {"choices": [{"delta": {"content": "</think>P"}}]},
+            ),
+            SSE,
+        )
     )
     out = pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None)
     assert out["text"] == "P"
@@ -1199,15 +1337,27 @@ def test_think_tags_are_split_where_the_pieces_cut_them():
 
 def test_write_stops_when_told(server):
     server.replies.append(
-        (200, _sse({"choices": [{"delta": {"content": "A"}}]}, {"choices": [{"delta": {"content": "B"}}]}), SSE)
+        (
+            200,
+            _sse(
+                {"choices": [{"delta": {"content": "A"}}]},
+                {"choices": [{"delta": {"content": "B"}}]},
+            ),
+            SSE,
+        )
     )
     with pytest.raises(pw.PromptWriterError, match="Stopped"):
-        pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None, stopped=lambda: True)
+        pw.write(
+            server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None, stopped=lambda: True
+        )
 
 
 @pytest.mark.parametrize(
     "error, message",
-    [({"message": "Insufficient balance", "code": 402}, "Insufficient balance"), ("Context too long", "Context too long")],
+    [
+        ({"message": "Insufficient balance", "code": 402}, "Insufficient balance"),
+        ("Context too long", "Context too long"),
+    ],
 )
 def test_write_reports_an_error_sent_inside_the_stream(server, error, message):
     server.replies.append(
@@ -1221,11 +1371,15 @@ def test_write_hears_a_stop_between_keep_alive_lines(server):
     # A model that thinks in silence sends only comments; a stop must not wait for data.
     server.replies.append((200, ": PROCESSING\n\n" * 3 + "data: [DONE]\n\n", SSE))
     with pytest.raises(pw.PromptWriterError, match="Stopped"):
-        pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None, stopped=lambda: True)
+        pw.write(
+            server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None, stopped=lambda: True
+        )
 
 
 def test_write_keeps_the_reasoning_of_a_whole_reply(server):
-    server.replies.append((200, {"choices": [{"message": {"content": "P", "reasoning_content": "R"}}]}))
+    server.replies.append(
+        (200, {"choices": [{"message": {"content": "P", "reasoning_content": "R"}}]})
+    )
     out = pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None)
     assert out["text"] == "P"
     assert out["reasoning"] == "R"
@@ -1234,7 +1388,14 @@ def test_write_keeps_the_reasoning_of_a_whole_reply(server):
 def test_handle_write_passes_the_pieces_on_and_returns_the_reasoning(server, tmp_path):
     server.replies.append((200, {"data": []}))
     server.replies.append(
-        (200, _sse({"choices": [{"delta": {"reasoning": "why"}}]}, {"choices": [{"delta": {"content": "OUT"}}]}), SSE)
+        (
+            200,
+            _sse(
+                {"choices": [{"delta": {"reasoning": "why"}}]},
+                {"choices": [{"delta": {"content": "OUT"}}]},
+            ),
+            SSE,
+        )
     )
     pieces = []
     out = pw.handle_write(
@@ -1251,13 +1412,17 @@ def test_handle_write_passes_the_pieces_on_and_returns_the_reasoning(server, tmp
 
 
 def _log_lines(path):
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
 
 
 def _logged_write(server, tmp_path, reply, *, key="LOCALKEY", stopped=None, extra=None):
     (tmp_path / "s.txt").write_text("SYS", encoding="utf-8")
     log = tmp_path / "log.jsonl"
-    server.replies.append((200, {"data": [{"id": "m", "pricing": {"prompt": 1.0, "completion": 2.0}}]}))
+    server.replies.append(
+        (200, {"data": [{"id": "m", "pricing": {"prompt": 1.0, "completion": 2.0}}]})
+    )
     server.replies.append(reply)
     body = {
         "base_url": server.url,
@@ -1288,11 +1453,15 @@ def _logged_write(server, tmp_path, reply, *, key="LOCALKEY", stopped=None, extr
 
 
 def test_the_log_holds_the_request_and_then_its_result(server, tmp_path):
-    reply = (200, _sse(
-        {"choices": [{"delta": {"reasoning": "why"}}]},
-        {"choices": [{"delta": {"content": "NEW PROMPT\n===LORAS===\nL1 | 0.7 | glow"}}]},
-        {"choices": [], "usage": {"prompt_tokens": 1000, "completion_tokens": 500}},
-    ), SSE)
+    reply = (
+        200,
+        _sse(
+            {"choices": [{"delta": {"reasoning": "why"}}]},
+            {"choices": [{"delta": {"content": "NEW PROMPT\n===LORAS===\nL1 | 0.7 | glow"}}]},
+            {"choices": [], "usage": {"prompt_tokens": 1000, "completion_tokens": 500}},
+        ),
+        SSE,
+    )
     out, log = _logged_write(server, tmp_path, reply)
     assert out["text"] == "NEW PROMPT"
     request, result = _log_lines(log)
@@ -1320,7 +1489,7 @@ def test_the_log_holds_the_request_and_then_its_result(server, tmp_path):
 
 def test_the_log_never_holds_the_key_or_image_data(server, tmp_path):
     reply = (401, {"error": {"message": "Key LOCALKEY is not valid"}})
-    out, log = _logged_write(server, tmp_path, reply)
+    _, log = _logged_write(server, tmp_path, reply)
     text = log.read_text(encoding="utf-8")
     assert "LOCALKEY" not in text
     assert "PNG-IMAGE-BYTES" not in text and "base64" not in text
@@ -1330,7 +1499,11 @@ def test_the_log_never_holds_the_key_or_image_data(server, tmp_path):
 
 
 def test_the_log_records_a_question(server, tmp_path):
-    out, log = _logged_write(server, tmp_path, (200, {"choices": [{"message": {"content": "===QUESTION===\nWhich lake?"}}]}))
+    out, log = _logged_write(
+        server,
+        tmp_path,
+        (200, {"choices": [{"message": {"content": "===QUESTION===\nWhich lake?"}}]}),
+    )
     assert out["question"] == "Which lake?"
     result = _log_lines(log)[-1]
     assert result["outcome"] == "question"
@@ -1397,19 +1570,33 @@ def test_a_log_that_cannot_be_written_never_breaks_a_write(server, tmp_path, cap
 def test_write_sends_the_thinking_level_only_when_one_is_set(server):
     server.replies.append((200, {"choices": [{"message": {"content": "P"}}]}))
     server.replies.append((200, {"choices": [{"message": {"content": "P"}}]}))
-    pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None, reasoning_effort="low")
+    pw.write(
+        server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None, reasoning_effort="low"
+    )
     pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None)
     assert server.requests[0]["body"]["reasoning_effort"] == "low"
     assert "reasoning_effort" not in server.requests[1]["body"]
 
 
-@pytest.mark.parametrize("raw, sent", [("high", "high"), (" Max ", "max"), ("none", "none"), ("extreme", None), ("", None), (3, None)])
+@pytest.mark.parametrize(
+    "raw, sent",
+    [
+        ("high", "high"),
+        (" Max ", "max"),
+        ("none", "none"),
+        ("extreme", None),
+        ("", None),
+        (3, None),
+    ],
+)
 def test_handle_write_passes_a_known_thinking_level_on(server, tmp_path, raw, sent):
     server.replies.append((200, {"data": []}))
     server.replies.append((200, {"choices": [{"message": {"content": "OUT"}}]}))
     log = tmp_path / "log.jsonl"
     body = {**WRITE_BASE, "base_url": server.url, "idea": "i", "reasoning_effort": raw}
-    out = pw.handle_write(body, **_write_kwargs(tmp_path, opener=pw.urllib.request.urlopen), log_path=log)
+    out = pw.handle_write(
+        body, **_write_kwargs(tmp_path, opener=pw.urllib.request.urlopen), log_path=log
+    )
     assert out["text"] == "OUT"
     assert _chat_body(server).get("reasoning_effort") == sent
     assert _log_lines(log)[0]["reasoning_effort"] == sent

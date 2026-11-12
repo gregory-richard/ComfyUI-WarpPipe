@@ -83,46 +83,81 @@ def test_key_bound_to_host():
     assert pw.key_for("https://nano-gpt.com.evil.example/v1", env, None) is None
     assert pw.key_for("http://127.0.0.1:1234/v1", env, None) is None
 
+
 def test_key_file_names_other_hosts(tmp_path):
-    f = tmp_path / "warppipe_llm_keys.json"; f.write_text('{"127.0.0.1": "local"}')
+    f = tmp_path / "warppipe_llm_keys.json"
+    f.write_text('{"127.0.0.1": "local"}')
     assert pw.key_for("http://127.0.0.1:1234/v1", {}, f) == "local"
     assert pw.key_for("http://localhost:1234/v1", {}, f) is None
 
+
 def test_check_url():
-    pw.check_url("https://nano-gpt.com/api/v1"); pw.check_url("http://localhost:1234/v1")
+    pw.check_url("https://nano-gpt.com/api/v1")
+    pw.check_url("http://localhost:1234/v1")
     for bad in ("http://nano-gpt.com/api/v1", "ftp://x/y", "file:///c:/x"):
-        with pytest.raises(pw.PromptWriterError): pw.check_url(bad)
+        with pytest.raises(pw.PromptWriterError):
+            pw.check_url(bad)
+
 
 def test_map_models_nanogpt_and_plain():
-    nano = {"data": [{"id": "b", "name": "Beta", "pricing": {"prompt": 0.3, "completion": 1.2},
-                      "capabilities": {"vision": True}},
-                     {"id": "a", "name": "alpha"}]}
+    nano = {
+        "data": [
+            {
+                "id": "b",
+                "name": "Beta",
+                "pricing": {"prompt": 0.3, "completion": 1.2},
+                "capabilities": {"vision": True},
+            },
+            {"id": "a", "name": "alpha"},
+        ]
+    }
     assert pw.map_models(nano) == [
-        {"id": "a", "name": "alpha", "prompt_price": None, "completion_price": None, "vision": False},
-        {"id": "b", "name": "Beta", "prompt_price": 0.3, "completion_price": 1.2, "vision": True}]
-    assert pw.map_models({"data": [{"id": "m1"}]})[0]["name"] == "m1"   # plain OpenAI
+        {
+            "id": "a",
+            "name": "alpha",
+            "prompt_price": None,
+            "completion_price": None,
+            "vision": False,
+        },
+        {"id": "b", "name": "Beta", "prompt_price": 0.3, "completion_price": 1.2, "vision": True},
+    ]
+    assert pw.map_models({"data": [{"id": "m1"}]})[0]["name"] == "m1"  # plain OpenAI
 
-def test_list_models_sends_key_and_user_agent_and_caches(server): ...
+
+def test_list_models_sends_key_and_user_agent_and_caches(server):
+    ...
     # asserts: path == "/api/v1/models?detailed=true"; headers Authorization == "Bearer k";
     # User-Agent == pw.USER_AGENT and startswith "ComfyUI-WarpPipe/"; second call → no new request;
     # refresh=True → new request
 
+
 def test_system_prompt_files(tmp_path):
-    (tmp_path / "v2.6.txt").write_text("SYS", encoding="utf-8"); (tmp_path / "notes.md").write_text("x")
+    (tmp_path / "v2.6.txt").write_text("SYS", encoding="utf-8")
+    (tmp_path / "notes.md").write_text("x")
     assert pw.system_prompt_names(str(tmp_path)) == ["v2.6.txt"]
     assert pw.read_system_prompt(str(tmp_path), "v2.6.txt") == "SYS"
     for bad in ("../x.txt", "a/b.txt", "a\\b.txt", "notes.md", "missing.txt"):
-        with pytest.raises(pw.PromptWriterError): pw.read_system_prompt(str(tmp_path), bad)
-    with pytest.raises(pw.PromptWriterError, match="SystemPromptDir"): pw.system_prompt_names(None)
+        with pytest.raises(pw.PromptWriterError):
+            pw.read_system_prompt(str(tmp_path), bad)
+    with pytest.raises(pw.PromptWriterError, match="SystemPromptDir"):
+        pw.system_prompt_names(None)
+
 
 def test_build_messages():
     assert pw.build_messages("S", "idea", None, None) == [
-        {"role": "system", "content": "S"}, {"role": "user", "content": "idea"}]
+        {"role": "system", "content": "S"},
+        {"role": "user", "content": "idea"},
+    ]
     m = pw.build_messages("S", "warmer light", "OLD", "data:image/png;base64,AAA")
     assert m[1] == {"role": "assistant", "content": "OLD"}
-    assert m[2] == {"role": "user", "content": [
-        {"type": "text", "text": "warmer light"},
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}}]}
+    assert m[2] == {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "warmer light"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+        ],
+    }
+
 
 def test_parse_reply_strips_thinking():
     msg = lambda **kw: {"choices": [{"message": kw}]}
@@ -131,6 +166,7 @@ def test_parse_reply_strips_thinking():
     with pytest.raises(pw.PromptWriterError, match="returned no text"):
         pw.parse_reply(msg(content="", reasoning_content="only thoughts"))
 
+
 def test_cost_of():
     usage = {"prompt_tokens": 1000, "completion_tokens": 500}
     model = {"prompt_price": 0.3, "completion_price": 1.2}
@@ -138,13 +174,17 @@ def test_cost_of():
     assert pw.cost_of({"usage": {**usage, "cost": 0.002}}, model) == 0.002
     assert pw.cost_of({"usage": usage}, None) is None
 
-def test_write_round_trip(server): ...
+
+def test_write_round_trip(server):
+    ...
     # reply {"choices":[{"message":{"content":"PROMPT"}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}
     # assert body == {"model": "m", "temperature": 0.6, "stream": False, "messages": [...]}
     # result["text"] == "PROMPT"; result["usage"] == {"prompt_tokens": 10, "completion_tokens": 5}
     # isinstance(result["seconds"], float)
 
-def test_write_surfaces_provider_errors(server): ...
+
+def test_write_surfaces_provider_errors(server):
+    ...
     # 402 {"error":{"message":"Insufficient balance"}} → PromptWriterError("Insufficient balance")
     # 500 text "upstream down" → PromptWriterError whose message contains "upstream down" and "500"
     # message never contains the api key value
