@@ -1,0 +1,25 @@
+# Kept out of the Comfy Registry package (comfy node publish reads this file).
+# Anchored with a leading /: a bare docs/ would also drop web/docs, the help of every node.
+# Only what building, testing and writing this pack needs: none of it runs in ComfyUI.
+# The Registry's scan flagged package-lock.json on every version as vendored code.
+
+# Frontend tooling; web/vendor/codemirror.js is the built bundle and stays in.
+/package.json
+/package-lock.json
+/eslint.config.js
+/.prettierrc.json
+/.prettierignore
+/scripts/
+
+# Tests, CI and design notes
+/tests/
+/.github/
+/docs/
+
+# Agent skills and their links
+/.claude/
+/.agent
+/.agents
+
+# Full-size originals of the icon and banner (about 10 MB); the scaled ones stay.
+/assets/source/
