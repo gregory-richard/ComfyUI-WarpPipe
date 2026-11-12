@@ -2,17 +2,13 @@
 
 # WarpPipe
 
-ComfyUI nodes that bundle a whole generation into one wire, and a prompt box
-that keeps a prompt and its LoRAs in the same place.
+ComfyUI nodes for people who switch models a lot and like their LoRAs in the prompt.
 
-- **Warp / Unwarp** — everything a sampler needs travels as a single link.
-  Switching between whole model setups is one wire moved instead of twenty.
-- **Prompt + LoRAs** — write `a portrait <lora:detail tweaker:0.8>` and have it
-  mean it. The tags *are* the loader; the prompt is still a prompt.
-- **Save Image (Civitai)** — writes metadata Civitai reads, so an upload
-  credits the checkpoint and the LoRAs that actually made the picture.
-
-They work apart as well as together.
+- **Prompt + LoRAs**: LoRAs are tags in the text, and colours tell you what will load before you queue.
+- **Prompt Writer**: an LLM chat behind every prompt box. Each answer is a version you can compare and send back.
+- **Warp / Unwarp**: a whole generation in one wire.
+- **Warp Send / Select**: switch between model groups without moving a wire.
+- **Save Image (Civitai)**: metadata Civitai reads, so an upload credits the right model and LoRAs.
 
 ## Install
 
@@ -20,148 +16,136 @@ They work apart as well as together.
 comfy node install warppipe
 ```
 
-Or clone into `ComfyUI/custom_nodes` and restart. Python 3.9+, no third-party
-dependencies.
+Or clone into `ComfyUI/custom_nodes` and restart. Python 3.9+, no extra dependencies.
 
-## The prompt box
+## Prompt + LoRAs
 
-![The Prompt + LoRAs node, with tags, notes and trigger words coloured](assets/docs/prompt-node.webp)
+<img src="assets/docs/prompt-node.webp" alt="Prompt + LoRAs with sections, trigger words, a LoRA list and the AI button" width="600">
 
-Colour says what will happen before you run anything: cyan resolves, red matches
-nothing, orange is built for another base model, green is a trigger word — a
-dimmer green when its LoRA is switched off — and grey is a `//` note that never
-reaches the model. The line underneath describes whichever tag the caret is in,
-or, from a trigger word, the LoRA it belongs to.
+The prompt goes on top, the LoRAs in the list below, one per line:
 
-The prose goes in the prompt box and the LoRAs in the short list under it, one
-tag to a line. Press `/` to complete against your library inline, `Tab` to take
-it, `Tab` again on a tag for that LoRA's trigger words. Weight, ordering and
-switching a LoRA off are ordinary text edits, so undo covers all of them.
+```text
+//// Subject
+a red bicycle leaning on a stone wall by a lake, early morning mist
+soft window light, film grain
+//// Style
+// a note: never reaches the model
+35mm photo, muted colours <lora:old-polaroid:0.5>
+```
 
-A second list, switched on, gives `model_2` a stack of its own for a two-pass
-sampler — base then turbo, high noise then low.
+```text
+<lora:film-grain-xl:0.8>
+<lora:window-light:0.6>
+// <lora:watercolor-wash:0.5>
+```
 
-→ [Writing a prompt](WIKI.md#writing-a-prompt) ·
-[the browser](WIKI.md#the-browser) · [all the keys](WIKI.md#keys)
+| Colour | Means |
+| --- | --- |
+| cyan | the LoRA was found |
+| red | no file by that name |
+| orange | made for another base model |
+| green | trigger word of a LoRA that is on (dim when it is off) |
+| grey | a `//` note, or a LoRA switched off |
+
+`////` starts a section you can fold. `/` completes from your LoRA library, `Tab`
+on a tag adds its trigger words, `Ctrl+/` switches lines on and off. A second
+list can feed `model_2` for two-pass setups.
+
+## Prompt Writer
+
+![The Prompt Writer: chats on the left, versions with their changes on the right](assets/docs/prompt-writer.webp)
+
+Click **✨ AI** on any prompt box and say what you want, with reference images if
+you like. Every answer becomes a version. Edit it, write the next one from it, or
+**Send to prompt**. **Show changes** marks what is new and puts the word it
+replaced small above it.
+
+- Works with NanoGPT out of the box, or any OpenAI-compatible server (LM Studio, Ollama, llama.cpp).
+- The API key stays on the ComfyUI server (`user/warppipe_llm_keys.json` or `NANOGPT_API_KEY`). It never reaches the browser, a workflow or an image.
+- Bring your own system prompts: a folder of `.txt` files, set under Settings → WarpPipe.
+- It knows your LoRAs for the connected model and can suggest some. Nothing lands in your list until you press **+**.
+- Chats are saved in the ComfyUI user folder and keep writing after you close the pop-up.
 
 ## One wire
 
 ![A Warp bundling three sources into one link, unpacked by Unwarp](assets/docs/warp-unwarp.webp)
 
-Everything on the left goes into a **Warp**. One link crosses the canvas. An
-**Unwarp** gives it all back. Warps chain, so a second one downstream carries
-everything the first did and adds to it.
+A **Warp** takes models, conditioning, latents, prompts and sampler settings. One
+link crosses the canvas, and an **Unwarp** gives it all back. Warps chain: one
+further down carries everything the first did and adds to it.
 
-→ [Bundling a generation](WIKI.md#bundling-a-generation)
+## Switching model groups
 
-## Works with Civitai Updater
+![Two model groups with a Warp Send each, and a Warp Select in the hub](assets/docs/warp-send-select.webp)
 
-WarpPipe reads the `.civitai.info` sidecars that
-[Civitai Updater](https://github.com/gregory-richard/comfyui-civitai-updater)
-writes: trigger words, base models, titles, Civitai links and the AutoV2 hash
-Civitai matches on. Only the hash has a fallback — the rest simply are not there
-without a sidecar, and the features built on them go quiet.
+```mermaid
+flowchart LR
+  subgraph A[Krea 2]
+    L1[Loaders] --> W1[Warp] --> S1[Warp Send]
+  end
+  subgraph B[Z-Image Turbo]
+    L2[Loaders] --> W2[Warp] --> S2[Warp Send]
+  end
+  S1 -. active .-> SEL[Warp Select]
+  S2 -. off .-> SEL
+  SEL --> U[Unwarp] --> K[Sampler] --> SAVE["Save Image (Civitai)"]
+```
 
-→ [What the sidecars give you](WIKI.md#what-the-sidecars-give-you)
+Put a **Warp Send** at the end of each model group and one **Warp Select** in the
+shared part. Press **activate** on a Send, or pick it in the Select, and only that
+group runs. Green runs, red doesn't. If the routing is broken (nothing active, the
+active Send muted, two Sends with one name) the queue says so instead of running.
 
-## The nodes
+The active Send shows the live preview while it samples
+(`--preview-method auto`) and a before/after slider when it is done. Right-click
+any image node and **Use as before image** to choose what goes on the left. The
+same slider exists as its own node, **Warp Compare**.
 
-| Node | |
-| --- | --- |
-| 🌀 **Warp** | Bundles models, conditioning, images, latents, prompts and parameters into one link |
-| 🌀 **Unwarp** | Unpacks it into twenty-two outputs |
-| 🌀 **Warp Provider** | Latent and parameters together, with 30+ resolution presets |
-| 🌀 **Prompt + LoRAs** | The prompt box above |
-| 🌀 **Save Image (Civitai)** | Saves with metadata Civitai reads |
-| 🌀 **Scheduler Adapter for FaceDetailer** | Maps KSampler schedulers onto FaceDetailer's set |
-| 🌀 **Warp Send** | Passes a Warp through one model group; the active Send is the one that runs, and shows the live preview and a before/after slider |
-| 🌀 **Warp Select** | Picks the model group to run from a dropdown of Sends, in the hub - no wire moved |
-| 🌀 **Warp Compare** | Compares a `before` (left) and an `after` (right) image with a slider that follows the mouse; arrows step through batch pairs. Replaces rgthree's Image Comparer |
-| 🚫 **Dead End** | Accepts any type, produces nothing. Parks a branch without deleting it |
+## Save Image (Civitai)
 
-### Choosing a model group without moving wires
+Saves PNG or JPEG with the generation info Civitai reads. The `Hashes` field is
+what makes an upload link the checkpoint and every LoRA:
 
-Put a **Warp Send** in each model group and a **Warp Select** in the hub. Pick a
-group in Warp Select's dropdown, or press **activate** on its Warp Send, and that
-group's Send is the one that runs. **go to active group** on Warp Select only
-moves the canvas to the active Send. The active Send is fully green, inactive
-Sends are fully red with a line "active: <name>", and Warp Select is green while
-the route is valid and red otherwise. The queue is blocked with a message when
-no Send is active, the active one is muted or bypassed, two Sends share a name or
-an index, or the active one has no warp input.
+```text
+a red bicycle by a lake, early morning mist <lora:film-grain-xl:0.8>
+Steps: 30, Sampler: dpmpp_2m, Schedule type: karras, CFG scale: 5.0, Seed: 44,
+Size: 1024x1024, Model hash: 4c2b8e1f0a, Model: demo-sdxl,
+Lora hashes: "film-grain-xl: 3b1f0c2a9d",
+Hashes: {"model":"4c2b8e1f0a","lora:film-grain-xl":"3b1f0c2a9d"}, Version: ComfyUI-WarpPipe
+```
 
-No links are needed for results. The active Send shows the images Save Image
-(Civitai) shows in that run as the final, and the images of the node you mark
-with right-click **Use as before image** as the before (one node
-per workflow; **Remove before-image mark** undoes it). Warp Compare is the same
-slider as a node of its own. All of it works in the classic canvas and in
-Nodes 2.0. The live preview needs ComfyUI started with `--preview-method auto`.
-Help for each: `web/docs/Warp Send.md`, `Warp Select.md`, `Warp Compare.md`.
+It also shows what it saved next to the before image, in the same slider.
 
-### Writing prompts with an LLM
-
-Every **Prompt + LoRAs** has an **✨ AI** button on its text box. It opens
-a pop-up where you chat with an LLM about the prompt: say what you want, add
-images, and each answer becomes a version you can edit or continue from. **Send to
-prompt** writes a version into the Prompt + LoRAs chosen at the top. With LoRA suggestions
-on, the LLM knows your LoRAs for that model or only those in the node's list, uses the trigger words of active ones and
-suggests others, which only reach a list when you press **+**. Writing carries on after the pop-up
-is closed, and several chats can write at once. Chats are stored in the ComfyUI
-user folder, never in the workflow or in images. NanoGPT is the default; any
-OpenAI-compatible server (LM Studio, Ollama, llama.cpp) works through the base
-URL under ⚙. Type the API key once under ⚙; it is saved in
-`user/warppipe_llm_keys.json` and kept across restarts (`NANOGPT_API_KEY` works
-too). It is never stored in a workflow or sent to the browser. Pick the system
-prompt folder in Settings → WarpPipe → Prompt Writer. Help:
-`web/docs/Prompt Writer.md`.
-
-Every node carries its own help inside ComfyUI, behind the `?` on the node.
-
-→ [Every input and output](WIKI.md#node-reference)
+If you use [Civitai Updater](https://github.com/gregory-richard/comfyui-civitai-updater),
+WarpPipe reads its `.civitai.info` files for trigger words, base models and titles.
 
 ## Example workflow
 
-Two model configurations — Krea 2 and Z-Image Turbo — each with its own Warp,
-switched into one shared workflow:
+<img src="examples/workflow_example_screenshot.png" alt="The example workflow: two model groups feeding one shared pipeline" width="820">
 
-<p align="center">
-  <img src="examples/workflow_example_screenshot.png" alt="The example workflow: two model groups feeding one shared pipeline" width="820">
-</p>
+Krea 2 and Z-Image Turbo in one workflow. The image below was made with it and
+has the workflow inside: drag it into ComfyUI to open it, or grab the
+[JSON](examples/workflow_example.json).
 
-It produced this, and carries the workflow inside it — drag the image into
-ComfyUI to open it:
+<img src="examples/workflow_example.png" alt="A pixel-art warp pipe made with the example workflow" width="260">
 
-<p align="center">
-  <img src="examples/workflow_example.png" alt="A pixel-art warp pipe, generated by the example workflow" width="300">
-</p>
+## All nodes
 
-Save Image (Civitai) wrote this alongside it, which is what a site reads:
+| Node | |
+| --- | --- |
+| 🌀 Warp / Unwarp | Bundle a generation into one link and unpack it again |
+| 🌀 Warp Provider | Latent and sampler settings, with size presets for current models |
+| 🌀 Prompt + LoRAs | Prompt and LoRAs in one box |
+| 🌀 Save Image (Civitai) | Save with metadata Civitai reads |
+| 🌀 Warp Send / Warp Select | Pick which model group runs |
+| 🌀 Warp Compare | Before/after slider |
+| 🌀 Scheduler Adapter for FaceDetailer | KSampler schedulers for FaceDetailer |
+| 🚫 Dead End | Takes anything, does nothing. Parks a branch |
 
-```
-Steps: 8, Sampler: euler, Schedule type: simple, CFG scale: 1.0, Seed: 44,
-Size: 1024x1536, Model hash: 8e4eeda70d, Model: krea2_turbo_int8_convrot,
-Hashes: {"model":"8e4eeda70d"}, Version: ComfyUI-WarpPipe
-```
-
-Or download the [workflow JSON](examples/workflow_example.json).
-
-## Documentation
-
-Everything else is in **[WIKI.md](WIKI.md)**:
-[getting started](WIKI.md#getting-started) ·
-[usage](WIKI.md#usage) ·
-[node reference](WIKI.md#node-reference) ·
-[HTTP API](WIKI.md#http-api) ·
-[architecture](WIKI.md#architecture) ·
-[development](WIKI.md#development) ·
-[troubleshooting](WIKI.md#troubleshooting)
+Each node has its own help behind the `?` in ComfyUI. Everything else, every
+input and the HTTP routes are in the **[wiki](WIKI.md)**.
 
 ## Credits
 
-UI screenshots are taken from a real ComfyUI against a small demo LoRA folder;
-those names are illustrative and that preview art is generated stand-in, not any
-creator's work.
-
-Developed with AI assistance (Claude Opus 5).
-
-Licensed under the [MIT License](LICENSE).
+Screenshots use demo LoRAs and stand-in images, not anyone's real models.
+Developed with AI assistance (Claude Opus 5). [MIT License](LICENSE).
