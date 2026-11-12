@@ -391,3 +391,134 @@ export function removeTriggerLine(text, triggers) {
   if (text === line) return "";
   return text.startsWith(`${line}\n`) ? text.slice(line.length + 1) : text;
 }
+
+// --- What changed from the version before --------------------------------------
+
+// Words, runs of spaces and single marks, so a change is shown word by word.
+const TOKEN = /\s+|[\p{L}\p{N}_]+|[^\s\p{L}\p{N}_]/gu;
+const WORD = /[\p{L}\p{N}]/u;
+// Past this many cells a comparison is not worth the wait: it is a rewrite anyway.
+const MAX_CELLS = 4_000_000;
+// More than this share of the words changed reads better side by side than marked.
+const REWRITE_SHARE = 0.6;
+
+function tokens(text) {
+  return String(text ?? "").match(TOKEN) ?? [];
+}
+
+/** The longest common subsequence of two token lists, as same/del/add steps. */
+function lcsSteps(a, b) {
+  const n = a.length;
+  const m = b.length;
+  if (n * m > MAX_CELLS) {
+    return [
+      ...a.map((text) => ({ type: "del", text })),
+      ...b.map((text) => ({ type: "add", text })),
+    ];
+  }
+  const width = m + 1;
+  const table = new Uint32Array((n + 1) * width);
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      table[i * width + j] =
+        a[i] === b[j]
+          ? table[(i + 1) * width + j + 1] + 1
+          : Math.max(table[(i + 1) * width + j], table[i * width + j + 1]);
+    }
+  }
+  const steps = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      steps.push({ type: "same", text: a[i] });
+      i++;
+      j++;
+    } else if (table[(i + 1) * width + j] >= table[i * width + j + 1]) {
+      steps.push({ type: "del", text: a[i++] });
+    } else {
+      steps.push({ type: "add", text: b[j++] });
+    }
+  }
+  while (i < n) steps.push({ type: "del", text: a[i++] });
+  while (j < m) steps.push({ type: "add", text: b[j++] });
+  return steps;
+}
+
+/**
+ * What turned `before` into `after`, word by word: [{type: "same" | "del" | "add", text}].
+ * The same parts and the deleted ones give back `before`, the same parts and the
+ * added ones give back `after`. Changed words next to each other read as one
+ * change, the spaces between them included.
+ */
+export function diffWords(before, after) {
+  const a = tokens(before);
+  const b = tokens(after);
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  let endA = a.length;
+  let endB = b.length;
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+    endA--;
+    endB--;
+  }
+  const steps = [
+    { type: "same", text: a.slice(0, start).join("") },
+    ...lcsSteps(a.slice(start, endA), b.slice(start, endB)),
+    { type: "same", text: a.slice(endA).join("") },
+  ];
+
+  const parts = [];
+  const push = (type, text) => {
+    if (!text) return;
+    const last = parts.at(-1);
+    if (last?.type === type) last.text += text;
+    else parts.push({ type, text });
+  };
+  let del = "";
+  let add = "";
+  let gap = "";
+  const flush = () => {
+    push("del", del);
+    push("add", add);
+    del = add = "";
+  };
+  for (const step of steps) {
+    if (step.type === "same") {
+      if ((del || add) && /^\s+$/.test(step.text)) {
+        gap += step.text;
+        continue;
+      }
+      flush();
+      push("same", gap + step.text);
+      gap = "";
+      continue;
+    }
+    // Spaces between two changed words belong to both sides of the change.
+    del += gap;
+    add += gap;
+    gap = "";
+    if (step.type === "del") del += step.text;
+    else add += step.text;
+  }
+  flush();
+  push("same", gap);
+  return parts;
+}
+
+/** Words added and removed, the share of the words that changed, and whether that is a rewrite. */
+export function diffStats(parts) {
+  const words = (text) => tokens(text).filter((token) => WORD.test(token)).length;
+  let added = 0;
+  let removed = 0;
+  let same = 0;
+  for (const part of parts) {
+    const count = words(part.text);
+    if (part.type === "add") added += count;
+    else if (part.type === "del") removed += count;
+    else same += count;
+  }
+  const total = added + removed + 2 * same;
+  const share = total ? (added + removed) / total : 0;
+  return { added, removed, share, rewrite: share > REWRITE_SHARE };
+}

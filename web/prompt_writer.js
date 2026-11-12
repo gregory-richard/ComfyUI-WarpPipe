@@ -28,6 +28,8 @@ import {
   removeTriggerLine,
   resolveSuggestions,
   REASONING_LEVELS,
+  diffStats,
+  diffWords,
   reasoningLevel,
   resolveTarget,
   splitLines,
@@ -339,6 +341,28 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
   overflow-wrap: anywhere; background: var(--wpw-ground); border-radius: 6px; user-select: text;
 }
 .wpw-hint-line { margin-top: 8px; font-size: 12px; color: var(--wpw-muted); }
+/* What changed from the version before: counts on a line, then marked or side by side. */
+.wpw-diff-line { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--wpw-muted); }
+.wpw-diff-added { color: var(--wpw-green); font-variant-numeric: tabular-nums; }
+.wpw-diff-removed { color: var(--wpw-red); font-variant-numeric: tabular-nums; }
+.wpw-modal .wpw-diff-toggle {
+  height: 24px; padding: 0 9px; font-size: 12px; color: var(--wpw-ink); cursor: pointer;
+  background: none; border: 1px solid var(--wpw-line); border-radius: 6px;
+}
+.wpw-modal .wpw-diff-toggle:hover { border-color: var(--wpw-warp); }
+.wpw-diff, .wpw-diff-col {
+  background: var(--wpw-ground); border-radius: 8px; padding: 10px 12px; max-height: 60vh; overflow-y: auto;
+  white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
+}
+.wpw-diff { margin-top: 12px; font-size: 13.5px; line-height: 1.6; }
+.wpw-diff-add { background: color-mix(in srgb, var(--wpw-green) 24%, transparent); border-radius: 3px; }
+.wpw-diff-del {
+  color: color-mix(in srgb, var(--wpw-red) 80%, var(--wpw-ink)); text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--wpw-red) 70%, transparent);
+}
+.wpw-diff-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin-top: 12px; }
+.wpw-diff-col { font-size: 13px; line-height: 1.55; }
+.wpw-diff-col-name { margin-bottom: 6px; font-size: 11px; color: var(--wpw-muted); white-space: normal; }
 /* What the model thought: quiet, scrolled to its newest line while it comes. */
 .wpw-thinking { margin-top: 10px; font-size: 12px; }
 .wpw-thinking summary { cursor: pointer; color: var(--wpw-muted); width: max-content; }
@@ -1714,28 +1738,118 @@ function statusEl(version, model) {
   );
 }
 
+/** The text a version was written from, when there is one to compare it with. */
+function versionBase(chat, version) {
+  if (version.basePrompt != null) return { text: version.basePrompt, name: "the current prompt" };
+  if (version.baseId === "seed" && chat.seedPrompt) {
+    return { text: chat.seedPrompt, name: "the current prompt" };
+  }
+  const base = chat.versions.find((v) => v.id === version.baseId);
+  return base ? { text: base.text, name: `v${base.n}` } : null;
+}
+
+/** version id → its last comparison; the texts say when it is out of date. */
+const comparisons = new Map();
+
+function compare(version, before) {
+  const known = comparisons.get(version.id);
+  if (known?.before === before && known.after === version.text) return known;
+  const parts = diffWords(before, version.text);
+  const fresh = { before, after: version.text, parts, stats: diffStats(parts) };
+  comparisons.set(version.id, fresh);
+  return fresh;
+}
+
+/** What changed, counted, with a switch between the prompt and its changes. */
+function changesLine(chat, version) {
+  const base = versionBase(chat, version);
+  if (!base) return null;
+  const { stats } = compare(version, base.text);
+  if (!stats.added && !stats.removed) {
+    return el("div", { class: "wpw-diff-line" }, el("span", { text: `Same as ${base.name}` }));
+  }
+  const showing = view.changes.has(version.id);
+  const toggle = button(
+    showing ? "Show prompt" : "Show changes",
+    () => {
+      if (showing) view.changes.delete(version.id);
+      else view.changes.add(version.id);
+      renderConvo(false);
+    },
+    "wpw-diff-toggle"
+  );
+  return el(
+    "div",
+    { class: "wpw-diff-line" },
+    el("span", {
+      text: stats.rewrite ? `Mostly rewritten from ${base.name}` : `Changes from ${base.name}`,
+    }),
+    el("span", { class: "wpw-diff-added", text: `+${stats.added}` }),
+    el("span", { class: "wpw-diff-removed", text: `−${stats.removed}` }),
+    el("span", { text: stats.added + stats.removed === 1 ? "word" : "words" }),
+    el("span", { class: "wpw-spacer" }),
+    toggle
+  );
+}
+
+/** The changes: marked in the text, or side by side when most of it is new. */
+function changesView(chat, version) {
+  const base = versionBase(chat, version);
+  const { parts, stats } = compare(version, base.text);
+  if (stats.rewrite) {
+    const column = (name, text) =>
+      el(
+        "div",
+        { class: "wpw-diff-col" },
+        el("div", { class: "wpw-diff-col-name", text: name }),
+        el("div", { text })
+      );
+    return el(
+      "div",
+      { class: "wpw-diff-cols" },
+      column(base.name, base.text),
+      column(`v${version.n}`, version.text)
+    );
+  }
+  const marked = parts
+    .filter((part) => part.type !== "del" || part.text.trim())
+    .map((part) =>
+      part.type === "same"
+        ? part.text
+        : el("span", { class: `wpw-diff-${part.type}`, text: part.text })
+    );
+  return el("div", { class: "wpw-diff" }, ...marked);
+}
+
 function versionCard(chat, version, index, busy) {
   const label = `v${version.n}`;
   const newest = index === chat.versions.length - 1;
   const title = version.model ? `${version.model} · ${version.systemPrompt ?? ""}` : undefined;
   // An answer to a question is typed in the same box, so a request cannot go there meanwhile.
   const again = busy || chat.pending ? null : () => writeAgain(chat, version);
+  const showing = view.changes.has(version.id) && versionBase(chat, version);
   if (newest) {
-    const editor = el("textarea", {
-      class: "wpw-editor",
-      value: version.text,
-      spellcheck: false,
-      onInput: () => fitEditor(editor),
-      onBlur: () => saveEdit(version, editor),
-    });
-    view.editors.push({ version, editor });
+    let body;
+    if (showing) {
+      body = changesView(chat, version);
+    } else {
+      body = el("textarea", {
+        class: "wpw-editor",
+        value: version.text,
+        spellcheck: false,
+        onInput: () => fitEditor(body),
+        onBlur: () => saveEdit(version, body),
+      });
+      view.editors.push({ version, editor: body });
+    }
     return el(
       "div",
       { class: "wpw-card is-newest" },
       cardHead(chat, label, version.baseId, statusEl(version, title)),
       stepAsk(chat, version, { onRewind: again, again: true }),
       version.reasoning && thinkingBlock(version.reasoning, false).block,
-      editor,
+      changesLine(chat, version),
+      body,
       ...loraRows(chat, version),
       el("div", { class: "wpw-actions is-block" }, sendButton(version, true))
     );
@@ -1778,7 +1892,9 @@ function versionCard(chat, version, index, busy) {
     head,
     open && stepAsk(chat, version, { onRewind: again, again: true }),
     open && version.reasoning && thinkingBlock(version.reasoning, false).block,
-    open && el("div", { class: "wpw-text", text: version.text }),
+    open && changesLine(chat, version),
+    open &&
+      (showing ? changesView(chat, version) : el("div", { class: "wpw-text", text: version.text })),
     ...(open ? loraRows(chat, version) : []),
     open && actions
   );
@@ -2748,6 +2864,7 @@ function buildView(promptNode) {
     chatId: null,
     editors: [],
     expanded: new Set(),
+    changes: new Set(),
     popover: null,
     renaming: null,
     confirmDelete: null,

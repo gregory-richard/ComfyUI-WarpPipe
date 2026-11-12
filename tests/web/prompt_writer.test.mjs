@@ -23,6 +23,8 @@ const {
   removeTriggerLine,
   resolveSuggestions,
   REASONING_LEVELS,
+  diffStats,
+  diffWords,
   reasoningLevel,
   resolveTarget,
   splitLines,
@@ -602,4 +604,59 @@ test("reasoningLevel: a level the server knows, else the model's own default", (
     REASONING_LEVELS.map(([value]) => value),
     ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
   );
+});
+
+// --- what changed from the version before -----------------------------------------
+
+const rebuild = (parts, skip) => parts.filter((p) => p.type !== skip).map((p) => p.text).join("");
+
+test("diffWords: the parts give back both texts exactly", () => {
+  const cases = [
+    ["a red bike by the lake", "a blue bike by the lake"],
+    [
+      "// Overview\n- A bike.\n\n// Light\n- Dawn.",
+      "// Overview\n- A red bike.\n\n// Light\n- Warm dawn light.",
+    ],
+    ["one two three", "four five six seven"],
+    ["", "new text"],
+    ["old text", ""],
+    ["same", "same"],
+    ["Café über Straße", "Café unter Straße"],
+  ];
+  for (const [before, after] of cases) {
+    const parts = diffWords(before, after);
+    assert.equal(rebuild(parts, "add"), before, `before: ${before}`);
+    assert.equal(rebuild(parts, "del"), after, `after: ${after}`);
+  }
+});
+
+test("diffWords: a small edit is marked word by word, the rest stays", () => {
+  assert.deepEqual(diffWords("a red bike by the lake", "a blue bike by the lake"), [
+    { type: "same", text: "a " },
+    { type: "del", text: "red" },
+    { type: "add", text: "blue" },
+    { type: "same", text: " bike by the lake" },
+  ]);
+  assert.deepEqual(diffWords("same", "same"), [{ type: "same", text: "same" }]);
+});
+
+test("diffWords: neighbouring changed words read as one change", () => {
+  assert.deepEqual(diffWords("a red old bike", "a blue new bike"), [
+    { type: "same", text: "a " },
+    { type: "del", text: "red old" },
+    { type: "add", text: "blue new" },
+    { type: "same", text: " bike" },
+  ]);
+});
+
+test("diffStats: words added and removed, and how much of the text changed", () => {
+  const small = diffStats(diffWords("a red bike by the lake", "a blue bike by the lake"));
+  assert.equal(small.added, 1);
+  assert.equal(small.removed, 1);
+  assert.equal(small.rewrite, false);
+  const rewrite = diffStats(diffWords("one two three four", "five six seven eight nine"));
+  assert.equal(rewrite.added, 5);
+  assert.equal(rewrite.removed, 4);
+  assert.equal(rewrite.rewrite, true);
+  assert.deepEqual(diffStats(diffWords("same", "same")), { added: 0, removed: 0, share: 0, rewrite: false });
 });
