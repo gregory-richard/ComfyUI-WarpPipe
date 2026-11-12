@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [4.3.0] - 2026-11-12
+## [5.0.0] - 2026-11-12
 
 This release also brings everything listed under 4.2.0, which was not released on its own.
 
@@ -33,7 +33,7 @@ This release also brings everything listed under 4.2.0, which was not released o
 
 - **A smaller download from the Comfy Registry**: the package leaves out what only building and testing the pack needs (tests, frontend tooling and its `package-lock.json`, design notes) and the full-size originals of the icon and banner, so it is about 3.3 MB instead of 13.8 MB. Nothing that runs in ComfyUI is left out; `.comfyignore` lists what stays out
 
-## [4.2.0] - not released on its own, part of 4.3.0
+## [4.2.0] - not released on its own, part of 5.0.0
 
 ### Added
 

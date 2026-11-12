@@ -1247,7 +1247,9 @@ publishes.
 Semver as this project reads it: a new node or a new capability is a minor; a
 change that makes an existing workflow load differently is a major. 3.0.0 was
 the `CONTROL` → `WARPPIPE` rename. 4.0.0 is the prompt box and the Civitai save
-node — nothing breaks, but it is a different pack to use.
+node — nothing breaks, but it is a different pack to use. 5.0.0 is the same
+again: the Prompt Writer, Warp Send and Select, and the prompt boxes as a code
+editor.
 
 ### Registry metadata
 
