@@ -2,10 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [5.0.0] - 2026-11-12
+
+This release also brings everything listed under 4.2.0, which was not released on its own.
 
 ### Added
 
+- **LoRA suggestions in the Prompt Writer**: optional list of the LoRAs for the chosen model; trigger words of active LoRAs are used and others suggested, added only with **+**. Each version shows the LoRAs that were on with a check, and while LoRAs are active the LLM keeps close to them and suggests at most two
+- **Sections in the Prompt + LoRAs boxes**: a `////` line starts a section that folds while you type, from a slim margin with ▾ and ▸ and a count of its lines (`//// Style ··· 6 lines`). Folding never changes the text: folded text is still saved and sent, and folded LoRAs still load. What is folded is saved with the node
+- **The prompt boxes are a code editor**: CodeMirror 6, with everything the boxes did before - colours, `/` completion, trigger words, weights, moving lines, `Ctrl+/`, the strip, the band, the **✨ AI** button. `Ctrl+Z` and `Ctrl+Y` are its own history, and each action is one step. ComfyUI still saves and queues from its own text box, which stays in place, hidden, so nothing about a workflow changes
+- **Setting `WarpPipe.CodeEditor`** (on by default, under WarpPipe in the settings): off gives plain text boxes without folding. A browser that cannot load the editor gets the same, with a warning in the console
+- **Ctrl+/ on a selection** comments or uncomments every selected line
+- **Save Image (Civitai) compares**: it shows what it saved in the same slider as Warp Compare, against the images of the node marked **Use as before image** in the same run; without a mark it shows the saved images whole. The saved images still reach the queue as before
+- **What the next request does** in the Prompt Writer: **Edit v3 · newest** (or an older version), **Edit current prompt** (the text of the **For** node, read when you send) or **New prompt**. Each write is one card with what it changed, the request and the prompt
+- **The Prompt Writer's input is one box**: images above the text, and under it the image button, what the next request does, the LoRA choice and a round send button of fixed size that turns into a stop button. The header, the chats and the cards use ComfyUI's own icons. The model, system prompt, temperature, title model, server and key sit under the cog in the rail; the chat's title and **For** head the chat, whose versions sit in a reading column
+- **Live writing**: the card of a write in progress shows waiting, thinking or writing, the seconds and an estimate of the tokens so far, the model's thinking as it comes (for models that send it) and the prompt as it is written. A finished version keeps the thinking, folded. **Stop** ends the request at the provider
+- **What changed**: each version says what changed from the one it edits, in words added and removed; **Show changes** shows a small edit in the new text, with each replaced piece small above what replaced it, and puts a rewrite side by side with the version before
+- **Thinking level** in the Prompt Writer settings: Model default, Off, Minimal, Low, Medium, High, Extra high or Max, sent as `reasoning_effort` (setting `WarpPipe.PromptWriter.ReasoningEffort`)
+- **Request log**: every request is logged to `ComfyUI/user/warppipe_llm_log.jsonl` as one line when it is sent and one with its outcome (text with thinking and suggestions, question, error or stopped, plus usage, cost and seconds). Never the key or image data; moves to `.1` at about 20 MB
+- **A failed request survives a reload**: the red card is kept with its chat, and **Retry** uses the current model, system prompt, temperature and server
+- **Write a request again**: the arrow on a version's request puts it back into the input with its images and what it edited, and deletes nothing
+- **Questions**: when the LLM asks instead of writing (it is told to start with `===QUESTION===`), the reply is a question card, the send button answers, and the answer goes with the request and what it edits
+- **Top bar buttons**: **Active group** jumps to the active Warp Send, **Workflow** jumps to Warp Select
+- **Prompt Writer**: a chat-style pop-up, opened from the **✨ AI** button on every Prompt + LoRAs, where an LLM writes an image prompt from your request, images and own system prompt file. Each answer is a version you can edit, continue from, or send to any Prompt + LoRAs with **Send to prompt** as one undo step. Status shows the cost, duration and tokens (`0.3 ¢ · 8 s · 1,812 → 640 tokens`). Several chats write at once and keep going after the pop-up closes, with a yellow button, a green dot and a toast to say where they are; **Stop** cancels. Chats are stored in the ComfyUI user folder, never in a workflow or images. NanoGPT is the default, with its model list, prices and vision marks; any OpenAI-compatible server (LM Studio, Ollama, llama.cpp) works through the base URL
+- **Keys stay on the server**: typed once under ⚙ (saved to `user/warppipe_llm_keys.json` for that host, kept across restarts, never readable from the browser), or `NANOGPT_API_KEY`. A key is sent only to its own host, also when a server redirects, and no key is ever stored in a workflow, an image or the browser
+- **Settings `WarpPipe.PromptWriter.*`**: `BaseUrl`, `Model`, `SystemPrompt` and `Temperature` hold the pop-up's choices; `SystemPromptDir` is the folder of system prompts, and only `.txt` files directly in it are listed
+- **Routes**: `GET /warppipe/llm/models`, `GET /warppipe/llm/system_prompts`, `GET /warppipe/llm/system_prompt`, `GET /warppipe/llm/key_status`, `POST /warppipe/llm/key`, `POST /warppipe/llm/title`, `POST /warppipe/llm/write` (streams its answer as NDJSON)
+
+### Changed
+
+- **A smaller download from the Comfy Registry**: the package leaves out what only building and testing the pack needs (tests, frontend tooling and its `package-lock.json`, design notes) and the full-size originals of the icon and banner, so it is about 3.3 MB instead of 13.8 MB. Nothing that runs in ComfyUI is left out; `.comfyignore` lists what stays out
+
+## [4.2.0] - not released on its own, part of 5.0.0
+
+### Added
+
+- **Warp Send and Warp Select**: choose which model group runs without moving a wire. A Warp Send sits in each group and passes the Warp through with an index and a name; the one you activate (big **activate** button, which reads **active** on the active Send) is the one that runs. The active Send is fully green, inactive Sends are fully red with a line "active: <name>". A Warp Select in the hub lists the Sends by index and outputs the warp and its index, is green while the route is valid and red otherwise, and has a button that jumps to the active group. The queue is blocked with a clear message when no Send is active, the active one is muted or bypassed (itself or a subgraph it sits in), two Sends share a name or an index, or the active one has no warp input. Warp Select exists only in the frontend, so it adds no node to the backend graph
+- **Results in the active Send without links**: the final is the images Save Image (Civitai) shows in that run; the before is the images of the node marked with right-click "Use as before image" (one per workflow, shown with a "before" badge; "Remove before-image mark" clears it). They go to the Send that was active when the run was queued, stay until the page is reloaded and are not saved with the workflow
+- **Warp Compare**: a new node that compares `before` (left, labelled "before") and `after` (right, labelled "after") with a slider that follows the mouse and ◀ i/n ▶ arrows to step through pairs (before 1/after 1, before 2/after 2); a pair with only one side shows that image whole. The later image is always on the right; Warp Send's compare view labels its sides "first" (left) and "final" (right). It replaces rgthree's Image Comparer in WarpPipe workflows
+- **Nodes 2.0 support**: the compare view is a DOM widget, so Warp Send and Warp Compare work in both the classic canvas and Vue nodes
+- **Live preview in Warp Send**: the sampling preview and the compare view with batch arrows are shown on the Send of the active group. Previews need ComfyUI started with `--preview-method auto`
 - **The prompt has a band of its own**: drag the bottom edge of the prompt, under the strip, and it grows or shrinks by exactly that, the way a list does - the boxes below move with the edge and the node takes up the difference, so the prompt and each list are sized independently. The prompt had no handle at all: it took whatever the node had left, so making it taller meant resizing the whole node from its corner, and making a list taller and the prompt shorter took two different gestures. A drag is one step of undo and survives a save, a reload and a browser refresh; nothing is added to `widgets_values`, and a loaded workflow keeps the size it was saved at. Double-clicking the band makes the prompt just tall enough for its text, up to forty lines
 
 ### Changed

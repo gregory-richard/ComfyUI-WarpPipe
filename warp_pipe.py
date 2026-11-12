@@ -952,6 +952,116 @@ class DeadEnd:
         return ()
 
 
+class WarpSend:
+    """Marks the end of one model group and hands its warp on unchanged.
+
+    The name and index are read by the frontend, which points Warp Select at the
+    active Send; the backend only passes the warp and index through.
+    """
+
+    CATEGORY = "Custom/WarpPipe Nodes"
+    FUNCTION = "passthrough"
+    DESCRIPTION = (
+        "End of a model group: passes the warp and the model index on. "
+        "Warp Select points Generate at the active Send."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "warp": ("WARPPIPE", {}),
+                "index": (
+                    "INT",
+                    {
+                        "default": 1,
+                        "min": 1,
+                        "max": 99,
+                        "tooltip": "The model number Generate's switch uses.",
+                    },
+                ),
+                "name": (
+                    "STRING",
+                    {
+                        "default": "Model",
+                        "tooltip": "Shown in Warp Select's list. Must be unique.",
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WARPPIPE", "INT")
+    RETURN_NAMES = ("warp", "index")
+
+    def passthrough(self, warp, index: int, name: str = "Model"):
+        return (warp, index)
+
+
+def save_temp_previews(images, prefix: str) -> list[dict[str, str]]:
+    """Write a batch to ComfyUI's temp folder and return the refs it shows.
+
+    Save Image (Civitai) has no temp path - its preview flag only chooses whether
+    the files it saved to output are listed - so this follows ComfyUI's own
+    PreviewImage: temp files under a random suffix, type "temp".
+    """
+    import folder_paths
+    import numpy as np
+    from PIL import Image
+
+    suffix = "_" + "".join(f"{b:02x}" for b in os.urandom(5))
+    full_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
+        prefix + suffix,
+        folder_paths.get_temp_directory(),
+        int(images[0].shape[1]),
+        int(images[0].shape[0]),
+    )
+    results = []
+    for image in images:
+        array = np.clip(255.0 * image.cpu().numpy(), 0, 255).astype(np.uint8)
+        file_name = f"{filename}_{counter:05}_.png"
+        Image.fromarray(array).save(os.path.join(full_folder, file_name), compress_level=1)
+        results.append({"filename": file_name, "subfolder": subfolder, "type": "temp"})
+        counter += 1
+    return results
+
+
+class WarpCompare:
+    """Output node: two images shown as a before/after slider."""
+
+    CATEGORY = "Custom/WarpPipe Nodes"
+    FUNCTION = "compare"
+    OUTPUT_NODE = True
+    RETURN_TYPES = ()
+    RETURN_NAMES = ()
+    DESCRIPTION = (
+        "Compares two images with a slider. Batches are stepped through as pairs "
+        "(before 1/after 1, before 2/after 2). Replaces rgthree's image comparer in WarpPipe workflows."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {},
+            "optional": {
+                "before": ("IMAGE", {"tooltip": "The earlier image, shown on the left."}),
+                "after": ("IMAGE", {"tooltip": "The later image, shown on the right."}),
+            },
+        }
+
+    def compare(self, before=None, after=None):
+        def previews(images, prefix):
+            if images is None or len(images) == 0:
+                return []
+            return save_temp_previews(images, prefix)
+
+        return {
+            "ui": {
+                "before": previews(before, "WarpCompareBefore"),
+                "after": previews(after, "WarpCompareAfter"),
+            }
+        }
+
+
 # ---------------------------------------------------------------------------
 # Civitai-compatible image saving
 #
@@ -2255,6 +2365,55 @@ def _register_routes() -> None:
 
     logger.info("WarpPipe LoRA library routes registered")
 
+    _register_prompt_writer_routes(routes, web, instance)
+
+
+def _register_prompt_writer_routes(routes, web, instance) -> None:
+    """The /warppipe/llm routes of the Prompt Writer (see prompt_writer.py)."""
+    try:
+        from . import prompt_writer
+    except ImportError:
+        import prompt_writer
+    import folder_paths
+
+    def settings_loader(request) -> dict:
+        try:
+            path = instance.user_manager.get_request_user_filepath(request, "comfy.settings.json")
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def image_path(name: str) -> Optional[str]:
+        # Only files inside ComfyUI's input/output/temp folders; a shared
+        # workflow must not be able to send an arbitrary file to a provider.
+        try:
+            if not folder_paths.exists_annotated_filepath(name):
+                return None
+            path = os.path.realpath(folder_paths.get_annotated_filepath(name))
+            roots = (
+                folder_paths.get_input_directory(),
+                folder_paths.get_output_directory(),
+                folder_paths.get_temp_directory(),
+            )
+            for root in roots:
+                root = os.path.realpath(root)
+                if os.path.commonpath([root, path]) == root and os.path.isfile(path):
+                    return path
+        except Exception:
+            pass
+        return None
+
+    prompt_writer.register(
+        routes,
+        web,
+        user_dir=folder_paths.get_user_directory(),
+        settings_loader=settings_loader,
+        image_path=image_path,
+    )
+    logger.info("WarpPipe Prompt Writer routes registered (/warppipe/llm)")
+
 
 try:
     _register_routes()
@@ -2559,6 +2718,8 @@ NODE_DEFINITIONS: dict[str, tuple[str, type]] = {
     "Warp Provider": ("🌀 Warp Provider", WarpProvider),
     "FD Scheduler Adapter": ("🌀 Scheduler Adapter for FaceDetailer", FDSchedulerAdapter),
     "Dead End": ("🚫 Dead End", DeadEnd),
+    "Warp Send": ("🌀 Warp Send", WarpSend),
+    "Warp Compare": ("🌀 Warp Compare", WarpCompare),
     "Save Image Civitai": ("🌀 Save Image (Civitai)", SaveImageCivitai),
     "Warp Lora Prompt": ("🌀 Prompt + LoRAs", WarpLoraPrompt),
 }
@@ -2837,6 +2998,66 @@ if ENABLE_V3_NODES:
         def execute(cls, input=None) -> io.NodeOutput:
             return io.NodeOutput()
 
+    class WarpSendV3(io.ComfyNode):
+        @classmethod
+        def define_schema(cls) -> io.Schema:
+            required = WarpSend.INPUT_TYPES()["required"]
+            return io.Schema(
+                node_id="Warp Send",
+                display_name="🌀 Warp Send",
+                category=WarpSend.CATEGORY,
+                description=WarpSend.DESCRIPTION,
+                inputs=[
+                    WARPPIPE_TYPE.Input("warp"),
+                    io.Int.Input(
+                        "index",
+                        default=1,
+                        min=1,
+                        max=99,
+                        tooltip=required["index"][1]["tooltip"],
+                    ),
+                    io.String.Input(
+                        "name",
+                        default="Model",
+                        tooltip=required["name"][1]["tooltip"],
+                    ),
+                ],
+                outputs=[
+                    WARPPIPE_TYPE.Output("warp_out", display_name="warp"),
+                    io.Int.Output("index_out", display_name="index"),
+                ],
+            )
+
+        @classmethod
+        def execute(cls, warp, index: int, name: str = "Model") -> io.NodeOutput:
+            return io.NodeOutput(*WarpSend().passthrough(warp, index, name))
+
+    class WarpCompareV3(io.ComfyNode):
+        @classmethod
+        def define_schema(cls) -> io.Schema:
+            optional = WarpCompare.INPUT_TYPES()["optional"]
+            return io.Schema(
+                node_id="Warp Compare",
+                display_name="🌀 Warp Compare",
+                category=WarpCompare.CATEGORY,
+                description=WarpCompare.DESCRIPTION,
+                is_output_node=True,
+                inputs=[
+                    _io_type("IMAGE").Input(
+                        "before", optional=True, tooltip=optional["before"][1]["tooltip"]
+                    ),
+                    _io_type("IMAGE").Input(
+                        "after", optional=True, tooltip=optional["after"][1]["tooltip"]
+                    ),
+                ],
+                outputs=[],
+            )
+
+        @classmethod
+        def execute(cls, before=None, after=None) -> io.NodeOutput:
+            result = WarpCompare().compare(before=before, after=after)
+            return io.NodeOutput(ui=result["ui"])
+
     class SaveImageCivitaiV3(io.ComfyNode):
         @classmethod
         def define_schema(cls) -> io.Schema:
@@ -2979,6 +3200,8 @@ if ENABLE_V3_NODES:
         "Warp Provider": WarpProviderV3,
         "FD Scheduler Adapter": FDSchedulerAdapterV3,
         "Dead End": DeadEndV3,
+        "Warp Send": WarpSendV3,
+        "Warp Compare": WarpCompareV3,
         "Save Image Civitai": SaveImageCivitaiV3,
         "Warp Lora Prompt": WarpLoraPromptV3,
     }

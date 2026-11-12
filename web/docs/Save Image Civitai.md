@@ -12,6 +12,19 @@ Civitai does read, so one file works for both purposes.
 The ComfyUI workflow is still embedded by default, so saved images keep opening
 as workflows when dragged back in.
 
+## Before and after
+
+The node shows what it saved in a slider, like Warp Compare: on the right the
+saved image ("final"), on the left the image of the node you mark with
+right-click **Use as before image** ("before"), from the same run. The mark goes
+on an output node such as Preview Image, one per workflow, and is the same mark
+Warp Send uses. Without a mark, or in a run where the marked node did not run,
+the saved image is shown whole. A batch is stepped through with ◀ i/n ▶.
+
+The saved images still go to the queue and its history as usual; only the node's
+own preview is replaced by the slider. With **Preview** off the node shows
+nothing, and it keeps the last result until the page is reloaded.
+
 ## How resources are identified
 
 Civitai matches a checkpoint or LoRA by a hash of the file, not by its name.

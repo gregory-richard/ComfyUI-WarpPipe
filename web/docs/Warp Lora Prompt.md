@@ -212,7 +212,7 @@ With the caret in a tag:
 | | |
 | --- | --- |
 | **Ctrl+↑ / Ctrl+↓** | weight, in steps of 0.1 |
-| **Ctrl+/** | switch it off and on |
+| **Ctrl+/** | switch it off and on; with several lines selected, all of them |
 | **Alt+↑ / Alt+↓** | move the line - LoRAs apply down the list |
 | select the line, delete | remove it |
 
@@ -308,6 +308,43 @@ disable it — including a LoRA tag, which then does not load either.
 a photo in a sunlit kitchen   // try 0.6 next time
 // <lora:detail tweaker:0.8>  <- parked for now
 ```
+
+## Folding sections
+
+A line starting `////` is a section header, in the prompt and in either LoRA
+box. A section runs to the next `////` line or the end of the box. Text above
+the first header is always shown.
+
+```
+a photo in a sunlit kitchen
+//// Style
+film grain, muted colours
+//// Lighting
+warm light from the left
+```
+
+Being a note, a header line never reaches the model.
+
+Sections fold while you type, like a code editor. A header gets **▾** in a slim
+margin on the left of the box, as soon as there is something under it. Click it
+to fold the section down to its header and a count of its LoRAs, or of its lines
+if it has none, `//// Style ··· 6 lines`, and click **▸** or the count to open it again. The caret
+moving into a folded section opens it. A box with no header has no margin, and
+its text sits where it always did.
+
+**Folding only changes what is shown.** The text in the box stays whole, so a
+folded LoRA still loads and folded text still goes to the model. To stop a line
+having an effect, comment it out with `//`.
+
+What is folded is saved with the node, by each section's title and which of that
+title it is. A fold is one step of the workflow's undo; in a box, `Ctrl+Z` and
+`Ctrl+Y` undo the text instead.
+
+Every box is a code editor, and each thing you do to it - a weight, a moved line,
+a comment, a tag from `/` - is one step of its undo. To have plain text boxes
+instead, turn off **WarpPipe > Prompt boxes > Code editor** in the settings
+(`WarpPipe.CodeEditor`). A plain box does not fold: its `////` lines are ordinary
+notes there.
 
 ## Trigger words
 

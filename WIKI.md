@@ -84,7 +84,7 @@ and different steps, and switching between them is one connection moved.
 
 ### Version
 
-This documents **4.0.0**. See the [changelog](CHANGELOG.md) for what changed,
+This documents **4.3.0**. See the [changelog](CHANGELOG.md) for what changed,
 and [Development](#development) for how releases are cut.
 
 ---
@@ -210,12 +210,27 @@ while you are only looking.
 | `Tab` | take the suggestion; on an existing tag, offer that LoRA's trigger words |
 | `↑` `↓` | walk the alternatives while a suggestion is showing |
 | `Ctrl+↑` `Ctrl+↓` | change the weight of the tag the caret is in, in steps of 0.1 |
-| `Ctrl+/` | comment the line out, which switches that LoRA off |
+| `Ctrl+/` | comment the line, or every selected line, out or back in; a commented LoRA is off |
 | `Alt+↑` `Alt+↓` | move the line, which reorders when LoRAs are applied |
 | `Esc` | drop the suggestion |
 
 Each of these is an ordinary edit to the text, which is why a tag gets a line to
-itself. It also means the browser's own undo understands all of them.
+itself. It also means `Ctrl+Z` and `Ctrl+Y` understand all of them, each as one
+step.
+
+#### Sections
+
+A line starting with `////` is a section header, and the section runs to the next
+one. Sections fold while you type: ▾ and ▸ sit in a slim margin beside each header,
+and a folded one reads `//// Style ··· 6 lines`. A box without headers has no margin.
+Folding only changes what is shown, so folded LoRAs still load and folded text still
+reaches the model. To switch something off, select the lines and press `Ctrl+/`. The
+folded sections are saved in the node.
+
+The boxes are a code editor (CodeMirror 6) laid over ComfyUI's own text box, which
+stays in place, hidden, and is still what ComfyUI saves and queues from. The setting
+`WarpPipe.CodeEditor`, under WarpPipe, turns the editor off and takes effect at once.
+Off, or if the editor cannot load, a box is a plain text box without folding.
 
 #### Trigger words
 
@@ -377,8 +392,10 @@ flagged safe.
 
 ## Node reference
 
-Seven nodes, all under **Custom/WarpPipe Nodes**. Node IDs are what saved
-workflows and the API use; display names are what you see on the canvas.
+Ten nodes (nine backend nodes plus the frontend-only Warp Select), all under **Custom/WarpPipe Nodes**. Node IDs are what saved
+workflows and the API use; display names are what you see on the canvas. Warp
+Select is the exception to the rest of this section: it exists only in the
+browser, so the backend never sees it.
 
 | ID | Display name |
 | --- | --- |
@@ -388,6 +405,9 @@ workflows and the API use; display names are what you see on the canvas.
 | `Warp Lora Prompt` | 🌀 Prompt + LoRAs |
 | `Save Image Civitai` | 🌀 Save Image (Civitai) |
 | `FD Scheduler Adapter` | 🌀 Scheduler Adapter for FaceDetailer |
+| `Warp Send` | 🌀 Warp Send |
+| `Warp Compare` | 🌀 Warp Compare |
+| `Warp Select` | 🌀 Warp Select (frontend only) |
 | `Dead End` | 🚫 Dead End |
 
 ---
@@ -574,6 +594,179 @@ not.
 
 ---
 
+### 🌀 Warp Send
+
+Marks the end of one model group and hands its warp on. One Send in each group,
+one Warp Select in the hub, and the active Send is the group that runs.
+
+| Input | Type | Notes |
+| --- | --- | --- |
+| `warp` | `WARPPIPE` | The group's warp |
+| `index` | `INT` | 1–99, default 1. The number Generate's model switch uses. Unique per Send |
+| `name` | `STRING` | default `Model`. Shown in Warp Select's list. Unique per Send |
+
+**Outputs:** `warp`, `index` — both unchanged.
+
+The backend only passes the two through. Everything else happens in the
+browser: the big **activate** button (it reads **active** on the active Send)
+makes this Send the active one (stored in its `properties.active`, so it is saved
+with the workflow); any other Send stops being active. The active Send is fully
+green, title and body. Inactive Sends are fully red and show a line
+`active: <name>`. Sends and Selects are always coloured by their state, so a
+colour you set by hand is overwritten. The rest of the node is a compare view: the live sampling preview while
+the active group runs, then a before/after slider that follows the pointer, with
+◀ i/n ▶ to step through pairs of a batch, and **no result yet** before the first
+run.
+
+The results arrive without links. **final** is the images Save Image (Civitai)
+shows in that run; with several Save Image (Civitai) nodes the last one to run
+is the final, and a Save Image (Civitai) with its preview turned off gives no
+final. **before** is the images of the one node marked through its right-click
+entry **Use as before image** (stored in `properties.warpBefore`;
+only one node per workflow carries it, it shows a `before` badge, and **Remove
+before-image mark** clears it). The mark goes on an output node such as Preview
+Image; the entry is not offered on other nodes, nor on Warp Send or Warp Select.
+Both go to the Send that was active when the run was queued, by its name, even
+if you switch to another workflow tab while it runs. They live in the page only: they are
+not saved with the workflow, mark nothing modified and leave no undo step, stay
+until the page is reloaded, and the temp files they point at are gone after a
+ComfyUI restart anyway. The live preview needs ComfyUI started with
+`--preview-method auto`. The view is a DOM widget, so it works in the classic
+canvas renderer and in Nodes 2.0 (Vue nodes).
+
+A pasted copy of the active Send is not active. Converting a group to a subgraph
+or unpacking one keeps the Send active, since the original goes away. If a
+workflow somehow holds two active Sends, the one with the lower index keeps it.
+
+---
+
+### 🌀 Warp Select
+
+Picks which Warp Send runs. **Frontend only** — there is no backend node, and it
+never appears in the prompt ComfyUI receives.
+
+**Widgets:** `active`, a dropdown of every Send's name in index order, including
+Sends inside subgraphs — picking one activates it; **go to active group**, which
+only moves the canvas to the active Send, opening its subgraph if need be. The
+node is green while the route is valid and red otherwise.
+
+**Outputs:** `warp` (`WARPPIPE`), `index` (`INT`) — wire them to Generate.
+
+It is a virtual node: when the prompt is built, ComfyUI asks it where its outputs
+really come from, and it names the active Send's outputs, wherever that Send
+lives. So Generate reads straight from that one Send, and the inactive groups are
+not referenced and never run.
+
+A workflow with a Warp Select refuses to queue, with a message, when it has no
+Warp Send, two Sends share a name or an index, no Send is active, the active one
+is muted or bypassed — itself or a subgraph it sits in — or the active one has no
+`warp` input. A workflow without a Warp Select is never checked.
+
+---
+
+### 🌀 Prompt Writer
+
+Not a node: a chat-style pop-up opened from the **✨ AI** button on the
+`text` box of every 🌀 Prompt + LoRAs. An LLM writes and rewrites an image
+prompt, and **Send to prompt** puts a version into a Prompt + LoRAs. It lives in the
+browser (`web/prompt_writer.js`), never appears in the prompt ComfyUI receives,
+and writing a prompt never queues an image. Every call goes through the
+`/warppipe/llm` routes, so the browser never sees a key.
+
+**Layout:** the rail holds **Prompt Writer** with the settings cog, **New chat** and the
+chats; the open chat has its title (click to rename), **For** (the Prompt + LoRAs this
+chat writes for, kept per chat) and close at the top, then the versions in a reading
+column of at most 780 px and the input. The cog opens the settings: the model list with
+a text filter (name, price per million tokens, an eye for vision), the system prompt
+with a read-only preview, temperature, title model, server, the API key field with
+**Save** (cleared after sending; it only reports whether a key is set) and **Refresh
+lists** (the backend caches a model list for an hour).
+
+**Settings** (`WarpPipe.PromptWriter.*`):
+
+| Setting | Notes |
+| --- | --- |
+| `BaseUrl` | default `https://nano-gpt.com/api/v1`. Any OpenAI-compatible server; plain `http://` only for `localhost`, `127.0.0.1` and `::1` |
+| `Model` | the model id; a model no longer listed stays selected and reads `(not listed)` |
+| `SystemPrompt` | one of the `.txt` files directly in `SystemPromptDir` |
+| `Temperature` | 0–2, default 0.6 |
+| `ReasoningEffort` | `none` … `max`, sent as `reasoning_effort`; empty (the default) sends nothing |
+| `SystemPromptDir` | Settings → WarpPipe → Prompt Writer |
+
+**Chats and versions:** the left rail lists the chats, newest first. Each write
+is one card `v2` with what it changed (`edit of v1`), its status, e.g.
+`Finished · 0.3 ¢ · 8 s · 1,812 → 640 tokens`, the request with its images and any
+questions on the way, and the prompt. The newest version is editable
+(saved on blur); older ones are one line and can be expanded. **Send to prompt** writes
+the text unchanged into the Prompt + LoRAs chosen under **For**, as one undo step,
+flashes the node and closes the pop-up. The pencil on an older version makes it
+the one the next request edits.
+
+**Questions:** the LLM is told to start a reply that asks instead of writing with
+`===QUESTION===`. That reply is a **Question** card, not a version; the send button then
+answers, and the answer goes with the request, what it edits and the earlier
+questions and answers (`turns` in `POST /warppipe/llm/write`).
+
+**LoRAs:** **LoRAs** in the composer (setting `LoraScope`) is **Off**, **List**
+(the LoRAs switched off in the target's own lists) or **All** (every LoRA that fits the
+target's base model). The ones already active are sent with either. The LLM
+uses the trigger words of active LoRAs and may suggest others (at most two while LoRAs are active, otherwise five), shown as
+chips under the version. Nothing is added by itself: **+** on a chip switches on a
+commented line that holds the tag, or appends the tag to the `loras` box, and puts
+its trigger words on the first line of that version; pressing it again undoes both.
+
+**Writing:** the input is one box with its tools under the text: an image button
+(up to 8 images, also by drag and drop or Ctrl+V, uploaded to `input/`, left out with a
+notice when the model has no vision), what the next request does, sent as
+`previous_result` (**Edit v3 · newest** or an older version, **Edit current prompt**,
+the text of the **For** node read when you send, or **New prompt**), the LoRA choice and
+a round send button that stays the same size and turns into a yellow stop button while
+it runs. Ctrl+Enter sends.
+Writes are held per chat outside the pop-up, so several run at once and survive
+closing it. The **✨ AI** button on the node is yellow while a chat opened from
+that node writes, and has a green dot when one finished unseen. While it writes,
+the card shows waiting, thinking or writing, the seconds and an estimate of the tokens
+so far, the model's thinking as it comes (for models that send it) and the prompt as it
+is written; a finished version keeps the thinking, folded. A failed request shows a red
+card with **Retry**; it is kept with the chat until it is retried, taken back or the chat
+is deleted, and **Retry** uses the current settings.
+
+**Storage:** chats are saved in the ComfyUI user folder as
+`warppipe_prompt_chats.json`, never in a workflow or in images. Each request is also
+logged to `ComfyUI/user/warppipe_llm_log.jsonl`: a `request` line when it is sent
+and a `result` line with the same `id` when it ends (text, question, error or
+stopped, with usage, cost and seconds). No key and no image data is written; the
+file moves to `.1` at about 20 MB, and a log that cannot be written never stops a
+request.
+
+**Keys** are bound to hosts and used only when `base_url`'s host is the key's
+host, so a workflow pointing at another server never receives your key.
+The node's key field saves the typed key for `base_url`'s host (both NanoGPT
+hosts at once) into `ComfyUI/user/warppipe_llm_keys.json`; the browser can only
+ask whether a key is set. `NANOGPT_API_KEY` covers `nano-gpt.com` and `api.nano-gpt.com`;
+`ComfyUI/user/warppipe_llm_keys.json` holds `{"host": "key"}` for others. Local
+servers get no key unless the file names them. WarpPipe never logs or returns a
+key and writes it only on **save key**.
+
+---
+
+### 🌀 Warp Compare
+
+Compares two images with a slider. An output node, and the replacement for
+rgthree's Image Comparer in WarpPipe workflows.
+
+| Input | Type | Notes |
+| --- | --- | --- |
+| `before` | `IMAGE` | optional. The earlier image, shown on the left, labelled "before" |
+| `after` | `IMAGE` | optional. The later image, shown on the right, labelled "after" |
+
+**No outputs.** Both batches are saved as temp previews. The split follows the
+mouse; ◀ i/n ▶ steps through pairs (before 1/after 1, before 2/after 2). A pair with only one side shows that image whole.
+Warp Send uses the same compare view, with its sides labelled "first" (left) and "final" (right). It is a DOM widget, so it renders in the
+classic canvas and in Nodes 2.0.
+
+---
+
 ### 🚫 Dead End
 
 **Input:** `input` — any type, optional. **No outputs.**
@@ -587,7 +780,8 @@ on another, or for tidying an unused output.
 ### Registration
 
 Both registration paths are built from one table in `warp_pipe.py`, so every
-node exists whichever path runs.
+node exists whichever path runs. Warp Select is not in it: it is registered by
+`web/warp_send.js` in the browser.
 
 - **Legacy** (default) — `NODE_CLASS_MAPPINGS` and `NODE_DISPLAY_NAME_MAPPINGS`.
 - **V3** — set `WARPPIPE_ENABLE_V3=1` to register through
@@ -601,7 +795,7 @@ naming it rather than quietly dropping it.
 
 ## HTTP API
 
-Four routes, registered on ComfyUI's own `PromptServer` at import. They exist
+Nine routes, registered on ComfyUI's own `PromptServer` at import. They exist
 for WarpPipe's frontend; nothing stops you calling them yourself.
 
 If `aiohttp` or `server` cannot be imported — running the module outside
@@ -614,7 +808,30 @@ GET /warppipe/loras
 GET /warppipe/embeddings
 GET /warppipe/model/base?name=<name>
 GET /warppipe/lora/thumbnail?name=<name>&kind=<loras|embeddings>[&full=1]
+GET  /warppipe/llm/models?base_url=<url>[&refresh=1]
+GET  /warppipe/llm/system_prompts
+GET  /warppipe/llm/system_prompt?name=<name>
+GET  /warppipe/llm/key_status?base_url=<url>
+POST /warppipe/llm/key
+POST /warppipe/llm/title
+POST /warppipe/llm/write
 ```
+
+The seven `llm` routes serve the 🌀 Prompt Writer pop-up. `models` returns
+`{models: [{id, name, prompt_price, completion_price, vision}]}`,
+`system_prompts` returns `{names: [...]}`, `system_prompt` returns `{name, text}`
+of one of them, `title` takes `{base_url, model, source}` and returns `{title}`
+for a new chat, `key_status` returns
+`{set, source, host}`, `key` takes `{base_url, key}`, and `write` takes
+`{base_url, model, system_prompt, temperature, reasoning_effort, idea, previous_result,
+references, turns, loras, chat_id, lora_scope}` (`references` is a list of image names in `input/`; an empty `idea`
+with a `previous_result` asks for that prompt to be optimised). It answers as
+`application/x-ndjson`: `{"type": "delta", thinking, text, tokens}` lines while the
+model writes (`tokens` is an estimate unless the provider counts), then one
+`{"type": "done", ...}` line with `{text, reasoning, seconds, usage, cost, suggestions}`
+or `{question, ...}`. The others answer with plain JSON. Each gives `{error}` instead
+when something fails, and none ever returns a key. Closing the `write` connection
+stops the request at the provider.
 
 ---
 
@@ -740,6 +957,8 @@ web/
   save_image_ui.js    friendly labels, and the toast when nothing was saved
   provider_ui.js      the size widget's name, and today's label for an old preset
   size_presets.js     matching an old preset label to a new one
+  warp_send.js        Warp Send's activation and slider, Warp Select, the preview mirror
+  warp_route.js       which Send is active, and whether the route can run
   docs/*.md           the per-node help ComfyUI shows behind the ? button
 WIKI.md               this documentation
 tests/                pytest, no ComfyUI required
@@ -1028,7 +1247,9 @@ publishes.
 Semver as this project reads it: a new node or a new capability is a minor; a
 change that makes an existing workflow load differently is a major. 3.0.0 was
 the `CONTROL` → `WARPPIPE` rename. 4.0.0 is the prompt box and the Civitai save
-node — nothing breaks, but it is a different pack to use.
+node — nothing breaks, but it is a different pack to use. 5.0.0 is the same
+again: the Prompt Writer, Warp Send and Select, and the prompt boxes as a code
+editor.
 
 ### Registry metadata
 

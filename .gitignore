@@ -79,3 +79,6 @@ models/
 
 # Frontend tooling
 node_modules/
+
+# Agent working notes
+.superpowers/

@@ -20,7 +20,19 @@ NODE_IDS = {
     "Dead End",
     "Save Image Civitai",
     "Warp Lora Prompt",
+    "Warp Send",
+    "Warp Compare",
 }
+
+
+class FakeTensor:
+    """A batch that only knows its shape; Warp Compare's saving is faked."""
+
+    def __init__(self, shape):
+        self.shape = tuple(shape)
+
+    def __len__(self):
+        return self.shape[0]
 
 
 class _Pixels:
@@ -87,6 +99,14 @@ def test_legacy_registration_and_node_contracts(warp_pipe):
         assert len(node_class.RETURN_TYPES) == len(node_class.RETURN_NAMES)
 
     assert warp_pipe.DeadEnd().dead_end() == ()
+    assert warp_pipe.NODE_DISPLAY_NAME_MAPPINGS["Warp Send"] == "🌀 Warp Send"
+    assert warp_pipe.NODE_DISPLAY_NAME_MAPPINGS["Warp Compare"] == "🌀 Warp Compare"
+    assert "Warp Result" not in warp_pipe.NODE_CLASS_MAPPINGS
+    assert warp_pipe.WarpCompare.OUTPUT_NODE is True
+    assert warp_pipe.WarpCompare.RETURN_TYPES == ()
+    assert warp_pipe.WarpCompare.CATEGORY == "Custom/WarpPipe Nodes"
+    assert not getattr(warp_pipe.WarpSend, "OUTPUT_NODE", False)
+    assert warp_pipe.WarpSend.RETURN_NAMES == ("warp", "index")
 
 
 def test_custom_validation_only_bypasses_link_type_checks(warp_pipe):
@@ -1756,3 +1776,101 @@ def test_the_package_ships_every_file_the_frontend_needs():
             f"{path} is in web/ but no package-data glob matches it, "
             f"so it will be missing from the built wheel"
         )
+
+
+# --- Warp Send / Warp Compare ------------------------------------------------
+
+
+def _fake_previews(monkeypatch, warp_pipe):
+    def fake(images, prefix):
+        return [
+            {"filename": f"{prefix}_{i}.png", "subfolder": "", "type": "temp"}
+            for i in range(images.shape[0])
+        ]
+
+    monkeypatch.setattr(warp_pipe, "save_temp_previews", fake)
+
+
+def test_warp_send_passes_warp_and_index_through(warp_pipe):
+    warp = object()
+
+    assert warp_pipe.WarpSend().passthrough(warp, 7, "Krea 2") == (warp, 7)
+
+
+def test_warp_compare_payload(warp_pipe, monkeypatch):
+    _fake_previews(monkeypatch, warp_pipe)
+
+    ui = warp_pipe.WarpCompare().compare(
+        before=FakeTensor((2, 8, 8, 3)), after=FakeTensor((2, 8, 8, 3))
+    )["ui"]
+
+    assert set(ui) == {"before", "after"}
+    assert len(ui["before"]) == 2
+    assert len(ui["after"]) == 2
+    assert ui["before"][0]["type"] == "temp"
+
+
+def test_warp_compare_absent_side_is_empty_list(warp_pipe, monkeypatch):
+    _fake_previews(monkeypatch, warp_pipe)
+
+    ui = warp_pipe.WarpCompare().compare(after=FakeTensor((1, 8, 8, 3)))["ui"]
+
+    assert ui["before"] == []
+    assert len(ui["after"]) == 1
+    assert warp_pipe.WarpCompare().compare()["ui"] == {"before": [], "after": []}
+    assert warp_pipe.WarpCompare().compare(before=FakeTensor((0, 8, 8, 3)))["ui"]["before"] == []
+
+
+def test_save_temp_previews_writes_one_temp_file_per_image(warp_pipe, monkeypatch, tmp_path):
+    written = []
+
+    class FakeImage:
+        @staticmethod
+        def fromarray(array):
+            class Saved:
+                def save(self, path, *args, **kwargs):
+                    pathlib.Path(path).write_bytes(b"png")
+                    written.append(path)
+
+            return Saved()
+
+    folder_paths = types.ModuleType("folder_paths")
+    folder_paths.get_temp_directory = lambda: str(tmp_path)
+    folder_paths.get_save_image_path = lambda prefix, out, w, h: (
+        str(tmp_path),
+        prefix,
+        1,
+        "sub",
+        prefix,
+    )
+    pil = types.ModuleType("PIL")
+    pil_image = types.ModuleType("PIL.Image")
+    pil_image.fromarray = FakeImage.fromarray
+    pil.Image = pil_image
+    for name, module in {
+        "folder_paths": folder_paths,
+        "PIL": pil,
+        "PIL.Image": pil_image,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+    refs = warp_pipe.save_temp_previews([ImageTensor(), ImageTensor(), ImageTensor()], "WarpA")
+
+    assert len(refs) == 3
+    assert all(r["type"] == "temp" and r["subfolder"] == "sub" for r in refs)
+    assert len({r["filename"] for r in refs}) == 3
+    assert all(r["filename"].startswith("WarpA_") for r in refs)
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(r["filename"] for r in refs)
+    assert len(written) == 3
+
+
+def test_the_v3_send_and_compare_nodes_match_the_legacy_ones(warp_pipe_loader, monkeypatch):
+    warp_pipe = warp_pipe_loader(enable_v3=True)
+    _fake_previews(monkeypatch, warp_pipe)
+
+    warp = object()
+    assert tuple(warp_pipe.WarpSendV3.execute(warp=warp, index=3, name="x")) == (warp, 3)
+    output = warp_pipe.WarpCompareV3.execute(after=FakeTensor((1, 8, 8, 3)))
+    assert output.metadata["ui"]["before"] == []
+    assert len(output.metadata["ui"]["after"]) == 1
+    assert warp_pipe.WarpCompareV3.GET_SCHEMA().metadata["is_output_node"] is True

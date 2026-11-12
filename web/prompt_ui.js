@@ -1,4 +1,5 @@
 import { app } from "../../scripts/app.js";
+import { nudgeEmphasis } from "./editor_core.js";
 import { everything, forget } from "./library.js";
 import {
   connectedBase,
@@ -7,14 +8,28 @@ import {
   fitsBase,
   forgetBases,
 } from "./model_base.js";
-import { escapeAttr, escapeHTML, stemOf } from "./text.js";
+import {
+  CODE_EDITOR_SETTING,
+  codeEditorEnabled,
+  emphasisStep,
+  loadCodeEditor,
+  mountCodeEditor,
+} from "./prompt_editor.js";
+import { writeButtonFor } from "./prompt_writer.js";
+import { escapeAttr, escapeHTML, stemOf, toggleCommentLines } from "./text.js";
 import { keepWidgetValuesByName } from "./widget_values.js";
+
+// Settled before ComfyUI goes on to make any node, so a box knows at once which
+// of the two it is going to be.
+await loadCodeEditor();
 
 // The prompt box, made legible.
 //
 // The text is the only state. A highlight layer sits behind a transparent
 // textarea so tags, notes and trigger words are coloured while you still type
-// into a real textarea (selection, undo, IME all intact).
+// into a real textarea (selection, undo, IME all intact). That is the plain box,
+// and what a box falls back to; normally a code editor is laid over the textarea
+// instead, so that sections can fold while typing - see prompt_editor.js.
 //
 // The prose has a box and the LoRAs have one of their own, a tag to a line,
 // where every verb - weight, off, reorder, remove - is an ordinary text edit on
@@ -64,13 +79,15 @@ const boxStyle = (el) => {
     standIn.style.cssText = "position: absolute; left: -9999px; top: 0; visibility: hidden;";
     document.body.appendChild(standIn);
   }
-  return getComputedStyle(el ?? standIn);
+  return getComputedStyle(el?.textarea ?? el ?? standIn);
 };
 
 // Heights set by dragging, in rows, by widget name. It lives in the node's
 // properties because that is where a view this node keeps belongs: serialised
 // with the node, restored with it, and no slot in widgets_values.
 const ROWS_PROP = "warppipeListRows";
+// The sections folded in each box, by widget name, as keys from parseSections.
+const FOLDED_PROP = "warppipeFolded";
 // What a widget given no room to draw in returns, which is how both renderers
 // are told to leave it out: neither sizes by widget.hidden.
 const NO_ROOM = -4;
@@ -149,6 +166,21 @@ body.wpe-own-tip .p-tooltip { display: none !important; }
   background: rgba(255,255,255,0.1);
   background: color-mix(in srgb, currentColor 22%, transparent);
 }
+
+/* The code editor, laid over its textarea by its own measure(), under the strip,
+   the grip and the AI button. The textarea is still there and still laid out,
+   so a box goes on being sized from it; it just cannot be seen or pressed. */
+.wpc-host {
+  position: absolute; z-index: 1; overflow: hidden;
+  color: var(--input-text, #dcdcdc); background: var(--comfy-input-bg, #222);
+}
+.wpe-src { visibility: hidden !important; pointer-events: none !important; }
+.wpc-host.is-quiet .cm-scroller { overflow: hidden; }
+.wpc-host.is-quiet:hover .cm-scroller,
+.wpc-host.is-quiet:focus-within .cm-scroller { overflow: auto; }
+.wpc-head .wpe-note { font-weight: 600; font-style: normal; }
+/* Nodes 2.0 marks a node select-none, which a textarea ignores and this would not. */
+.wpc-host .cm-content { user-select: text; -webkit-user-select: text; }
 
 /* Drawn, never typed: only its colour says it is provisional. */
 .wpe-ghost { color: #767e8b; }
@@ -333,6 +365,10 @@ const lineBounds = (text, index) => {
  */
 function edit(textarea, from, to, text, caret) {
   textarea.focus();
+  if (textarea.replaceRange) {
+    textarea.replaceRange(from, to, text, caret);
+    return;
+  }
   textarea.setSelectionRange(from, to);
   let ok = false;
   try {
@@ -573,13 +609,29 @@ function findTextarea(node, name) {
  * The widget is rendered by a Vue component, so the textarea can be replaced
  * at any time; the caller re-runs this when that happens. Nothing here changes
  * the value, which keeps serialising through ComfyUI as before.
+ *
+ * `folding` is { keys(), save(keys, undoable) }, which only the code editor uses.
  */
-function light(textarea) {
+function light(textarea, folding) {
   const holder = textarea.parentElement;
   if (!holder) return null;
   // Return the controls, not the element: handing back the layer itself left
   // the caller with something that had no paint() or measure().
   if (textarea._wpeControls) return textarea._wpeControls;
+
+  if (codeEditorEnabled()) {
+    try {
+      textarea._wpeControls = mountCodeEditor(textarea, holder, folding, tokenise);
+      return textarea._wpeControls;
+    } catch (error) {
+      console.warn("[WarpPipe] This prompt box falls back to a plain text box.", error);
+    }
+  }
+
+  // Everything hung on the textarea goes with detach(), so the setting can
+  // switch the editor on and off without doubling any of it up.
+  const wiring = new AbortController();
+  const { signal } = wiring;
 
   const layer = document.createElement("div");
   layer.className = "wpe-hl";
@@ -662,7 +714,7 @@ function light(textarea) {
   // reads ten times a second cost nothing and cannot drift for longer than
   // that, whatever the browser does.
   for (const event of ["scroll", "input", "keyup", "click", "select", "focus", "blur"]) {
-    textarea.addEventListener(event, syncScroll);
+    textarea.addEventListener(event, syncScroll, { signal });
   }
   // One timer does both jobs. ResizeObserver would be the obvious way to catch
   // a resize, but it only delivers while the page is rendering, so a node
@@ -699,7 +751,7 @@ function light(textarea) {
     if (tip === null) textarea.removeAttribute("title");
     else if (textarea.getAttribute("title") !== tip) textarea.setAttribute("title", tip);
   };
-  textarea.addEventListener("mousemove", (e) => {
+  const onMouseMove = (e) => {
     let tip = null;
     for (const span of layer.querySelectorAll("[title]")) {
       for (const r of span.getClientRects()) {
@@ -712,14 +764,16 @@ function light(textarea) {
       }
     }
     showTitle(tip ?? ownTitle);
-  });
-  textarea.addEventListener("mouseleave", () => showTitle(ownTitle));
+  };
+  textarea.addEventListener("mousemove", onMouseMove, { signal });
+  textarea.addEventListener("mouseleave", () => showTitle(ownTitle), { signal });
 
   measure();
 
   const controls = {
     layer,
     textarea,
+    signal,
     paint,
     measure,
     syncScroll,
@@ -741,6 +795,7 @@ function light(textarea) {
       paint();
     },
     detach: () => {
+      wiring.abort();
       clearInterval(ticker);
       layer.remove();
       showTitle(ownTitle);
@@ -765,8 +820,8 @@ const roundWeight = (value) =>
  * own: commenting, moving and deleting a line then mean exactly one LoRA. The
  * same keys work in the prompt, on a tag written inline there.
  */
-function editVerbs(textarea, commit) {
-  textarea.addEventListener("keydown", (e) => {
+function editVerbs(textarea, commit, signal) {
+  const onKey = (e) => {
     const value = textarea.value || "";
     const caret = textarea.selectionStart;
     const ctrl = e.ctrlKey || e.metaKey;
@@ -775,7 +830,10 @@ function editVerbs(textarea, commit) {
     // tag its handler is left alone and the key keeps its usual meaning.
     if (ctrl && !e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
       const tag = tagAt(value, caret);
-      if (!tag) return;
+      if (!tag) {
+        if (textarea.replaceRange) nudgeOutsideTag(textarea, e, commit);
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       const next = roundWeight(tag.weight + (e.key === "ArrowUp" ? WEIGHT_STEP : -WEIGHT_STEP));
@@ -790,11 +848,15 @@ function editVerbs(textarea, commit) {
     if (ctrl && e.key === "/") {
       e.preventDefault();
       e.stopPropagation();
-      const { start, end } = lineBounds(value, caret);
-      const line = value.slice(start, end);
-      const off = /^(\s*)\/\/ ?/.exec(line);
-      const next = off ? off[1] + line.slice(off[0].length) : line.replace(/^(\s*)/, "$1// ");
-      edit(textarea, start, end, next, Math.max(start, caret + (next.length - line.length)));
+      const selectionEnd = textarea.selectionEnd;
+      const { start, end, text } = toggleCommentLines(value, caret, selectionEnd);
+      if (text === value.slice(start, end)) return;
+      if (caret === selectionEnd) {
+        edit(textarea, start, end, text, Math.max(start, caret + (text.length - (end - start))));
+      } else {
+        edit(textarea, start, end, text);
+        textarea.setSelectionRange(start, start + text.length);
+      }
       commit();
       return;
     }
@@ -820,7 +882,29 @@ function editVerbs(textarea, commit) {
       edit(textarea, from, to, next, landing + Math.min(column, line.length));
       commit();
     }
-  });
+  };
+  textarea.addEventListener("keydown", onKey, { signal });
+}
+
+/** Ctrl+Up and Ctrl+Down outside a tag, in the code editor.
+ *
+ * ComfyUI's own handler only answers a focused textarea, which the editor is
+ * not, so the same edit is made here, by the step ComfyUI is set to.
+ */
+function nudgeOutsideTag(editor, e, commit) {
+  e.preventDefault();
+  e.stopPropagation();
+  const step = emphasisStep();
+  const plan = nudgeEmphasis(
+    editor.value || "",
+    editor.selectionStart,
+    editor.selectionEnd,
+    e.key === "ArrowUp" ? step : -step
+  );
+  if (!plan) return;
+  edit(editor, plan.from, plan.to, plan.text);
+  editor.setSelectionRange(plan.from, plan.from + plan.text.length);
+  commit();
 }
 
 // --- inline completion -----------------------------------------------------
@@ -846,7 +930,7 @@ function editVerbs(textarea, commit) {
  * tag offering them is in a list box. `words` says where that is; the grey text
  * is drawn there too, so the offer is shown where it will land.
  */
-function inlineCompletion(textarea, commit, lit, lookup, say, baseOf, words) {
+function inlineCompletion(textarea, commit, lit, lookup, say, baseOf, words, signal) {
   // { kind: "lora", at, query, matches, index }
   // | { kind: "trigger", at, options, index, to: { textarea, lit } }
   let session = null;
@@ -1000,7 +1084,7 @@ function inlineCompletion(textarea, commit, lit, lookup, say, baseOf, words) {
     return true;
   };
 
-  textarea.addEventListener("keydown", (e) => {
+  const onKey = (e) => {
     // Ctrl+/ switches a line off; only a bare slash starts a suggestion.
     if (e.key === "/" && !e.ctrlKey && !e.metaKey && !e.altKey) {
       setTimeout(() => {
@@ -1062,9 +1146,10 @@ function inlineCompletion(textarea, commit, lit, lookup, say, baseOf, words) {
       // Typing on is a decision to write your own words instead.
       drop();
     }
-  });
+  };
+  textarea.addEventListener("keydown", onKey, { signal });
 
-  textarea.addEventListener("input", () => {
+  const onInput = () => {
     if (!session || session.kind !== "lora") return;
     const value = textarea.value || "";
     const caret = textarea.selectionStart;
@@ -1073,11 +1158,12 @@ function inlineCompletion(textarea, commit, lit, lookup, say, baseOf, words) {
     session.query = value.slice(session.at + 1, caret);
     if (/[\n,<>]/.test(session.query)) return drop();
     look();
-  });
+  };
+  textarea.addEventListener("input", onInput, { signal });
 
   // Clicking elsewhere in the text is a decision not to complete.
-  textarea.addEventListener("blur", drop);
-  textarea.addEventListener("pointerdown", drop);
+  textarea.addEventListener("blur", drop, { signal });
+  textarea.addEventListener("pointerdown", drop, { signal });
 }
 
 // --- the details -----------------------------------------------------------
@@ -1384,6 +1470,22 @@ function makeStrip() {
 
 app.registerExtension({
   name: "warppipe.promptUI",
+  settings: [
+    {
+      id: CODE_EDITOR_SETTING,
+      name: "Code editor in the prompt boxes",
+      type: "boolean",
+      defaultValue: true,
+      category: ["WarpPipe", "Prompt boxes", "Code editor"],
+      tooltip:
+        "Sections starting //// fold while you type. Off, the boxes are plain text boxes without folding.",
+      // Also called once with the stored value, when there is nothing to change.
+      onChange: (_value, previous) => {
+        if (previous === undefined) return;
+        for (const node of live) node._warppipeRewire?.();
+      },
+    },
+  ],
   async setup() {
     const style = document.createElement("style");
     style.textContent = STYLE;
@@ -1430,10 +1532,12 @@ app.registerExtension({
     const getEl = () => prompt?.el ?? findTextarea(node, TEXT_WIDGET);
     const strip = makeStrip();
 
+    const holdsFocus = (el) => (el.hasFocus ? el.hasFocus() : document.activeElement === el);
+
     /** The box the reader is typing in, if it is one of ours. */
     const focusedBox = () => {
       for (const box of boxes.values()) {
-        if (box.el && document.activeElement === box.el) return box;
+        if (box.el && holdsFocus(box.el)) return box;
       }
       return null;
     };
@@ -1449,10 +1553,9 @@ app.registerExtension({
     const wordsTarget = () => {
       if (!prompt?.el) return null;
       const value = prompt.el.value || "";
-      const at =
-        document.activeElement === prompt.el
-          ? prompt.el.selectionStart
-          : Math.min(promptCaret ?? value.length, value.length);
+      const at = holdsFocus(prompt.el)
+        ? prompt.el.selectionStart
+        : Math.min(promptCaret ?? value.length, value.length);
       return { textarea: prompt.el, lit: prompt.lit, at };
     };
 
@@ -1796,27 +1899,35 @@ app.registerExtension({
     };
 
     const wire = (box) => {
+      box.lit = light(box.el, {
+        keys: () => foldedKeys(box),
+        save: (keys, undoable) => saveFolded(box, keys, undoable),
+      });
+      // With the code editor on, everything from here on talks to it, through
+      // the textarea-shaped front it presents.
+      if (box.lit?.input) box.el = box.lit.input;
       const el = box.el;
-      box.lit = light(el);
-      el.addEventListener("input", commit);
+      const signal = box.lit?.signal;
+      el.addEventListener("input", commit, { signal });
       // The strip follows the caret, which moves for reasons other than typing.
       const moved = () => {
         if (box === prompt) promptCaret = el.selectionStart;
         updateStrip();
       };
       for (const event of ["keyup", "click", "select", "focus"]) {
-        el.addEventListener(event, moved);
+        el.addEventListener(event, moved, { signal });
       }
-      el.addEventListener("blur", (e) => {
+      const onBlur = (e) => {
         // Focus moving into the strip is still work on this tag - its trigger
         // words and its preview are buttons in there, and clearing on the way
         // to one would take it away as it was being clicked. The repaint is
         // deferred so the document has settled on where focus went.
         if (strip.el.contains(e.relatedTarget)) return;
         setTimeout(updateStrip, 0);
-      });
-      editVerbs(el, commit);
-      inlineCompletion(el, commit, box.lit, lookup, say, baseOf, wordsTarget);
+      };
+      el.addEventListener("blur", onBlur, { signal });
+      editVerbs(el, commit, signal);
+      inlineCompletion(el, commit, box.lit, lookup, say, baseOf, wordsTarget, signal);
       if (box === prompt) attachStrip();
       attachGrip(box);
       // A new layer knows nothing of what is picked out, so the next pass is
@@ -1906,6 +2017,23 @@ app.registerExtension({
       node.setDirtyCanvas?.(true, true);
     };
 
+    /** The keys of the sections folded in a box, as saved with the node. */
+    const foldedKeys = (box) => {
+      const keys = node.properties?.[FOLDED_PROP]?.[box.name];
+      return Array.isArray(keys) ? keys : [];
+    };
+
+    /** Store a box's folded keys. A fold is a change of its own, one step of
+     *  undo; `undoable` is false when it only follows an edit of the text. */
+    const saveFolded = (box, keys, undoable) => {
+      if (undoable) app.canvas?.emitBeforeChange?.();
+      const held = { ...(node.properties?.[FOLDED_PROP] ?? {}) };
+      if (keys.length) held[box.name] = keys;
+      else delete held[box.name];
+      node.properties = { ...(node.properties ?? {}), [FOLDED_PROP]: held };
+      if (undoable) app.canvas?.emitAfterChange?.();
+    };
+
     /** The prompt's height as the canvas laid it out, in canvas pixels. */
     const promptHeight = () => prompt.widget.computedHeight ?? prompt.el?.offsetHeight ?? 0;
 
@@ -1939,6 +2067,12 @@ app.registerExtension({
      */
     let probe = null;
     const textHeight = (el) => {
+      if (el.textarea) {
+        // The editor knows, and knows what is folded away.
+        const cs = getComputedStyle(el.textarea);
+        const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+        return Math.min(el.contentHeight, PROMPT_FIT_ROWS_MAX * rowHeight(prompt) + pad);
+      }
       if (!probe?.isConnected) {
         probe = document.createElement("textarea");
         probe.tabIndex = -1;
@@ -2040,6 +2174,10 @@ app.registerExtension({
         box.grip = grip;
       }
       if (box.grip.parentElement !== holder) holder.appendChild(box.grip);
+      if (box === prompt) {
+        const write = writeButtonFor(node);
+        if (write.parentElement !== holder) holder.appendChild(write);
+      }
     };
 
     /** Give a widget a fixed height, or no room at all to hide it.
@@ -2137,6 +2275,8 @@ app.registerExtension({
       configured = true;
       for (const box of [list, list2]) if (box) box.loading = true;
       sizeBoxes();
+      // What is folded came with the properties just restored.
+      for (const box of boxes.values()) box.lit?.paint();
       return result;
     };
 
@@ -2174,6 +2314,12 @@ app.registerExtension({
       if (sorted.some((w, i) => w !== widgets[i])) node.widgets = sorted;
     };
 
+    const unwire = (box) => {
+      box.lit?.detach();
+      box.lit = null;
+      box.el = null;
+    };
+
     // ensure() writes into the very subtree the observer watches, so without
     // this guard each pass triggers the next.
     let settling = false;
@@ -2184,8 +2330,13 @@ app.registerExtension({
         reorderWidgets();
         for (const box of boxes.values()) {
           const el = findTextarea(node, box.name);
-          if (!el) continue;
-          if (el !== box.el) {
+          if (!el) {
+            // An editor's textarea can go without another taking its place,
+            // and the editor is not to be left running over nothing.
+            if (box.lit?.input && !box.lit.input.isConnected) unwire(box);
+            continue;
+          }
+          if (el !== (box.el?.textarea ?? box.el) || box.lit?.detached) {
             // Nodes 2.0 can replace a textarea at any time; the layer belongs
             // to the one it was made for.
             box.lit?.detach();
@@ -2215,9 +2366,10 @@ app.registerExtension({
         if (strip.el.contains(t) || t === strip.el) return true;
         return [...boxes.values()].some(
           (box) =>
-            t === box.el ||
+            t === (box.el?.textarea ?? box.el) ||
             t === box.grip ||
-            (box.lit?.layer && (box.lit.layer.contains(t) || t === box.lit.layer))
+            (box.lit?.layer && (box.lit.layer.contains(t) || t === box.lit.layer)) ||
+            box.lit?.view?.contains(t)
         );
       });
 
@@ -2237,9 +2389,7 @@ app.registerExtension({
       live.delete(node);
       for (const stop of started.splice(0)) stop();
       for (const box of boxes.values()) {
-        box.lit?.detach();
-        box.lit = null;
-        box.el = null;
+        unwire(box);
         box.grip?.remove();
         box.grip = null;
       }
@@ -2274,6 +2424,17 @@ app.registerExtension({
     node.onRemoved = function () {
       teardown();
       return priorRemoved?.apply(this, arguments);
+    };
+
+    // The setting changed: every box is built again as whichever it now is.
+    node._warppipeRewire = () => {
+      for (const box of boxes.values()) {
+        if (!box.el) continue;
+        const el = box.el.textarea ?? box.el;
+        box.lit?.detach();
+        box.el = el;
+        wire(box);
+      }
     };
 
     node._warppipeGetText = () => getEl()?.value || "";
