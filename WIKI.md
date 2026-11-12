@@ -810,17 +810,21 @@ GET /warppipe/model/base?name=<name>
 GET /warppipe/lora/thumbnail?name=<name>&kind=<loras|embeddings>[&full=1]
 GET  /warppipe/llm/models?base_url=<url>[&refresh=1]
 GET  /warppipe/llm/system_prompts
+GET  /warppipe/llm/system_prompt?name=<name>
 GET  /warppipe/llm/key_status?base_url=<url>
 POST /warppipe/llm/key
+POST /warppipe/llm/title
 POST /warppipe/llm/write
 ```
 
-The five `llm` routes serve the 🌀 Prompt Writer pop-up. `models` returns
+The seven `llm` routes serve the 🌀 Prompt Writer pop-up. `models` returns
 `{models: [{id, name, prompt_price, completion_price, vision}]}`,
-`system_prompts` returns `{names: [...]}`, `key_status` returns
+`system_prompts` returns `{names: [...]}`, `system_prompt` returns `{name, text}`
+of one of them, `title` takes `{base_url, model, source}` and returns `{title}`
+for a new chat, `key_status` returns
 `{set, source, host}`, `key` takes `{base_url, key}`, and `write` takes
-`{base_url, model, system_prompt, temperature, idea, previous_result, references,
-turns, loras}` (`references` is a list of image names in `input/`; an empty `idea`
+`{base_url, model, system_prompt, temperature, reasoning_effort, idea, previous_result,
+references, turns, loras, chat_id, lora_scope}` (`references` is a list of image names in `input/`; an empty `idea`
 with a `previous_result` asks for that prompt to be optimised). It answers as
 `application/x-ndjson`: `{"type": "delta", thinking, text, tokens}` lines while the
 model writes (`tokens` is an estimate unless the provider counts), then one

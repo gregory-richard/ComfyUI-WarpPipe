@@ -1205,6 +1205,25 @@ def test_write_stops_when_told(server):
         pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None, stopped=lambda: True)
 
 
+@pytest.mark.parametrize(
+    "error, message",
+    [({"message": "Insufficient balance", "code": 402}, "Insufficient balance"), ("Context too long", "Context too long")],
+)
+def test_write_reports_an_error_sent_inside_the_stream(server, error, message):
+    server.replies.append(
+        (200, _sse({"choices": [{"delta": {"content": "A"}}]}, {"error": error}), SSE)
+    )
+    with pytest.raises(pw.PromptWriterError, match=message):
+        pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None)
+
+
+def test_write_hears_a_stop_between_keep_alive_lines(server):
+    # A model that thinks in silence sends only comments; a stop must not wait for data.
+    server.replies.append((200, ": PROCESSING\n\n" * 3 + "data: [DONE]\n\n", SSE))
+    with pytest.raises(pw.PromptWriterError, match="Stopped"):
+        pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None, stopped=lambda: True)
+
+
 def test_write_keeps_the_reasoning_of_a_whole_reply(server):
     server.replies.append((200, {"choices": [{"message": {"content": "P", "reasoning_content": "R"}}]}))
     out = pw.write(server.url, "m", "S", 0.6, "i", None, [], api_key=None, model=None)
@@ -1325,6 +1344,20 @@ def test_the_log_records_a_stop(server, tmp_path):
     result = _log_lines(log)[-1]
     assert result["outcome"] == "stopped"
     assert isinstance(result["seconds"], float)
+
+
+def test_an_unexpected_failure_still_logs_its_result(server, tmp_path, monkeypatch, caplog):
+    def broken(*args, **kwargs):
+        raise TypeError("odd payload")
+
+    monkeypatch.setattr(pw, "write", broken)
+    out, log = _logged_write(server, tmp_path, (200, {}))
+    assert out == {"error": "The write failed (TypeError)"}
+    request, result = _log_lines(log)
+    assert result["id"] == request["id"]
+    assert result["outcome"] == "error"
+    assert result["error"] == "The write failed (TypeError)"
+    assert "odd payload" in caplog.text
 
 
 def test_a_request_that_never_left_is_not_logged(tmp_path):

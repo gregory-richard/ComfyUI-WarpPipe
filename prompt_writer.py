@@ -207,19 +207,15 @@ def _send(url, *, api_key, body=None, timeout, opener):
         except Exception:
             raw = b""
         raise PromptWriterError(_scrub(_error_message(exc.code, raw), api_key)) from None
-    except TimeoutError:
-        raise PromptWriterError(f"{host} did not answer within {timeout} s") from None
     except urllib.error.URLError as exc:
         reason = getattr(exc, "reason", exc)
         if isinstance(reason, TimeoutError):
-            raise PromptWriterError(f"{host} did not answer within {timeout} s") from None
+            raise _broke_off(host, reason, api_key, timeout) from None
         raise PromptWriterError(_scrub(f"Could not reach {host}: {reason}", api_key)) from None
+    except (TimeoutError, http.client.HTTPException) as exc:
+        raise _broke_off(host, exc, api_key, timeout) from None
     except OSError as exc:
         raise PromptWriterError(_scrub(f"Could not reach {host}: {exc}", api_key)) from None
-    except http.client.HTTPException as exc:
-        raise PromptWriterError(
-            f"The connection to {host} broke off ({type(exc).__name__})"
-        ) from None
 
 
 def _price(value) -> Optional[float]:
@@ -428,9 +424,12 @@ def _estimate_tokens(chars: int) -> int:
     return max(1, round(chars / 4))
 
 
-def _stream_chunks(resp):
-    """The JSON object of each server-sent event, up to [DONE]."""
+def _stream_chunks(resp, stopped=None):
+    """The JSON object of each server-sent event, up to [DONE]. A stop is heard on
+    every line, keep-alive comments included: a model may think a long time in silence."""
     for raw in resp:
+        if stopped is not None and stopped():
+            raise PromptWriterError("Stopped")
         line = raw.decode("utf-8", "replace").strip()
         if not line.startswith("data:"):
             continue
@@ -449,9 +448,10 @@ def _read_stream(resp, on_delta, stopped) -> dict:
     """A streamed reply, passed on piece by piece, put back together as a whole one."""
     split = _ThinkSplitter()
     thought, answer, usage, chars = [], [], {}, 0
-    for chunk in _stream_chunks(resp):
-        if stopped is not None and stopped():
-            raise PromptWriterError("Stopped")
+    for chunk in _stream_chunks(resp, stopped):
+        # A provider that fails after it began to stream says so in an event of its own.
+        if chunk.get("error"):
+            raise PromptWriterError(_error_message(200, json.dumps(chunk).encode("utf-8")))
         if isinstance(chunk.get("usage"), dict):
             usage = chunk["usage"]
         choices = chunk.get("choices") if isinstance(chunk.get("choices"), list) else []
@@ -1019,10 +1019,15 @@ def handle_write(
         return out
     except PromptWriterError as exc:
         message = _scrub(str(exc), key)
-        if request_id:
-            outcome = "stopped" if message == "Stopped" else "error"
-            _log_result(log_path, request_id, start, outcome=outcome, error=message)
-        return {"error": message}
+        outcome = "stopped" if message == "Stopped" else "error"
+    except Exception as exc:
+        # Not one of ours: the details go to the console, and the log still closes the request.
+        logger.exception("Prompt Writer: the write failed")
+        message = f"The write failed ({type(exc).__name__})"
+        outcome = "error"
+    if request_id:
+        _log_result(log_path, request_id, start, outcome=outcome, error=message)
+    return {"error": message}
 
 
 # --- aiohttp routes ---------------------------------------------------------
@@ -1150,21 +1155,17 @@ def register(routes, web, *, user_dir: str, settings_loader, image_path) -> None
             def piece(thinking, text, tokens):
                 send({"type": "delta", "thinking": thinking, "text": text, "tokens": tokens})
 
-            try:
-                out = handle_write(
-                    body,
-                    env=os.environ,
-                    key_file=key_file,
-                    settings=settings,
-                    image_path=image_path,
-                    on_delta=piece,
-                    stopped=stop.is_set,
-                    log_path=log_path,
-                )
-            except Exception as exc:
-                # The stream has to end with its done line whatever went wrong.
-                logger.exception("Prompt Writer: the write failed")
-                out = {"error": f"The write failed ({type(exc).__name__})"}
+            # handle_write answers every failure itself, so the stream always ends with its done line.
+            out = handle_write(
+                body,
+                env=os.environ,
+                key_file=key_file,
+                settings=settings,
+                image_path=image_path,
+                on_delta=piece,
+                stopped=stop.is_set,
+                log_path=log_path,
+            )
             send({"type": "done", **out})
 
         response = web.StreamResponse(

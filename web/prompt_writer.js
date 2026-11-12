@@ -11,7 +11,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { loras as loraLibrary } from "./library.js";
-import { connectedBase } from "./model_base.js";
+import { connectedBase, connectedModelName } from "./model_base.js";
 import {
   addTriggerLine,
   appendLoraTag,
@@ -936,10 +936,10 @@ function startWrite(chat) {
     return;
   }
 
-  // An answer goes with the images its request already sent.
+  // An answer goes with the images its request sent, unless the model changed to one that cannot see.
   let images = step.images;
   let note = null;
-  if (step.answer == null && images.length && !findModel(model)?.vision) {
+  if (images.length && !findModel(model)?.vision) {
     note = { text: "Images left out: this model cannot see images.", isError: false };
     images = [];
   }
@@ -1168,6 +1168,16 @@ function writeAgain(chat, version) {
   if (jobs.has(chat.id) || chat.pending) return;
   flushEdits();
   fillDraft(chat, version);
+  // Edit current prompt reads the node when it is sent, which may hold something else by now.
+  if (version.basePrompt != null) {
+    const now = targetNow()?.node?.widgets?.find((w) => w.name === TEXT_WIDGET)?.value;
+    if (String(now ?? "") !== version.basePrompt) {
+      draftOf(chat.id).note = {
+        text: "The prompt in the node has changed since: this edits it as it is now.",
+        isError: false,
+      };
+    }
+  }
   focusComposer();
 }
 
@@ -1768,14 +1778,18 @@ function versionBase(chat, version) {
   return base ? { text: base.text, name: `v${base.n}` } : null;
 }
 
-/** version id → its last comparison; the texts say when it is out of date. */
+/**
+ * version id → its last comparison; the texts say when it is out of date. The
+ * line rows are worked out the first time the changes are shown. Emptied when
+ * the pop-up closes.
+ */
 const comparisons = new Map();
 
 function compare(version, before) {
   const known = comparisons.get(version.id);
   if (known?.before === before && known.after === version.text) return known;
   const parts = diffWords(before, version.text);
-  const fresh = { before, after: version.text, parts, stats: diffStats(parts) };
+  const fresh = { before, after: version.text, parts, stats: diffStats(parts), rows: null };
   comparisons.set(version.id, fresh);
   return fresh;
 }
@@ -1815,8 +1829,8 @@ function changesLine(chat, version) {
 /** The changes: marked in the text, or side by side when most of it is new. */
 function changesView(chat, version) {
   const base = versionBase(chat, version);
-  const { stats } = compare(version, base.text);
-  if (stats.rewrite) {
+  const comparison = compare(version, base.text);
+  if (comparison.stats.rewrite) {
     const column = (name, text) =>
       el(
         "div",
@@ -1868,7 +1882,8 @@ function changesView(chat, version) {
     return out;
   };
   const line = (text) => text || " ";
-  const rows = diffLines(base.text, version.text).map((row) => {
+  comparison.rows ??= diffLines(base.text, version.text);
+  const rows = comparison.rows.map((row) => {
     if (row.kind === "same")
       return el("div", { class: "wpw-diff-row", text: line(row.now[0].text) });
     if (row.kind === "added") {
@@ -2157,16 +2172,31 @@ function drawLoraScope(counts) {
   }
 }
 
-/** Asks anew each time: the counts follow the target and what is in its lists. */
+/** The counts follow the target, its model and what is in its boxes; the same ones are not counted twice. */
+let loraCounts = { key: null, counts: undefined };
+
+function loraCountsKey(node) {
+  if (!node) return "";
+  const values = (node.widgets ?? [])
+    .filter((w) => BOX_WIDGETS.includes(w.name) || w.name === "loras_2_on")
+    .map((w) => String(w.value ?? ""));
+  return JSON.stringify([node.id, connectedModelName(node), ...values]);
+}
+
 async function renderLoraScope() {
-  const run = ++loraRun;
-  const [list, all] = await Promise.all([
-    loraListsFor(view.targetNode, "list"),
-    loraListsFor(view.targetNode, "all"),
-  ]);
-  if (view && run === loraRun) {
-    drawLoraScope({ list: list?.available.length ?? 0, all: all?.available.length ?? 0 });
+  const node = view.targetNode;
+  const key = loraCountsKey(node);
+  if (loraCounts.key === key && loraCounts.counts) {
+    drawLoraScope(loraCounts.counts);
+    return;
   }
+  const run = ++loraRun;
+  const [list, all] = await Promise.all([loraListsFor(node, "list"), loraListsFor(node, "all")]);
+  if (!view || run !== loraRun) return;
+  const counts = { list: list?.available.length ?? 0, all: all?.available.length ?? 0 };
+  // A failed read is asked again next time.
+  loraCounts = list && all ? { key, counts } : { key: null, counts: undefined };
+  drawLoraScope(counts);
 }
 
 function chooseLoraScope(scope) {
@@ -2728,6 +2758,7 @@ function closeView() {
   window.removeEventListener("paste", view.onWindowPaste, true);
   view.backdrop.remove();
   view = null;
+  comparisons.clear();
 }
 
 function dismiss() {
