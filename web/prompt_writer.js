@@ -362,11 +362,24 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
 .wpw-diff-row.is-added { border-left-color: color-mix(in srgb, var(--wpw-green) 75%, transparent); }
 .wpw-diff-row.is-removed {
   border-left-color: color-mix(in srgb, var(--wpw-red) 60%, transparent);
-  font-size: 12px; line-height: 1.5; color: var(--wpw-muted); text-decoration: line-through;
+  font-size: 12px; line-height: 1.5; color: color-mix(in srgb, var(--wpw-red) 80%, var(--wpw-ink));
 }
-.wpw-diff-was { font-size: 12px; line-height: 1.45; color: var(--wpw-muted); }
-.wpw-diff-del { color: color-mix(in srgb, var(--wpw-red) 80%, var(--wpw-ink)); text-decoration: line-through; }
+/* A line with something replaced keeps room above each line it wraps to, for what was there. */
+.wpw-diff-row.has-old { line-height: 2.35; padding-top: 5px; }
 .wpw-diff-add { background: color-mix(in srgb, var(--wpw-green) 20%, transparent); border-radius: 3px; }
+.wpw-diff-change { position: relative; }
+.wpw-diff-old {
+  position: absolute; left: 0; bottom: 100%; max-width: 32ch; overflow: hidden; text-overflow: ellipsis;
+  font-size: 10.5px; line-height: 1.2; white-space: nowrap; pointer-events: none;
+  color: color-mix(in srgb, var(--wpw-red) 80%, var(--wpw-ink));
+}
+/* Near the right edge it hangs to the left instead, so it stays in view. */
+.wpw-diff-old.is-flipped { left: auto; right: 0; }
+/* Where something was only taken out: a thin mark, with what went small above it. */
+.wpw-diff-mark {
+  display: inline-block; width: 2px; height: 1.05em; margin: 0 2px; vertical-align: -0.15em;
+  border-radius: 1px; background: color-mix(in srgb, var(--wpw-red) 75%, transparent);
+}
 .wpw-diff-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin-top: 12px; }
 .wpw-diff-col { font-size: 13px; line-height: 1.55; }
 .wpw-diff-col-name { margin-bottom: 6px; font-size: 11px; color: var(--wpw-muted); white-space: normal; }
@@ -1818,14 +1831,42 @@ function changesView(chat, version) {
       column(`v${version.n}`, version.text)
     );
   }
-  const spans = (pieces) =>
-    pieces
-      .filter((part) => part.type === "same" || part.text.trim())
-      .map((part) =>
-        part.type === "same"
-          ? part.text
-          : el("span", { class: `wpw-diff-${part.type}`, text: part.text })
-      );
+  // What was there before sits small above what replaced it, or above a mark where it went.
+  const change = (old, now) =>
+    el(
+      "span",
+      { class: "wpw-diff-change", title: `Was: ${old}` },
+      el("span", { class: "wpw-diff-old", text: old }),
+      now
+        ? el("span", { class: "wpw-diff-add", text: now })
+        : el("span", { class: "wpw-diff-mark" })
+    );
+  // A comma or a dot that went is not worth a label.
+  const worthShowing = (old) => /[\p{L}\p{N}]/u.test(old);
+  const annotated = (parts) => {
+    const out = [];
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (part.type === "same") out.push(part.text);
+      else if (part.type === "add")
+        out.push(el("span", { class: "wpw-diff-add", text: part.text }));
+      else {
+        const next = parts[i + 1];
+        const old = part.text.trim();
+        if (next?.type === "add") {
+          out.push(
+            worthShowing(old)
+              ? change(old, next.text)
+              : el("span", { class: "wpw-diff-add", text: next.text })
+          );
+          i++;
+        } else if (worthShowing(old)) {
+          out.push(change(old, ""));
+        }
+      }
+    }
+    return out;
+  };
   const line = (text) => text || " ";
   const rows = diffLines(base.text, version.text).map((row) => {
     if (row.kind === "same")
@@ -1836,14 +1877,26 @@ function changesView(chat, version) {
     if (row.kind === "removed") {
       return el("div", { class: "wpw-diff-row is-removed", text: line(row.was[0].text) });
     }
+    const pieces = annotated(row.parts);
+    const hasOld = pieces.some((piece) => piece.classList?.contains("wpw-diff-change"));
     return el(
       "div",
-      { class: "wpw-diff-row is-changed" },
-      el("div", { class: "wpw-diff-was" }, ...spans(row.was)),
-      el("div", {}, ...spans(row.now))
+      { class: hasOld ? "wpw-diff-row is-changed has-old" : "wpw-diff-row is-changed" },
+      ...pieces
     );
   });
-  return el("div", { class: "wpw-diff" }, ...rows);
+  const diff = el("div", { class: "wpw-diff" }, ...rows);
+  requestAnimationFrame(() => keepLabelsInside(diff));
+  return diff;
+}
+
+/** A label that would run past the right edge hangs to the left of its change instead. */
+function keepLabelsInside(diff) {
+  if (!diff.isConnected) return;
+  const edge = diff.getBoundingClientRect().right - 8;
+  for (const label of diff.querySelectorAll(".wpw-diff-old")) {
+    if (label.getBoundingClientRect().right > edge) label.classList.add("is-flipped");
+  }
 }
 
 function versionCard(chat, version, index, busy) {

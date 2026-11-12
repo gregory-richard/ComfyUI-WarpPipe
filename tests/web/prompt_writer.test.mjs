@@ -448,7 +448,10 @@ test("a dot in a LoRA's name is part of its name", () => {
   assert.equal(disableLoraTag("<lora:skin_v1.5:1.00>", "skin_v1"), "<lora:skin_v1.5:1.00>");
   assert.equal(removeLoraTag("<lora:skin_v1.5:1.00>", "skin_v1"), "<lora:skin_v1.5:1.00>");
   assert.equal(findLora(loraIndex([lora("skin_v1.safetensors", "X")]), "skin_v1.5"), null);
-  assert.equal(findLora(loraIndex([lora("skin_v1.safetensors", "X")]), "dir/skin_v1.pt").id, "skin_v1.safetensors");
+  assert.equal(
+    findLora(loraIndex([lora("skin_v1.safetensors", "X")]), "dir/skin_v1.pt").id,
+    "skin_v1.safetensors"
+  );
 });
 
 test("resolveSuggestions without an answer or a map is empty", () => {
@@ -591,7 +594,10 @@ test("disableLoraTag comments the line that holds the tag", () => {
 });
 
 test("splitLines: whole lines out, the unfinished rest kept", () => {
-  assert.deepEqual(splitLines('{"a":1}\n{"b":2}\n{"c"'), { lines: ['{"a":1}', '{"b":2}'], rest: '{"c"' });
+  assert.deepEqual(splitLines('{"a":1}\n{"b":2}\n{"c"'), {
+    lines: ['{"a":1}', '{"b":2}'],
+    rest: '{"c"',
+  });
   assert.deepEqual(splitLines("\n\n"), { lines: [], rest: "" });
   assert.deepEqual(splitLines("x"), { lines: [], rest: "x" });
 });
@@ -609,7 +615,11 @@ test("reasoningLevel: a level the server knows, else the model's own default", (
 
 // --- what changed from the version before -----------------------------------------
 
-const rebuild = (parts, skip) => parts.filter((p) => p.type !== skip).map((p) => p.text).join("");
+const rebuild = (parts, skip) =>
+  parts
+    .filter((p) => p.type !== skip)
+    .map((p) => p.text)
+    .join("");
 
 test("diffWords: the parts give back both texts exactly", () => {
   const cases = [
@@ -659,13 +669,21 @@ test("diffStats: words added and removed, and how much of the text changed", () 
   assert.equal(rewrite.added, 5);
   assert.equal(rewrite.removed, 4);
   assert.equal(rewrite.rewrite, true);
-  assert.deepEqual(diffStats(diffWords("same", "same")), { added: 0, removed: 0, share: 0, rewrite: false });
+  assert.deepEqual(diffStats(diffWords("same", "same")), {
+    added: 0,
+    removed: 0,
+    share: 0,
+    rewrite: false,
+  });
 });
 
 const textOf = (parts) => parts.map((part) => part.text).join("");
 
 test("diffLines: a changed line keeps the old one to show above it", () => {
-  const rows = diffLines("// Light\n- Soft low sun.\n- Long shadows.", "// Light\n- Low warm sun.\n- Long shadows.");
+  const rows = diffLines(
+    "// Light\n- Soft low sun.\n- Long shadows.",
+    "// Light\n- Low warm sun.\n- Long shadows."
+  );
   assert.deepEqual(
     rows.map((row) => row.kind),
     ["same", "changed", "same"]
@@ -677,6 +695,13 @@ test("diffLines: a changed line keeps the old one to show above it", () => {
   assert.ok(changed.now.some((part) => part.type === "add"));
   assert.ok(changed.was.every((part) => part.type !== "add"));
   assert.ok(changed.now.every((part) => part.type !== "del"));
+  // In order, so each replaced piece can be shown over what replaced it.
+  assert.deepEqual(changed.parts, [
+    { type: "same", text: "- " },
+    { type: "del", text: "Soft low" },
+    { type: "add", text: "Low warm" },
+    { type: "same", text: " sun." },
+  ]);
 });
 
 test("diffLines: a line added or taken out stands on its own", () => {
@@ -714,4 +739,32 @@ test("diffLines: the rows give back both texts", () => {
   const was = rows.filter((row) => row.kind !== "added").map((row) => textOf(row.was));
   assert.equal(now.join("\n"), after);
   assert.equal(was.join("\n"), before);
+});
+
+test("diffLines: a line added in between does not keep the next one from its old self", () => {
+  const before =
+    "- 35mm lens, eye level, sharp focus on the frame.\n- Natural colours, gentle contrast, a quiet vignette in the corners of the frame.";
+  const after =
+    "- 35mm lens, eye level.\n- Slight film grain.\n- Natural colours, gentle contrast, a quiet vignette in the frame.";
+  const rows = diffLines(before, after);
+  assert.deepEqual(
+    rows.map((row) => row.kind),
+    ["changed", "added", "changed"]
+  );
+  const now = rows.filter((row) => row.kind !== "removed").map((row) => textOf(row.now));
+  const was = rows.filter((row) => row.kind !== "added").map((row) => textOf(row.was));
+  assert.equal(now.join("\n"), after);
+  assert.equal(was.join("\n"), before);
+});
+
+test("diffLines: an old line pairs with the new line closest to it", () => {
+  const rows = diffLines(
+    "- A red bike by the lake at dawn, mist on the water.",
+    "- A red bike by the sea at noon, waves on the sand.\n- A red bike by the lake at dusk, mist on the water."
+  );
+  assert.deepEqual(
+    rows.map((row) => row.kind),
+    ["added", "changed"]
+  );
+  assert.equal(textOf(rows[1].now), "- A red bike by the lake at dusk, mist on the water.");
 });

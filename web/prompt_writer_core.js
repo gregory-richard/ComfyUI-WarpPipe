@@ -525,35 +525,48 @@ export function diffStats(parts) {
 
 // Two lines that share less than this are a removal and an addition, not one changed line.
 const LINE_PAIR_SHARE = 0.7;
+// Above this many old × new lines in one block, an old line only tries the next new one.
+const LINE_PAIR_SEARCH = 400;
 
 /**
  * What changed, line by line, so the new text can be read as it is: rows of
  * {kind: "same" | "changed" | "added" | "removed", was, now}. `was` holds the old
  * line as same and del parts, `now` the new one as same and add parts; an added
- * row has no `was` and a removed one no `now`.
+ * row has no `was` and a removed one no `now`. A changed row also has `parts`, all
+ * of them in order, so each replaced piece can be shown over what replaced it.
  */
 export function diffLines(before, after) {
   const rows = [];
   let removed = [];
   let added = [];
+  const addedRow = (text) => ({ kind: "added", now: [{ type: "add", text }] });
+  // Each old line pairs with the closest new line after the last pair, so a line
+  // added in between does not keep the next one from its old self.
   const flush = () => {
-    for (let i = 0; i < Math.max(removed.length, added.length); i++) {
-      const was = removed[i];
-      const now = added[i];
-      if (was !== undefined && now !== undefined) {
-        const parts = diffWords(was, now);
-        if (diffStats(parts).share <= LINE_PAIR_SHARE) {
-          rows.push({
-            kind: "changed",
-            was: parts.filter((part) => part.type !== "add"),
-            now: parts.filter((part) => part.type !== "del"),
-          });
-          continue;
-        }
+    const search = removed.length * added.length <= LINE_PAIR_SEARCH;
+    let next = 0;
+    for (const was of removed) {
+      let best = null;
+      const last = search ? added.length : Math.min(next + 1, added.length);
+      for (let j = next; j < last; j++) {
+        const parts = diffWords(was, added[j]);
+        const { share } = diffStats(parts);
+        if (share <= LINE_PAIR_SHARE && (!best || share < best.share)) best = { j, parts, share };
       }
-      if (was !== undefined) rows.push({ kind: "removed", was: [{ type: "del", text: was }] });
-      if (now !== undefined) rows.push({ kind: "added", now: [{ type: "add", text: now }] });
+      if (!best) {
+        rows.push({ kind: "removed", was: [{ type: "del", text: was }] });
+        continue;
+      }
+      while (next < best.j) rows.push(addedRow(added[next++]));
+      next++;
+      rows.push({
+        kind: "changed",
+        parts: best.parts,
+        was: best.parts.filter((part) => part.type !== "add"),
+        now: best.parts.filter((part) => part.type !== "del"),
+      });
     }
+    while (next < added.length) rows.push(addedRow(added[next++]));
     removed = [];
     added = [];
   };
