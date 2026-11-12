@@ -2,7 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
-## [4.3.0] - 2026-11-05
+## [4.3.0] - 2026-11-12
+
+This release also brings everything listed under 4.2.0, which was not released on its own.
 
 ### Added
 
@@ -27,7 +29,7 @@ All notable changes to this project will be documented in this file.
 - **Settings `WarpPipe.PromptWriter.*`**: `BaseUrl`, `Model`, `SystemPrompt` and `Temperature` hold the pop-up's choices; `SystemPromptDir` is the folder of system prompts, and only `.txt` files directly in it are listed
 - **Routes**: `GET /warppipe/llm/models`, `GET /warppipe/llm/system_prompts`, `GET /warppipe/llm/system_prompt`, `GET /warppipe/llm/key_status`, `POST /warppipe/llm/key`, `POST /warppipe/llm/title`, `POST /warppipe/llm/write` (streams its answer as NDJSON)
 
-## [4.2.0] - 2026-11-05
+## [4.2.0] - not released on its own, part of 4.3.0
 
 ### Added
 
