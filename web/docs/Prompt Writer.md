@@ -40,7 +40,7 @@ Each **Write** is one card: its version number, what it changed (`edit of v2`, `
 
 The newest version is open and editable; your edit is saved when you click away. Older versions are one line with your request; click to read them.
 
-Above the prompt a line says what changed from the version it edits, counted in words (`Changes from v2 +38 −12 words`), or that it is the same. **Show changes** switches the prompt for its changes: a small edit is marked in the text, removed words struck through in red and added ones in green; when most of it is new (`Mostly rewritten from v2`), the two versions stand side by side instead. **Show prompt** switches back.
+Above the prompt a line says what changed from the version it edits, counted in words (`Changes from v2 +38 −12 words`), or that it is the same. **Show changes** switches the prompt for its changes: the new text reads as it is, with a margin line by each line that changed; a changed line has the old one small above it with what was removed in red, and what is new in it is lightly green; a line that was taken out stays small and struck through; when most of it is new (`Mostly rewritten from v2`), the two versions stand side by side instead. **Show prompt** switches back.
 
 - **→ Send to prompt** — Writes the version's text, exactly as it is, into the Prompt + LoRAs chosen under **For**, as one undo step. That node flashes and the pop-up closes. It writes only the prompt and never touches the LoRA lists.
 - **Pencil** — On older versions: the next request edits this version.

@@ -23,6 +23,7 @@ const {
   removeTriggerLine,
   resolveSuggestions,
   REASONING_LEVELS,
+  diffLines,
   diffStats,
   diffWords,
   reasoningLevel,
@@ -659,4 +660,58 @@ test("diffStats: words added and removed, and how much of the text changed", () 
   assert.equal(rewrite.removed, 4);
   assert.equal(rewrite.rewrite, true);
   assert.deepEqual(diffStats(diffWords("same", "same")), { added: 0, removed: 0, share: 0, rewrite: false });
+});
+
+const textOf = (parts) => parts.map((part) => part.text).join("");
+
+test("diffLines: a changed line keeps the old one to show above it", () => {
+  const rows = diffLines("// Light\n- Soft low sun.\n- Long shadows.", "// Light\n- Low warm sun.\n- Long shadows.");
+  assert.deepEqual(
+    rows.map((row) => row.kind),
+    ["same", "changed", "same"]
+  );
+  const changed = rows[1];
+  assert.equal(textOf(changed.was), "- Soft low sun.");
+  assert.equal(textOf(changed.now), "- Low warm sun.");
+  assert.ok(changed.was.some((part) => part.type === "del"));
+  assert.ok(changed.now.some((part) => part.type === "add"));
+  assert.ok(changed.was.every((part) => part.type !== "add"));
+  assert.ok(changed.now.every((part) => part.type !== "del"));
+});
+
+test("diffLines: a line added or taken out stands on its own", () => {
+  assert.deepEqual(
+    diffLines("a\nc", "a\nb\nc").map((row) => [row.kind, textOf(row.now ?? row.was)]),
+    [
+      ["same", "a"],
+      ["added", "b"],
+      ["same", "c"],
+    ]
+  );
+  assert.deepEqual(
+    diffLines("a\nb\nc", "a\nc").map((row) => [row.kind, textOf(row.was ?? row.now)]),
+    [
+      ["same", "a"],
+      ["removed", "b"],
+      ["same", "c"],
+    ]
+  );
+});
+
+test("diffLines: lines that share almost nothing are a removal and an addition, not a change", () => {
+  const rows = diffLines("- A red bike by the lake.", "- Neon signs over wet cobblestones.");
+  assert.deepEqual(
+    rows.map((row) => row.kind),
+    ["removed", "added"]
+  );
+});
+
+test("diffLines: the rows give back both texts", () => {
+  const before = "// Overview\n- A bike.\n\n// Light\n- Dawn.\n- Mist.";
+  const after = "// Overview\n- A red bike.\n\n// Light\n- Warm dawn light.\n\n// Camera\n- 35mm.";
+  const rows = diffLines(before, after);
+  const now = rows.filter((row) => row.kind !== "removed").map((row) => textOf(row.now));
+  const was = rows.filter((row) => row.kind !== "added").map((row) => textOf(row.was));
+  assert.equal(now.join("\n"), after);
+  assert.equal(was.join("\n"), before);
 });

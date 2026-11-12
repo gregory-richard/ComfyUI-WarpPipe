@@ -28,6 +28,7 @@ import {
   removeTriggerLine,
   resolveSuggestions,
   REASONING_LEVELS,
+  diffLines,
   diffStats,
   diffWords,
   reasoningLevel,
@@ -354,12 +355,18 @@ body:has(.wpw-backdrop) .p-toast { z-index: 1500 !important; }
   background: var(--wpw-ground); border-radius: 8px; padding: 10px 12px; max-height: 60vh; overflow-y: auto;
   white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
 }
-.wpw-diff { margin-top: 12px; font-size: 13.5px; line-height: 1.6; }
-.wpw-diff-add { background: color-mix(in srgb, var(--wpw-green) 24%, transparent); border-radius: 3px; }
-.wpw-diff-del {
-  color: color-mix(in srgb, var(--wpw-red) 80%, var(--wpw-ink)); text-decoration: line-through;
-  text-decoration-color: color-mix(in srgb, var(--wpw-red) 70%, transparent);
+.wpw-diff { margin-top: 12px; padding-left: 14px; font-size: 13.5px; line-height: 1.6; }
+/* The new text reads as it is; a changed line has its old self small above it. */
+.wpw-diff-row { min-height: 1lh; margin-left: -14px; padding-left: 12px; border-left: 2px solid transparent; }
+.wpw-diff-row.is-changed { border-left-color: color-mix(in srgb, var(--wpw-warp) 70%, transparent); }
+.wpw-diff-row.is-added { border-left-color: color-mix(in srgb, var(--wpw-green) 75%, transparent); }
+.wpw-diff-row.is-removed {
+  border-left-color: color-mix(in srgb, var(--wpw-red) 60%, transparent);
+  font-size: 12px; line-height: 1.5; color: var(--wpw-muted); text-decoration: line-through;
 }
+.wpw-diff-was { font-size: 12px; line-height: 1.45; color: var(--wpw-muted); }
+.wpw-diff-del { color: color-mix(in srgb, var(--wpw-red) 80%, var(--wpw-ink)); text-decoration: line-through; }
+.wpw-diff-add { background: color-mix(in srgb, var(--wpw-green) 20%, transparent); border-radius: 3px; }
 .wpw-diff-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin-top: 12px; }
 .wpw-diff-col { font-size: 13px; line-height: 1.55; }
 .wpw-diff-col-name { margin-bottom: 6px; font-size: 11px; color: var(--wpw-muted); white-space: normal; }
@@ -1795,7 +1802,7 @@ function changesLine(chat, version) {
 /** The changes: marked in the text, or side by side when most of it is new. */
 function changesView(chat, version) {
   const base = versionBase(chat, version);
-  const { parts, stats } = compare(version, base.text);
+  const { stats } = compare(version, base.text);
   if (stats.rewrite) {
     const column = (name, text) =>
       el(
@@ -1811,14 +1818,32 @@ function changesView(chat, version) {
       column(`v${version.n}`, version.text)
     );
   }
-  const marked = parts
-    .filter((part) => part.type !== "del" || part.text.trim())
-    .map((part) =>
-      part.type === "same"
-        ? part.text
-        : el("span", { class: `wpw-diff-${part.type}`, text: part.text })
+  const spans = (pieces) =>
+    pieces
+      .filter((part) => part.type === "same" || part.text.trim())
+      .map((part) =>
+        part.type === "same"
+          ? part.text
+          : el("span", { class: `wpw-diff-${part.type}`, text: part.text })
+      );
+  const line = (text) => text || " ";
+  const rows = diffLines(base.text, version.text).map((row) => {
+    if (row.kind === "same")
+      return el("div", { class: "wpw-diff-row", text: line(row.now[0].text) });
+    if (row.kind === "added") {
+      return el("div", { class: "wpw-diff-row is-added", text: line(row.now[0].text) });
+    }
+    if (row.kind === "removed") {
+      return el("div", { class: "wpw-diff-row is-removed", text: line(row.was[0].text) });
+    }
+    return el(
+      "div",
+      { class: "wpw-diff-row is-changed" },
+      el("div", { class: "wpw-diff-was" }, ...spans(row.was)),
+      el("div", {}, ...spans(row.now))
     );
-  return el("div", { class: "wpw-diff" }, ...marked);
+  });
+  return el("div", { class: "wpw-diff" }, ...rows);
 }
 
 function versionCard(chat, version, index, busy) {

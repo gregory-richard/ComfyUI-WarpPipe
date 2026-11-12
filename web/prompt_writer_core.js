@@ -522,3 +522,51 @@ export function diffStats(parts) {
   const share = total ? (added + removed) / total : 0;
   return { added, removed, share, rewrite: share > REWRITE_SHARE };
 }
+
+// Two lines that share less than this are a removal and an addition, not one changed line.
+const LINE_PAIR_SHARE = 0.7;
+
+/**
+ * What changed, line by line, so the new text can be read as it is: rows of
+ * {kind: "same" | "changed" | "added" | "removed", was, now}. `was` holds the old
+ * line as same and del parts, `now` the new one as same and add parts; an added
+ * row has no `was` and a removed one no `now`.
+ */
+export function diffLines(before, after) {
+  const rows = [];
+  let removed = [];
+  let added = [];
+  const flush = () => {
+    for (let i = 0; i < Math.max(removed.length, added.length); i++) {
+      const was = removed[i];
+      const now = added[i];
+      if (was !== undefined && now !== undefined) {
+        const parts = diffWords(was, now);
+        if (diffStats(parts).share <= LINE_PAIR_SHARE) {
+          rows.push({
+            kind: "changed",
+            was: parts.filter((part) => part.type !== "add"),
+            now: parts.filter((part) => part.type !== "del"),
+          });
+          continue;
+        }
+      }
+      if (was !== undefined) rows.push({ kind: "removed", was: [{ type: "del", text: was }] });
+      if (now !== undefined) rows.push({ kind: "added", now: [{ type: "add", text: now }] });
+    }
+    removed = [];
+    added = [];
+  };
+  const lines = (text) => String(text ?? "").split("\n");
+  for (const step of lcsSteps(lines(before), lines(after))) {
+    if (step.type === "del") removed.push(step.text);
+    else if (step.type === "add") added.push(step.text);
+    else {
+      flush();
+      const part = [{ type: "same", text: step.text }];
+      rows.push({ kind: "same", was: part, now: part });
+    }
+  }
+  flush();
+  return rows;
+}
